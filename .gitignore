@@ -1,0 +1,5 @@
+.idea
+dist/index.js
+dist/localEgencia.js
+node_modules
+
