@@ -1,6 +1,14 @@
 import { createServer, request as httpsRequest, RequestOptions } from "https";
 import { URL } from "url";
 import { watchFile, readFile } from "fs";
+import {
+  gzip,
+  gunzip,
+  inflate,
+  deflate,
+  brotliCompress,
+  brotliDecompress,
+} from "zlib";
 import { resolve } from "path";
 import {
   IncomingMessage,
@@ -14,6 +22,7 @@ interface LocalConfiguration {
   mapping: { [subPath: string]: string };
   ssl: { cert: string; key: string };
   port: number;
+  replaceResponseBodyUrls: boolean;
 }
 
 const filename = resolve(__dirname, "config.json");
@@ -157,7 +166,7 @@ load()
               responseFromDownstream.headers["location"].startsWith("/")
                 ? `${target.href}${responseFromDownstream.headers[
                     "location"
-                  ].replace(/^\/+/, "")}`
+                  ].replace(/^\/+/, ``)}`
                 : responseFromDownstream.headers["location"]
             );
         const newPath = !newUrl
@@ -174,41 +183,127 @@ load()
           responseFromDownstream.on("end", () => {
             resolve(partialBody);
           });
+        }).then((payloadBuffer: Buffer) => {
+          if (!config.replaceResponseBodyUrls) return payloadBuffer;
+
+          return (responseFromDownstream.headers["content-encoding"] || "")
+            .split(",")
+            .reduce((buffer, formatNotTrimed) => {
+              const format = formatNotTrimed.trim().toLowerCase();
+              const method =
+                format === "gzip" || format === "x-gzip"
+                  ? gunzip
+                  : format === "deflate"
+                  ? inflate
+                  : format === "br"
+                  ? brotliDecompress
+                  : format === "identity" || format === ""
+                  ? (
+                      input: Buffer,
+                      callback: (err?: Error, data?: Buffer) => void
+                    ) => {
+                      callback(null, input);
+                    }
+                  : null;
+              if (method === null)
+                throw new Error(
+                  `${format} compression not supported by the proxy`
+                );
+
+              return buffer.then(
+                (data) =>
+                  new Promise((resolve) =>
+                    method(data, (err, data) => {
+                      if (err) throw err;
+                      resolve(data);
+                    })
+                  )
+              );
+            }, Promise.resolve(payloadBuffer))
+            .then((uncompressedBuffer) =>
+              uncompressedBuffer
+                .toString()
+                .replace(
+                  new RegExp(
+                    target.origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+                    "ig"
+                  ),
+                  `https://${request.headers.host}`
+                )
+            )
+            .then((updatedBody) =>
+              (responseFromDownstream.headers["content-encoding"] || "")
+                .split(",")
+                .reduce((buffer, formatNotTrimed) => {
+                  const format = formatNotTrimed.trim().toLowerCase();
+                  const method =
+                    format === "gzip" || format === "x-gzip"
+                      ? gzip
+                      : format === "deflate"
+                      ? deflate
+                      : format === "br"
+                      ? brotliCompress
+                      : format === "identity" || format === ""
+                      ? (
+                          input: Buffer,
+                          callback: (err?: Error, data?: Buffer) => void
+                        ) => {
+                          callback(null, input);
+                        }
+                      : null;
+                  if (method === null)
+                    throw new Error(
+                      `${format} compression not supported by the proxy`
+                    );
+
+                  return buffer.then(
+                    (data) =>
+                      new Promise((resolve) =>
+                        method(data, (err, data) => {
+                          if (err) throw err;
+                          resolve(data);
+                        })
+                      )
+                  );
+                }, Promise.resolve(Buffer.from(updatedBody)))
+            );
         });
 
         const responseHeaders = {
-          ...Object.entries(responseFromDownstream.headers).reduce(
-            (acc: any, [key, value]: [string, string | string[]]) => {
-              const allSubdomains = targetHost
-                .split("")
-                .map(
-                  (_, i) =>
-                    targetHost.substring(i).startsWith(".") &&
-                    targetHost.substring(i)
-                )
-                .filter((subdomain) => subdomain) as string[];
+          ...Object.entries({
+            ...responseFromDownstream.headers,
+            ...(config.replaceResponseBodyUrls
+              ? { ["content-length"]: `${payload.byteLength}` }
+              : {}),
+          }).reduce((acc: any, [key, value]: [string, string | string[]]) => {
+            const allSubdomains = targetHost
+              .split("")
+              .map(
+                (_, i) =>
+                  targetHost.substring(i).startsWith(".") &&
+                  targetHost.substring(i)
+              )
+              .filter((subdomain) => subdomain) as string[];
 
-              const transformedValue = [targetHost]
-                .concat(allSubdomains)
-                .reduce(
-                  (acc1, subDomain) =>
-                    (!Array.isArray(acc1)
-                      ? [acc1]
-                      : (acc1 as string[])
-                    ).map((oneElement) =>
-                      oneElement.replace(
-                        `Domain=${subDomain}`,
-                        `Domain=${url.hostname}`
-                      )
-                    ),
-                  value
-                );
+            const transformedValue = [targetHost]
+              .concat(allSubdomains)
+              .reduce(
+                (acc1, subDomain) =>
+                  (!Array.isArray(acc1)
+                    ? [acc1]
+                    : (acc1 as string[])
+                  ).map((oneElement) =>
+                    oneElement.replace(
+                      `Domain=${subDomain}`,
+                      `Domain=${url.hostname}`
+                    )
+                  ),
+                value
+              );
 
-              acc[key] = (acc[key] || []).concat(transformedValue);
-              return acc;
-            },
-            {}
-          ),
+            acc[key] = (acc[key] || []).concat(transformedValue);
+            return acc;
+          }, {}),
           ...(newTargetUrl ? { location: [newTargetUrl] } : {}),
         };
 
