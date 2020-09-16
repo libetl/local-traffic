@@ -4,7 +4,7 @@ Egencia [reverse-proxy](https://github.expedia.biz/Egencia/reverse-proxy) :
 
 - without java libs,
 - without spring boot,
-- just a tiny 2kb file.
+- just a tiny 4kb file.
 
 ## pre-requisite
 
