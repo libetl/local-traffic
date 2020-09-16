@@ -9,7 +9,7 @@ import {
   brotliCompress,
   brotliDecompress,
 } from "zlib";
-import { resolve } from "path";
+import { resolve, normalize } from "path";
 import {
   IncomingMessage,
   ServerResponse,
@@ -25,7 +25,12 @@ interface LocalConfiguration {
   replaceResponseBodyUrls: boolean;
 }
 
-const filename = resolve(__dirname, "config.json");
+const filename = resolve(
+  __dirname,
+  process.argv.slice(-1)[0].endsWith(".json")
+    ? process.argv.slice(-1)[0]
+    : "config.json"
+);
 
 let config: LocalConfiguration;
 const load = async () =>
@@ -47,7 +52,7 @@ const envs: () => { [prefix: string]: URL } = () => ({
   ...Object.assign(
     {},
     ...Object.entries(config.mapping).map(([key, value]) => ({
-      [key]: new URL(value.replace(/\/$/, "")),
+      [key]: new URL(normalize(value)),
     }))
   ),
 });
@@ -121,9 +126,8 @@ load()
         const targetPrefix = target.href.substring(
           "https://".length + target.host.length
         );
-        const fullPath = `${targetPrefix}${path.replace(
-          RegExp(key.replace(/\/$/, "")),
-          ""
+        const fullPath = `${targetPrefix}${normalize(
+          path.replace(RegExp(normalize(key)), "")
         )}`.replace(/^\/*/, "/");
         const targetUrl = new URL(`https://${targetHost}${fullPath}`);
 
@@ -224,19 +228,28 @@ load()
                   )
               );
             }, Promise.resolve(payloadBuffer))
-            .then((uncompressedBuffer) => {
-              const origin =
-                target.origin === "null" ? target.pathname : target.origin;
-              return uncompressedBuffer
-                .toString()
-                .replace(
-                  new RegExp(
-                    origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-                    "ig"
-                  ),
-                  `https://${request.headers.host}`
-                );
-            })
+            .then((uncompressedBuffer) =>
+              !config.replaceResponseBodyUrls
+                ? uncompressedBuffer.toString()
+                : Object.entries(config.mapping).reduce(
+                    (inProgress, [path, mapping]) =>
+                      !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/)
+                        ? inProgress
+                        : inProgress.replace(
+                            new RegExp(
+                              mapping
+                                .replace(/^file:\/\//, "")
+                                .replace(/[*+?^${}()|[\]\\]/g, ""),
+                              "ig"
+                            ),
+                            `https://${request.headers.host}${path.replace(
+                              /\/+$/,
+                              ""
+                            )}/`
+                          ),
+                    uncompressedBuffer.toString()
+                  )
+            )
             .then((updatedBody) =>
               (responseFromDownstream.headers["content-encoding"] || "")
                 .split(",")
