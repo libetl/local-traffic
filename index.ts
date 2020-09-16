@@ -224,17 +224,19 @@ load()
                   )
               );
             }, Promise.resolve(payloadBuffer))
-            .then((uncompressedBuffer) =>
-              uncompressedBuffer
+            .then((uncompressedBuffer) => {
+              const origin =
+                target.origin === "null" ? target.pathname : target.origin;
+              return uncompressedBuffer
                 .toString()
                 .replace(
                   new RegExp(
-                    target.origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+                    origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
                     "ig"
                   ),
                   `https://${request.headers.host}`
-                )
-            )
+                );
+            })
             .then((updatedBody) =>
               (responseFromDownstream.headers["content-encoding"] || "")
                 .split(",")
