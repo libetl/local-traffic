@@ -63,7 +63,11 @@ const fileRequest = (
     } as any) as ClientRequest);
 
   readFile(
-    resolve("/", requestOptions.hostname, requestOptions.path),
+    resolve(
+      "/",
+      requestOptions.hostname,
+      requestOptions.path.replace(/[?#].*$/, "")
+    ),
     (error, data) => {
       if (!callback) return;
 
