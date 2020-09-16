@@ -231,24 +231,27 @@ load()
             .then((uncompressedBuffer) =>
               !config.replaceResponseBodyUrls
                 ? uncompressedBuffer.toString()
-                : Object.entries(config.mapping).reduce(
-                    (inProgress, [path, mapping]) =>
-                      !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/)
-                        ? inProgress
-                        : inProgress.replace(
-                            new RegExp(
-                              mapping
-                                .replace(/^file:\/\//, "")
-                                .replace(/[*+?^${}()|[\]\\]/g, ""),
-                              "ig"
+                : Object.entries(config.mapping)
+                    .reduce(
+                      (inProgress, [path, mapping]) =>
+                        !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/)
+                          ? inProgress
+                          : inProgress.replace(
+                              new RegExp(
+                                mapping
+                                  .replace(/^file:\/\//, "")
+                                  .replace(/[*+?^${}()|[\]\\]/g, ""),
+                                "ig"
+                              ),
+                              `https://${request.headers.host}${path.replace(
+                                /\/+$/,
+                                ""
+                              )}/`
                             ),
-                            `https://${request.headers.host}${path.replace(
-                              /\/+$/,
-                              ""
-                            )}/`
-                          ),
-                    uncompressedBuffer.toString()
-                  )
+                      uncompressedBuffer.toString()
+                    )
+                    .split(`${request.headers.host}/:`)
+                    .join(`${request.headers.host}:`)
             )
             .then((updatedBody) =>
               (responseFromDownstream.headers["content-encoding"] || "")
