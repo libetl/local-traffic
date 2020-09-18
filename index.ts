@@ -48,11 +48,12 @@ const load = async () =>
 
 watchFile(filename, async () => await load());
 
+const unixNorm = (path) => normalize(path).replace(/\\/g, '/')
 const envs: () => { [prefix: string]: URL } = () => ({
   ...Object.assign(
     {},
     ...Object.entries(config.mapping).map(([key, value]) => ({
-      [key]: new URL(normalize(value)),
+      [key]: new URL(unixNorm(value)),
     }))
   ),
 });
@@ -126,8 +127,8 @@ load()
         const targetPrefix = target.href.substring(
           "https://".length + target.host.length
         );
-        const fullPath = `${targetPrefix}${normalize(
-          path.replace(RegExp(normalize(key)), "")
+        const fullPath = `${targetPrefix}${unixNorm(
+          path.replace(RegExp(unixNorm(key)), "")
         )}`.replace(/^\/*/, "/");
         const targetUrl = new URL(`https://${targetHost}${fullPath}`);
 
