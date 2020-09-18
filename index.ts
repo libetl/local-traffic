@@ -48,7 +48,7 @@ const load = async () =>
 
 watchFile(filename, async () => await load());
 
-const unixNorm = (path) => normalize(path).replace(/\\/g, '/')
+const unixNorm = (path) => normalize(path).replace(/\\/g, "/");
 const envs: () => { [prefix: string]: URL } = () => ({
   ...Object.assign(
     {},
