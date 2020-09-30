@@ -120,8 +120,8 @@ const fileRequest = (
 };
 
 load()
-  .then(() =>
-    (config.ssl ? createServer.bind(config.ssl) : httpCreateServer)(
+.then(() =>
+    (config.ssl ? createServer.bind(null, config.ssl) : httpCreateServer)(
       async (request: IncomingMessage, response: ServerResponse) => {
         const url = new URL(`https://${request.headers.host}${request.url}`);
         const path = url.href.substring(url.origin.length);
