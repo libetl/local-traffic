@@ -32,6 +32,7 @@ npx local-traffic
   },
 }
 ```
+> "" mapping must always come last
 2. Go to [https://localhost/prettier](https://localhost/prettier) with your browser
 3. Go to [https://localhost/npm](https://localhost/npm) with your browser
 3. Go to [https://localhost/my-static-webapp](https://localhost/my-static-webapp/index.html) with your browser
