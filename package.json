@@ -1,0 +1,24 @@
+{
+  "name": "local-traffic",
+  "version": "0.0.1",
+  "main": "index.ts",
+  "private": false,
+  "license": "MIT",
+  "repository": "git@github.com:libetl/local-traffic.git",
+  "author": "LiBe <libe4@free.fr>",
+  "scripts": {
+    "start": "./dist/localTraffic.js",
+    "typescript": "tsc",
+    "terser": "echo '#!/usr/bin/env node\n' \"$(terser ./dist/index.js -c -m --toplevel)\" > ./dist/localTraffic.js",
+    "chmod": "chmod a+x ./dist/localTraffic.js",
+    "build": "yarn typescript && yarn terser && yarn chmod"
+  },
+  "devDependencies": {
+    "@types/node": "^14.11.2",
+    "terser": "^5.3.3",
+    "typescript": "^4.0.3"
+  },
+  "bin": {
+    "local-traffic": "./dist/localTraffic.js"
+  }
+}
