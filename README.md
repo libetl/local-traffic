@@ -1,9 +1,10 @@
-# 🖧 local-egencia
+# 🖧 local-traffic
 
-Egencia [reverse-proxy](https://github.expedia.biz/Egencia/reverse-proxy) :
+That is a reverse-proxy installed on your machine
 
-- without java libs,
-- without spring boot,
+- without any library,
+- without startup time
+- without boring steps
 - just a tiny 4kb file.
 
 ## pre-requisite
@@ -13,26 +14,47 @@ node.js >= 8
 ## how to start in less than one minute
 
 ```bash
-git clone --single-branch --branch release git@github.expedia.biz:lbenychou/local-egencia.git
-sudo ./local-egencia/localEgencia.js
-
+npx local-traffic
 ```
 
 (sudo prefix only for MacOS / linux)
 
 ## how to use it
 
-1. Go to [https://localhost/home](https://localhost/home) with your browser
-2. If you need to login, just login.
+1. Change that mapping in the `.local-traffic.json` file: 
 
-No need to have a `local.egencia.com` for domain name.
-It is working fine without it.
+```json
+{
+    "mapping": {
+      "/npm": "https://www.npmjs.com/",
+      "/my-static-webapp": "file:///home/user/projects/my-static-webapp",
+      "": "https://github.com/"
+  },
+}
+```
+2. Go to [https://localhost/prettier](https://localhost/prettier) with your browser
+3. Go to [https://localhost/npm](https://localhost/npm) with your browser
+3. Go to [https://localhost/my-static-webapp](https://localhost/my-static-webapp/index.html) with your browser
+   (given your project name is my-static-webapp, but I am not 100% sure)
+4. Your server now proxies the mapping that you have configured
+
+## usage
+
+```bash
+npx local-traffic [location-of-the-local-traffic-config-file]
+```
 
 ## how to change mappings to local / non-local
 
-1. Open `config.json` in your `local-egencia` directory
+1. Open `local-traffic.json`
 2. Edit the matches (keys) and target hosts (values).
 3. No need to restart the server after editing.
 
-`config.json` already has a few entries to help you.
-The matches can be regular expressions.
+## all the options
+
+- "mapping": ({[path: string]: string}) routing rules (required)
+- "ssl" : SSL options
+  * "ssl.cert" : (string) Certificate (PEM format)
+  * "ssl.key" : (string) Private Key (PEM format)
+- "port" : (number) port number
+- "replaceResponseBodyUrls": (boolean) replace every matching string from the mapping in the response body.

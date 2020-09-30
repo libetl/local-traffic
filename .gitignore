@@ -1,5 +1,6 @@
 .idea
 dist/index.js
-dist/localEgencia.js
+dist/localTraffic.js
 node_modules
+.vscode
 

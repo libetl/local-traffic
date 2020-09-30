@@ -1,6 +1,6 @@
 import { createServer, request as httpsRequest, RequestOptions } from "https";
 import { URL } from "url";
-import { watchFile, readFile } from "fs";
+import { watchFile, readFile, writeFile } from "fs";
 import {
   gzip,
   gunzip,
@@ -11,42 +11,56 @@ import {
 } from "zlib";
 import { resolve, normalize } from "path";
 import {
+  createServer as httpCreateServer,
   IncomingMessage,
   ServerResponse,
   request as httpRequest,
   ClientRequest,
 } from "http";
-import { exit } from "process";
 
 interface LocalConfiguration {
   mapping: { [subPath: string]: string };
-  ssl: { cert: string; key: string };
+  ssl?: { cert: string; key: string };
   port: number;
   replaceResponseBodyUrls: boolean;
 }
 
+const userHomeConfigFile = resolve(process.env.HOME, ".local-traffic.json");
 const filename = resolve(
   __dirname,
   process.argv.slice(-1)[0].endsWith(".json")
     ? process.argv.slice(-1)[0]
-    : "config.json"
+    : userHomeConfigFile
 );
+const defaultConfig: LocalConfiguration = {
+  mapping: {},
+  port: 8080,
+  replaceResponseBodyUrls: false,
+};
 
 let config: LocalConfiguration;
-const load = async () =>
+const load = async (writeIfMissing: boolean = true) =>
   new Promise((resolve) =>
     readFile(filename, (error, data) => {
-      if (error) {
-        console.log("error while loading the config");
-        exit(1);
+      if (error && !writeIfMissing) {
+        console.log(`${filename} has not been loaded. Using default config`);
       }
-      config = JSON.parse(data.toString());
+      config = Object.assign(
+        defaultConfig,
+        JSON.parse((data || '{}').toString())
+      );
       console.log("mapping is loaded");
-      resolve(config);
+      if (error && error.code === "ENOENT" && writeIfMissing && filename === userHomeConfigFile) {
+        writeFile(filename, JSON.stringify(defaultConfig), (fileWriteErr) => {
+          if (fileWriteErr) console.log(`${filename} could not be written`);
+          else console.log(`I have created a config file in '${filename}'`);
+          resolve(config);
+        });
+      } else resolve(config);
     })
   );
 
-watchFile(filename, async () => await load());
+watchFile(filename, async () => await load(false));
 
 const unixNorm = (path) => normalize(path).replace(/\\/g, "/");
 const envs: () => { [prefix: string]: URL } = () => ({
@@ -107,8 +121,7 @@ const fileRequest = (
 
 load()
   .then(() =>
-    createServer(
-      config.ssl,
+    (config.ssl ? createServer.bind(config.ssl) : httpCreateServer)(
       async (request: IncomingMessage, response: ServerResponse) => {
         const url = new URL(`https://${request.headers.host}${request.url}`);
         const path = url.href.substring(url.origin.length);
