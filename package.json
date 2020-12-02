@@ -13,8 +13,8 @@
     "build": "yarn typescript && yarn terser && yarn chmod"
   },
   "devDependencies": {
-    "@types/node": "^14.0.27",
-    "terser": "^5.0.0",
-    "typescript": "^3.9.7"
+    "@types/node": "14.0.27",
+    "terser": "5.0.0",
+    "typescript": "3.9.7"
   }
 }
