@@ -47,10 +47,15 @@ const load = async (writeIfMissing: boolean = true) =>
       }
       config = Object.assign(
         defaultConfig,
-        JSON.parse((data || '{}').toString())
+        JSON.parse((data || "{}").toString())
       );
       console.log("mapping is loaded");
-      if (error && error.code === "ENOENT" && writeIfMissing && filename === userHomeConfigFile) {
+      if (
+        error &&
+        error.code === "ENOENT" &&
+        writeIfMissing &&
+        filename === userHomeConfigFile
+      ) {
         writeFile(filename, JSON.stringify(defaultConfig), (fileWriteErr) => {
           if (fileWriteErr) console.log(`${filename} could not be written`);
           else console.log(`I have created a config file in '${filename}'`);
@@ -62,7 +67,8 @@ const load = async (writeIfMissing: boolean = true) =>
 
 watchFile(filename, async () => await load(false));
 
-const unixNorm = (path) => normalize(path).replace(/\\/g, "/");
+const unixNorm = (path) =>
+  path == "" ? "" : normalize(path).replace(/\\/g, "/");
 const envs: () => { [prefix: string]: URL } = () => ({
   ...Object.assign(
     {},
@@ -120,7 +126,7 @@ const fileRequest = (
 };
 
 load()
-.then(() =>
+  .then(() =>
     (config.ssl ? createServer.bind(null, config.ssl) : httpCreateServer)(
       async (request: IncomingMessage, response: ServerResponse) => {
         const url = new URL(`https://${request.headers.host}${request.url}`);
@@ -170,6 +176,7 @@ load()
           method: request.method,
           headers,
         };
+        let error: Buffer = null;
         const responseFromDownstream: IncomingMessage = await new Promise(
           (resolve) => {
             const requestInProgress =
@@ -178,6 +185,17 @@ load()
                 : target.protocol === "https:"
                 ? httpsRequest(requestOptions, resolve)
                 : httpRequest(requestOptions, resolve);
+            requestInProgress.on("error", (chunk) => {
+              error = Buffer.from(`${chunk.name} : ${chunk.message}`);
+              resolve(({
+                headers: {
+                  "content-type": "text/plain",
+                  "content-length": `${error.length}`,
+                },
+                statusCode: 500,
+                statusMessage: "local-traffic unable to reach the destination",
+              } as any) as IncomingMessage);
+            });
             request.on("data", (chunk) => requestInProgress.write(chunk));
             request.on("end", () => requestInProgress.end());
           }
@@ -196,114 +214,116 @@ load()
           : newUrl.href.substring(newUrl.origin.length);
         const newTarget = url.origin;
         const newTargetUrl = !newUrl ? null : `${newTarget}${newPath}`;
-        const payload = await new Promise((resolve) => {
-          let partialBody = Buffer.alloc(0);
-          responseFromDownstream.on(
-            "data",
-            (chunk) => (partialBody = Buffer.concat([partialBody, chunk]))
-          );
-          responseFromDownstream.on("end", () => {
-            resolve(partialBody);
-          });
-        }).then((payloadBuffer: Buffer) => {
-          if (!config.replaceResponseBodyUrls) return payloadBuffer;
-
-          return (responseFromDownstream.headers["content-encoding"] || "")
-            .split(",")
-            .reduce((buffer, formatNotTrimed) => {
-              const format = formatNotTrimed.trim().toLowerCase();
-              const method =
-                format === "gzip" || format === "x-gzip"
-                  ? gunzip
-                  : format === "deflate"
-                  ? inflate
-                  : format === "br"
-                  ? brotliDecompress
-                  : format === "identity" || format === ""
-                  ? (
-                      input: Buffer,
-                      callback: (err?: Error, data?: Buffer) => void
-                    ) => {
-                      callback(null, input);
-                    }
-                  : null;
-              if (method === null)
-                throw new Error(
-                  `${format} compression not supported by the proxy`
-                );
-
-              return buffer.then(
-                (data) =>
-                  new Promise((resolve) =>
-                    method(data, (err, data) => {
-                      if (err) throw err;
-                      resolve(data);
-                    })
-                  )
-              );
-            }, Promise.resolve(payloadBuffer))
-            .then((uncompressedBuffer) =>
-              !config.replaceResponseBodyUrls
-                ? uncompressedBuffer.toString()
-                : Object.entries(config.mapping)
-                    .reduce(
-                      (inProgress, [path, mapping]) =>
-                        !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/)
-                          ? inProgress
-                          : inProgress.replace(
-                              new RegExp(
-                                mapping
-                                  .replace(/^file:\/\//, "")
-                                  .replace(/[*+?^${}()|[\]\\]/g, ""),
-                                "ig"
-                              ),
-                              `https://${request.headers.host}${path.replace(
-                                /\/+$/,
-                                ""
-                              )}/`
-                            ),
-                      uncompressedBuffer.toString()
-                    )
-                    .split(`${request.headers.host}/:`)
-                    .join(`${request.headers.host}:`)
-            )
-            .then((updatedBody) =>
-              (responseFromDownstream.headers["content-encoding"] || "")
-                .split(",")
-                .reduce((buffer, formatNotTrimed) => {
-                  const format = formatNotTrimed.trim().toLowerCase();
-                  const method =
-                    format === "gzip" || format === "x-gzip"
-                      ? gzip
-                      : format === "deflate"
-                      ? deflate
-                      : format === "br"
-                      ? brotliCompress
-                      : format === "identity" || format === ""
-                      ? (
-                          input: Buffer,
-                          callback: (err?: Error, data?: Buffer) => void
-                        ) => {
-                          callback(null, input);
-                        }
-                      : null;
-                  if (method === null)
-                    throw new Error(
-                      `${format} compression not supported by the proxy`
-                    );
-
-                  return buffer.then(
-                    (data) =>
-                      new Promise((resolve) =>
-                        method(data, (err, data) => {
-                          if (err) throw err;
-                          resolve(data);
-                        })
-                      )
-                  );
-                }, Promise.resolve(Buffer.from(updatedBody)))
+        const payload =
+          error ||
+          (await new Promise((resolve) => {
+            let partialBody = Buffer.alloc(0);
+            responseFromDownstream.on(
+              "data",
+              (chunk) => (partialBody = Buffer.concat([partialBody, chunk]))
             );
-        });
+            responseFromDownstream.on("end", () => {
+              resolve(partialBody);
+            });
+          }).then((payloadBuffer: Buffer) => {
+            if (!config.replaceResponseBodyUrls) return payloadBuffer;
+
+            return (responseFromDownstream.headers["content-encoding"] || "")
+              .split(",")
+              .reduce((buffer, formatNotTrimed) => {
+                const format = formatNotTrimed.trim().toLowerCase();
+                const method =
+                  format === "gzip" || format === "x-gzip"
+                    ? gunzip
+                    : format === "deflate"
+                    ? inflate
+                    : format === "br"
+                    ? brotliDecompress
+                    : format === "identity" || format === ""
+                    ? (
+                        input: Buffer,
+                        callback: (err?: Error, data?: Buffer) => void
+                      ) => {
+                        callback(null, input);
+                      }
+                    : null;
+                if (method === null)
+                  throw new Error(
+                    `${format} compression not supported by the proxy`
+                  );
+
+                return buffer.then(
+                  (data) =>
+                    new Promise((resolve) =>
+                      method(data, (err, data) => {
+                        if (err) throw err;
+                        resolve(data);
+                      })
+                    )
+                );
+              }, Promise.resolve(payloadBuffer))
+              .then((uncompressedBuffer) =>
+                !config.replaceResponseBodyUrls
+                  ? uncompressedBuffer.toString()
+                  : Object.entries(config.mapping)
+                      .reduce(
+                        (inProgress, [path, mapping]) =>
+                          !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/)
+                            ? inProgress
+                            : inProgress.replace(
+                                new RegExp(
+                                  mapping
+                                    .replace(/^file:\/\//, "")
+                                    .replace(/[*+?^${}()|[\]\\]/g, ""),
+                                  "ig"
+                                ),
+                                `https://${request.headers.host}${path.replace(
+                                  /\/+$/,
+                                  ""
+                                )}/`
+                              ),
+                        uncompressedBuffer.toString()
+                      )
+                      .split(`${request.headers.host}/:`)
+                      .join(`${request.headers.host}:`)
+              )
+              .then((updatedBody) =>
+                (responseFromDownstream.headers["content-encoding"] || "")
+                  .split(",")
+                  .reduce((buffer, formatNotTrimed) => {
+                    const format = formatNotTrimed.trim().toLowerCase();
+                    const method =
+                      format === "gzip" || format === "x-gzip"
+                        ? gzip
+                        : format === "deflate"
+                        ? deflate
+                        : format === "br"
+                        ? brotliCompress
+                        : format === "identity" || format === ""
+                        ? (
+                            input: Buffer,
+                            callback: (err?: Error, data?: Buffer) => void
+                          ) => {
+                            callback(null, input);
+                          }
+                        : null;
+                    if (method === null)
+                      throw new Error(
+                        `${format} compression not supported by the proxy`
+                      );
+
+                    return buffer.then(
+                      (data) =>
+                        new Promise((resolve) =>
+                          method(data, (err, data) => {
+                            if (err) throw err;
+                            resolve(data);
+                          })
+                        )
+                    );
+                  }, Promise.resolve(Buffer.from(updatedBody)))
+              );
+          }));
 
         const responseHeaders = {
           ...Object.entries({
