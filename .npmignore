@@ -4,3 +4,4 @@ yarn.lock
 !dist/localTraffic.js
 dist/index.js
 .vscode
+.github
