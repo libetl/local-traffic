@@ -192,7 +192,7 @@ load()
                   "content-type": "text/plain",
                   "content-length": `${error.length}`,
                 },
-                statusCode: 500,
+                statusCode: 504,
                 statusMessage: "local-traffic unable to reach the destination",
               } as any) as IncomingMessage);
             });
