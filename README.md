@@ -1,11 +1,11 @@
 # 🖧 local-traffic
 
-That is a reverse-proxy installed on your machine
+That is a http/2 reverse-proxy installed on your machine
 
 - without any library,
 - without startup time
 - without boring steps
-- just a tiny 4kb file.
+- just a tiny 7.5kb file.
 
 ## pre-requisite
 
@@ -59,3 +59,4 @@ npx local-traffic [location-of-the-local-traffic-config-file]
   * "ssl.key" : (string) Private Key (PEM format)
 - "port" : (number) port number
 - "replaceResponseBodyUrls": (boolean) replace every matching string from the mapping in the response body.
+- "dontUseHttp2Downstream": (boolean) force calling downstream services in http1.1 only (to save some time)
