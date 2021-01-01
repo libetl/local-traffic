@@ -1,6 +1,6 @@
 {
   "name": "local-traffic",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "main": "index.ts",
   "private": false,
   "license": "MIT",
