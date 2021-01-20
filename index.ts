@@ -147,9 +147,9 @@ const fileRequest = (url: URL): ClientHttp2Session => {
 
 const errorPage = (
   thrown: Error,
+  phase: string,
   requestedURL: URL,
-  downstreamURL: URL,
-  phase: string
+  downstreamURL?: URL
 ) => `<!doctype html>
 <html lang="en">
 <head>
@@ -182,7 +182,7 @@ More information about the request :
     </tr>
     <tr>
       <td>downstream URL</td>
-      <td>${downstreamURL}</td>
+      <td>${downstreamURL || "&lt;no-target-url&gt;"}</td>
     </tr>
   </tbody>
 </table>
@@ -201,15 +201,26 @@ load()
           inboundRequest.headers[":authority"] || inboundRequest.headers.host;
         const url = new URL(`https://${proxyHostname}${inboundRequest.url}`);
         const path = url.href.substring(url.origin.length);
-        const [key, target] = Object.entries(envs()).find(([key]) =>
-          path.match(RegExp(key))
-        )!;
+        const [key, target] =
+          Object.entries(envs()).find(([key]) => path.match(RegExp(key))) || [];
         if (!target) {
-          inboundResponse.statusCode = 302;
-          inboundResponse.setHeader(
-            "location",
-            (envs()[""] || new URL("https://www.google.com")).href
+          const error = Buffer.from(
+            errorPage(
+              new Error(`No mapping found in config file ${filename}`),
+              "proxy",
+              url
+            )
           );
+          inboundResponse.writeHead(
+            502,
+            undefined, // statusMessage is discarded in http/2
+            {
+              "content-type": "text/html",
+              "content-length": error.length,
+            }
+          );
+          inboundResponse.write(error);
+          inboundResponse.end();
           return;
         }
         const targetHost = target.host.replace(RegExp(/\/+$/), "");
@@ -249,7 +260,7 @@ load()
                       error =
                         http2IsSupported &&
                         Buffer.from(
-                          errorPage(thrown, url, targetUrl, "connection")
+                          errorPage(thrown, "connection", url, targetUrl)
                         );
                     }
                   );
@@ -299,13 +310,13 @@ load()
               error = Buffer.from(
                 errorPage(
                   thrown,
-                  url,
-                  targetUrl,
                   "streaming" +
                     (httpVersionSupported
                       ? " (error -505 usually means that the downstream service " +
                         "does not support this http version)"
-                      : "")
+                      : ""),
+                  url,
+                  targetUrl
                 )
               );
             }
@@ -343,7 +354,7 @@ load()
                 : httpRequest(http1RequestOptions, resolve);
 
             outboundHttp1Request.on("error", (thrown) => {
-              error = Buffer.from(errorPage(thrown, url, targetUrl, "request"));
+              error = Buffer.from(errorPage(thrown, "request", url, targetUrl));
               resolve(null as IncomingMessage);
             });
             inboundRequest.on("data", (chunk) =>
