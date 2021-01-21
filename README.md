@@ -1,6 +1,6 @@
 # 🖧 local-traffic
 
-That is a http/2 reverse-proxy installed on your machine
+That is a secure http/2 (or insecure http1.1) reverse-proxy installed on your machine
 
 - without any library,
 - without startup time
