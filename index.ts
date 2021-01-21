@@ -1,6 +1,5 @@
 import {
   ClientHttp2Session,
-  createServer,
   createSecureServer,
   connect,
   Http2Session,
@@ -11,7 +10,13 @@ import {
   SecureClientSessionOptions,
   SecureServerOptions,
 } from "http2";
-import { request as httpRequest, IncomingMessage, ClientRequest } from "http";
+import {
+  request as httpRequest,
+  IncomingMessage,
+  ClientRequest,
+  createServer,
+  ServerResponse,
+} from "http";
 import { request as httpsRequest, RequestOptions } from "https";
 import { URL } from "url";
 import { watchFile, readFile, writeFile } from "fs";
@@ -26,11 +31,11 @@ import {
 import { resolve, normalize } from "path";
 
 interface LocalConfiguration {
-  mapping: { [subPath: string]: string };
+  mapping?: { [subPath: string]: string };
   ssl?: SecureServerOptions;
-  port: number;
-  replaceResponseBodyUrls: boolean;
-  dontUseHttp2Downstream: boolean;
+  port?: number;
+  replaceResponseBodyUrls?: boolean;
+  dontUseHttp2Downstream?: boolean;
 }
 
 const userHomeConfigFile = resolve(process.env.HOME, ".local-traffic.json");
@@ -194,8 +199,8 @@ load()
       ? createSecureServer.bind(null, { ...config.ssl, allowHTTP1: true })
       : createServer)(
       async (
-        inboundRequest: Http2ServerRequest,
-        inboundResponse: Http2ServerResponse
+        inboundRequest: Http2ServerRequest | IncomingMessage,
+        inboundResponse: Http2ServerResponse | ServerResponse
       ) => {
         const proxyHostname =
           inboundRequest.headers[":authority"] || inboundRequest.headers.host;
@@ -275,20 +280,21 @@ load()
         if (!http2IsSupported && error) error = null;
 
         const outboundHeaders: OutgoingHttpHeaders = {
-          ...[...Object.entries(inboundRequest.headers)].reduce(
-            (acc: any, [key, value]) => {
+          ...[...Object.entries(inboundRequest.headers)]
+            // host and connection are forbidden in http/2
+            .filter(
+              ([key]) => !["host", "connection"].includes(key.toLowerCase())
+            )
+            .reduce((acc: any, [key, value]) => {
               acc[key] =
                 (acc[key] || "") +
                 (!Array.isArray(value) ? [value] : value)
                   .map((oneValue) => oneValue.replace(url.hostname, targetHost))
                   .join(", ");
               return acc;
-            },
-            {}
-          ),
+            }, {}),
           origin: target.href,
           referer: targetUrl.toString(),
-          host: undefined, // host header is forbidden in http/2,
           ":authority": targetHost,
           ":method": inboundRequest.method,
           ":path": fullPath,
@@ -299,7 +305,8 @@ load()
           outboundRequest &&
           !error &&
           outboundRequest.request(outboundHeaders, {
-            endStream: !inboundRequest.stream.readableLength,
+            endStream: !(inboundRequest as Http2ServerRequest).stream
+              .readableLength,
           });
 
         outboundExchange &&
@@ -377,33 +384,33 @@ load()
           return;
         }
 
-        if (inboundRequest.stream.readableLength && outboundExchange) {
+        if (
+          (inboundRequest as Http2ServerRequest).stream.readableLength &&
+          (inboundRequest as Http2ServerRequest).stream &&
+          outboundExchange
+        ) {
           outboundExchange.setEncoding("utf8");
-          inboundRequest.stream.on("data", (chunk) =>
+          (inboundRequest as Http2ServerRequest).stream.on("data", (chunk) =>
             outboundExchange.write(chunk)
           );
-          inboundRequest.stream.on("end", () => outboundExchange.end());
+          (inboundRequest as Http2ServerRequest).stream.on("end", () =>
+            outboundExchange.end()
+          );
         }
 
-        const {
-          outboundResponseHeaders,
-          outboundResponseFlags,
-        } = await new Promise((resolve) =>
+        const { outboundResponseHeaders } = await new Promise((resolve) =>
           outboundExchange
-            ? outboundExchange.on("response", (headers, flags) => {
+            ? outboundExchange.on("response", (headers) => {
                 resolve({
                   outboundResponseHeaders: headers,
-                  outboundResponseFlags: flags,
                 });
               })
             : !outboundExchange && outboundHttp1Response
             ? resolve({
                 outboundResponseHeaders: outboundHttp1Response.headers,
-                outboundResponseFlags: 0,
               })
             : resolve({
                 outboundResponseHeaders: {},
-                outboundResponseFlags: 0,
               })
         );
 
@@ -433,7 +440,7 @@ load()
             }
             (payloadSource as any).on(
               "data",
-              (chunk) =>
+              (chunk: Buffer | string) =>
                 (partialBody = Buffer.concat([
                   partialBody,
                   typeof chunk === "string"
@@ -446,10 +453,11 @@ load()
             });
           }).then((payloadBuffer: Buffer) => {
             if (!config.replaceResponseBodyUrls) return payloadBuffer;
+            if (!payloadBuffer.length) return payloadBuffer;
 
             return (outboundResponseHeaders["content-encoding"] || "")
               .split(",")
-              .reduce((buffer, formatNotTrimed) => {
+              .reduce((buffer: Promise<Buffer>, formatNotTrimed: string) => {
                 const format = formatNotTrimed.trim().toLowerCase();
                 const method =
                   format === "gzip" || format === "x-gzip"
@@ -481,7 +489,7 @@ load()
                     )
                 );
               }, Promise.resolve(payloadBuffer))
-              .then((uncompressedBuffer) =>
+              .then((uncompressedBuffer: Buffer) =>
                 !config.replaceResponseBodyUrls
                   ? uncompressedBuffer.toString()
                   : Object.entries(config.mapping)
@@ -506,41 +514,44 @@ load()
                       .split(`${proxyHostname}/:`)
                       .join(`${proxyHostname}:`)
               )
-              .then((updatedBody) =>
+              .then((updatedBody: string) =>
                 (outboundResponseHeaders["content-encoding"] || "")
                   .split(",")
-                  .reduce((buffer, formatNotTrimed) => {
-                    const format = formatNotTrimed.trim().toLowerCase();
-                    const method =
-                      format === "gzip" || format === "x-gzip"
-                        ? gzip
-                        : format === "deflate"
-                        ? deflate
-                        : format === "br"
-                        ? brotliCompress
-                        : format === "identity" || format === ""
-                        ? (
-                            input: Buffer,
-                            callback: (err?: Error, data?: Buffer) => void
-                          ) => {
-                            callback(null, input);
-                          }
-                        : null;
-                    if (method === null)
-                      throw new Error(
-                        `${format} compression not supported by the proxy`
-                      );
+                  .reduce(
+                    (buffer: Promise<Buffer>, formatNotTrimed: string) => {
+                      const format = formatNotTrimed.trim().toLowerCase();
+                      const method =
+                        format === "gzip" || format === "x-gzip"
+                          ? gzip
+                          : format === "deflate"
+                          ? deflate
+                          : format === "br"
+                          ? brotliCompress
+                          : format === "identity" || format === ""
+                          ? (
+                              input: Buffer,
+                              callback: (err?: Error, data?: Buffer) => void
+                            ) => {
+                              callback(null, input);
+                            }
+                          : null;
+                      if (method === null)
+                        throw new Error(
+                          `${format} compression not supported by the proxy`
+                        );
 
-                    return buffer.then(
-                      (data) =>
-                        new Promise((resolve) =>
-                          method(data, (err, data) => {
-                            if (err) throw err;
-                            resolve(data);
-                          })
-                        )
-                    );
-                  }, Promise.resolve(Buffer.from(updatedBody)))
+                      return buffer.then(
+                        (data) =>
+                          new Promise((resolve) =>
+                            method(data, (err, data) => {
+                              if (err) throw err;
+                              resolve(data);
+                            })
+                          )
+                      );
+                    },
+                    Promise.resolve(Buffer.from(updatedBody))
+                  )
               );
           }));
 
