@@ -634,7 +634,7 @@ load()
         };
         inboundResponse.writeHead(
           outboundResponseHeaders[":status"] ||
-            outboundHttp1Response.statusCode,
+            outboundHttp1Response.statusCode || 200,
           config.ssl
             ? undefined // statusMessage is discarded in http/2
             : outboundHttp1Response.statusMessage || "Status read from http/2",
