@@ -202,9 +202,21 @@ load()
         inboundRequest: Http2ServerRequest | IncomingMessage,
         inboundResponse: Http2ServerResponse | ServerResponse
       ) => {
+        // phase: mapping
         const proxyHostname =
-          inboundRequest.headers[":authority"] || inboundRequest.headers.host;
-        const url = new URL(`https://${proxyHostname}${inboundRequest.url}`);
+          inboundRequest.headers[":authority"] ||
+          `${inboundRequest.headers.host}${
+            inboundRequest.headers.host.match(/:[0-9]+$/)
+              ? ""
+              : config.port === 80 && !config.ssl
+              ? ""
+              : config.port === 443 && config.ssl
+              ? ""
+              : `:${config.port}`
+          }`;
+        const url = new URL(
+          `http${config.ssl ? "s" : ""}://${proxyHostname}${inboundRequest.url}`
+        );
         const path = url.href.substring(url.origin.length);
         const [key, target] =
           Object.entries(envs()).find(([key]) => path.match(RegExp(key))) || [];
@@ -238,6 +250,8 @@ load()
         const targetUrl = new URL(
           `${target.protocol}//${targetHost}${fullPath}`
         );
+
+        // phase: connection
         let error: Buffer = null;
         let http2IsSupported = !config.dontUseHttp2Downstream;
         const outboundRequest: ClientHttp2Session =
@@ -305,8 +319,9 @@ load()
           outboundRequest &&
           !error &&
           outboundRequest.request(outboundHeaders, {
-            endStream: !(inboundRequest as Http2ServerRequest).stream
-              .readableLength,
+            endStream: config.ssl
+              ? !(inboundRequest as Http2ServerRequest).stream.readableLength
+              : !(inboundRequest as IncomingMessage).readableLength,
           });
 
         outboundExchange &&
@@ -384,9 +399,11 @@ load()
           return;
         }
 
+        // phase : request body
         if (
-          (inboundRequest as Http2ServerRequest).stream.readableLength &&
+          config.ssl && // http/2
           (inboundRequest as Http2ServerRequest).stream &&
+          (inboundRequest as Http2ServerRequest).stream.readableLength &&
           outboundExchange
         ) {
           outboundExchange.setEncoding("utf8");
@@ -398,6 +415,21 @@ load()
           );
         }
 
+        if (
+          !config.ssl && // http1.1
+          (inboundRequest as IncomingMessage).readableLength &&
+          outboundExchange
+        ) {
+          outboundExchange.setEncoding("utf8");
+          (inboundRequest as IncomingMessage).on("data", (chunk) =>
+            outboundExchange.write(chunk)
+          );
+          (inboundRequest as IncomingMessage).on("end", () =>
+            outboundExchange.end()
+          );
+        }
+
+        // phase : response headers
         const { outboundResponseHeaders } = await new Promise((resolve) =>
           outboundExchange
             ? outboundExchange.on("response", (headers) => {
@@ -429,6 +461,8 @@ load()
           : newUrl.href.substring(newUrl.origin.length);
         const newTarget = url.origin;
         const newTargetUrl = !newUrl ? null : `${newTarget}${newPath}`;
+
+        // phase : response body
         const payloadSource = outboundExchange || outboundHttp1Response;
         const payload =
           error ||
@@ -555,6 +589,7 @@ load()
               );
           }));
 
+        // phase : inbound response
         const responseHeaders = {
           ...Object.entries({
             ...outboundResponseHeaders,
@@ -597,13 +632,12 @@ load()
             }, {}),
           ...(newTargetUrl ? { location: [newTargetUrl] } : {}),
         };
-
         inboundResponse.writeHead(
           outboundResponseHeaders[":status"] ||
             outboundHttp1Response.statusCode,
-          !outboundHttp1Response
-            ? undefined
-            : outboundHttp1Response.statusMessage, // statusMessage is discarded in http/2
+          config.ssl
+            ? undefined // statusMessage is discarded in http/2
+            : outboundHttp1Response.statusMessage || "Status read from http/2",
           responseHeaders
         );
         if (payload) inboundResponse.end(payload);
