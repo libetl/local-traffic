@@ -16,6 +16,7 @@ import {
   ClientRequest,
   createServer,
   ServerResponse,
+  Server,
 } from "http";
 import { request as httpsRequest, RequestOptions } from "https";
 import { URL } from "url";
@@ -29,6 +30,12 @@ import {
   brotliDecompress,
 } from "zlib";
 import { resolve, normalize } from "path";
+
+enum LogLevel {
+  ERROR = 124,
+  INFO = 35,
+  WARNING = 172,
+}
 
 interface LocalConfiguration {
   mapping?: { [subPath: string]: string };
@@ -53,33 +60,107 @@ const defaultConfig: LocalConfiguration = {
 };
 
 let config: LocalConfiguration;
-const load = async (writeIfMissing: boolean = true) =>
+let server: Server;
+const getCurrentTime = () => {
+  const date = new Date();
+  return `\u001b[36m${`${date.getHours()}`.padStart(
+    2,
+    "0"
+  )}\u001b[33m:\u001b[36m${`${date.getMinutes()}`.padStart(
+    2,
+    "0"
+  )}\u001b[33m:\u001b[36m${`${date.getSeconds()}`.padStart(2, "0")}\u001b[0m`;
+};
+const log = (text: string, level?: LogLevel, emoji?: string) => {
+  console.log(
+    `${getCurrentTime()} ${
+      level
+        ? `\u001b[48;5;${level}m⎸    ${
+            !process.stdout.isTTY ? "" : emoji || ""
+          }  ${text.padEnd(36)} ⎹\u001b[0m`
+        : text
+    }`
+  );
+};
+const load = async (firstTime: boolean = true) =>
   new Promise((resolve) =>
     readFile(filename, (error, data) => {
-      if (error && !writeIfMissing) {
-        console.log(`${filename} has not been loaded. Using default config`);
+      if (error && !firstTime) {
+        log("config error. Using default value", LogLevel.ERROR, "❌");
       }
       config = Object.assign(
+        {},
         defaultConfig,
         JSON.parse((data || "{}").toString())
       );
-      console.log("mapping is loaded");
+      if (!config.mapping[""]) {
+        log('default mapping "" not provided.', LogLevel.WARNING, "☢️");
+      }
       if (
         error &&
         error.code === "ENOENT" &&
-        writeIfMissing &&
+        firstTime &&
         filename === userHomeConfigFile
       ) {
         writeFile(filename, JSON.stringify(defaultConfig), (fileWriteErr) => {
-          if (fileWriteErr) console.log(`${filename} could not be written`);
-          else console.log(`I have created a config file in '${filename}'`);
+          if (fileWriteErr)
+            log("config file NOT created", LogLevel.ERROR, "⁉️");
+          else log("config file created", LogLevel.INFO, "✨");
           resolve(config);
         });
       } else resolve(config);
     })
-  );
+  ).then(() => {
+    if (firstTime) watchFile(filename, onWatch);
+  });
 
-watchFile(filename, async () => await load(false));
+const logProtocols = (thisConfig: LocalConfiguration) => {
+  log(
+    `\u001b[48;5;5m⎸ ↘️  : ${
+      thisConfig.ssl ? "HTTP/2  " : "HTTP 1.1"
+    } \u001b[48;5;21m⎸ ☎️  : ${thisConfig.port
+      .toString()
+      .padStart(5)} \u001b[48;5;31m⎸ ↗️  : ${
+      thisConfig.dontUseHttp2Downstream ? "HTTP 1.1" : "HTTP/2  "
+    } ⎹\u001b[0m`
+  );
+};
+
+const onWatch = async () => {
+  const previousConfig = { ...config };
+  await load(false);
+  if (isNaN(config.port) || config.port > 65535 || config.port < 0) {
+    config = previousConfig;
+    log("port number invalid. Not refreshing", LogLevel.ERROR, "☎️");
+    return;
+  }
+  if (typeof config.mapping !== "object") {
+    config = previousConfig;
+    log("mapping should be an object. Aborting", LogLevel.ERROR, "⚡");
+    return;
+  }
+
+  log(
+    `${Object.keys(config.mapping)
+      .length.toString()
+      .padStart(5)} loaded mapping rules`,
+    LogLevel.INFO,
+    "↻"
+  );
+  if (
+    config.port !== previousConfig.port ||
+    JSON.stringify(config.ssl) !== JSON.stringify(previousConfig.ssl)
+  ) {
+    await new Promise((resolve) =>
+      !server ? resolve(void 0) : server.close(resolve)
+    );
+    start();
+  } else if (
+    config.dontUseHttp2Downstream !== previousConfig.dontUseHttp2Downstream
+  ) {
+    logProtocols(config);
+  }
+};
 
 const unixNorm = (path: string) =>
   path == "" ? "" : normalize(path).replace(/\\/g, "/");
@@ -193,456 +274,457 @@ More information about the request :
 </table>
 </div></body></html>`;
 
-load()
-  .then(() =>
-    (config.ssl
-      ? createSecureServer.bind(null, { ...config.ssl, allowHTTP1: true })
-      : createServer)(
-      async (
-        inboundRequest: Http2ServerRequest | IncomingMessage,
-        inboundResponse: Http2ServerResponse | ServerResponse
-      ) => {
-        // phase: mapping
-        const proxyHostname =
-          inboundRequest.headers[":authority"] ||
-          `${inboundRequest.headers.host}${
-            inboundRequest.headers.host.match(/:[0-9]+$/)
-              ? ""
-              : config.port === 80 && !config.ssl
-              ? ""
-              : config.port === 443 && config.ssl
-              ? ""
-              : `:${config.port}`
-          }`;
-        const url = new URL(
-          `http${config.ssl ? "s" : ""}://${proxyHostname}${inboundRequest.url}`
+const start = () => {
+  server = (config.ssl
+    ? createSecureServer.bind(null, { ...config.ssl, allowHTTP1: true })
+    : createServer)(
+    async (
+      inboundRequest: Http2ServerRequest | IncomingMessage,
+      inboundResponse: Http2ServerResponse | ServerResponse
+    ) => {
+      // phase: mapping
+      const proxyHostname =
+        inboundRequest.headers[":authority"] ||
+        `${inboundRequest.headers.host}${
+          inboundRequest.headers.host.match(/:[0-9]+$/)
+            ? ""
+            : config.port === 80 && !config.ssl
+            ? ""
+            : config.port === 443 && config.ssl
+            ? ""
+            : `:${config.port}`
+        }`;
+      const url = new URL(
+        `http${config.ssl ? "s" : ""}://${proxyHostname}${inboundRequest.url}`
+      );
+      const path = url.href.substring(url.origin.length);
+      const [key, target] =
+        Object.entries(envs()).find(([key]) => path.match(RegExp(key))) || [];
+      if (!target) {
+        const error = Buffer.from(
+          errorPage(
+            new Error(`No mapping found in config file ${filename}`),
+            "proxy",
+            url
+          )
         );
-        const path = url.href.substring(url.origin.length);
-        const [key, target] =
-          Object.entries(envs()).find(([key]) => path.match(RegExp(key))) || [];
-        if (!target) {
-          const error = Buffer.from(
-            errorPage(
-              new Error(`No mapping found in config file ${filename}`),
-              "proxy",
-              url
-            )
-          );
-          inboundResponse.writeHead(
-            502,
-            undefined, // statusMessage is discarded in http/2
-            {
-              "content-type": "text/html",
-              "content-length": error.length,
-            }
-          );
-          inboundResponse.write(error);
-          inboundResponse.end();
-          return;
-        }
-        const targetHost = target.host.replace(RegExp(/\/+$/), "");
-        const targetPrefix = target.href.substring(
-          "https://".length + target.host.length
+        inboundResponse.writeHead(
+          502,
+          undefined, // statusMessage is discarded in http/2
+          {
+            "content-type": "text/html",
+            "content-length": error.length,
+          }
         );
-        const fullPath = `${targetPrefix}${unixNorm(
-          path.replace(RegExp(unixNorm(key)), "")
-        )}`.replace(/^\/*/, "/");
-        const targetUrl = new URL(
-          `${target.protocol}//${targetHost}${fullPath}`
-        );
+        inboundResponse.write(error);
+        inboundResponse.end();
+        return;
+      }
+      const targetHost = target.host.replace(RegExp(/\/+$/), "");
+      const targetPrefix = target.href.substring(
+        "https://".length + target.host.length
+      );
+      const fullPath = `${targetPrefix}${unixNorm(
+        path.replace(RegExp(unixNorm(key)), "")
+      )}`.replace(/^\/*/, "/");
+      const targetUrl = new URL(`${target.protocol}//${targetHost}${fullPath}`);
 
-        // phase: connection
-        let error: Buffer = null;
-        let http2IsSupported = !config.dontUseHttp2Downstream;
-        const outboundRequest: ClientHttp2Session =
-          target.protocol === "file:"
-            ? fileRequest(targetUrl)
-            : !http2IsSupported
-            ? null
-            : await Promise.race([
-                new Promise<ClientHttp2Session>((resolve) => {
-                  const result = connect(
-                    targetUrl,
-                    {
-                      rejectUnauthorized: false,
-                      protocol: target.protocol,
-                    } as SecureClientSessionOptions,
-                    (_, socketPath) => {
-                      http2IsSupported =
-                        http2IsSupported && !!(socketPath as any).alpnProtocol;
-                      resolve(!http2IsSupported ? null : result);
-                    }
-                  );
-                  ((result as unknown) as Http2Session).on(
-                    "error",
-                    (thrown: Error) => {
-                      error =
-                        http2IsSupported &&
-                        Buffer.from(
-                          errorPage(thrown, "connection", url, targetUrl)
-                        );
-                    }
-                  );
-                }),
-                new Promise<ClientHttp2Session>((resolve) =>
-                  setTimeout(() => {
-                    http2IsSupported = false;
-                    resolve(null);
-                  }, 3000)
-                ),
-              ]);
-        if (!http2IsSupported && error) error = null;
-
-        const outboundHeaders: OutgoingHttpHeaders = {
-          ...[...Object.entries(inboundRequest.headers)]
-            // host and connection are forbidden in http/2
-            .filter(
-              ([key]) => !["host", "connection"].includes(key.toLowerCase())
-            )
-            .reduce((acc: any, [key, value]) => {
-              acc[key] =
-                (acc[key] || "") +
-                (!Array.isArray(value) ? [value] : value)
-                  .map((oneValue) => oneValue.replace(url.hostname, targetHost))
-                  .join(", ");
-              return acc;
-            }, {}),
-          origin: target.href,
-          referer: targetUrl.toString(),
-          ":authority": targetHost,
-          ":method": inboundRequest.method,
-          ":path": fullPath,
-          ":scheme": target.protocol.replace(":", ""),
-        };
-
-        const outboundExchange =
-          outboundRequest &&
-          !error &&
-          outboundRequest.request(outboundHeaders, {
-            endStream: config.ssl
-              ? !(inboundRequest as Http2ServerRequest).stream.readableLength
-              : !(inboundRequest as IncomingMessage).readableLength,
-          });
-
-        outboundExchange &&
-          ((outboundExchange as unknown) as Http2Stream).on(
-            "error",
-            (thrown: Error) => {
-              const httpVersionSupported = (thrown as any).errno === -505;
-              error = Buffer.from(
-                errorPage(
-                  thrown,
-                  "streaming" +
-                    (httpVersionSupported
-                      ? " (error -505 usually means that the downstream service " +
-                        "does not support this http version)"
-                      : ""),
-                  url,
-                  targetUrl
-                )
-              );
-            }
-          );
-
-        const http1RequestOptions: RequestOptions = {
-          hostname: target.hostname,
-          path: fullPath,
-          port: target.port,
-          protocol: target.protocol,
-          rejectUnauthorized: false,
-          method: inboundRequest.method,
-          headers: {
-            ...Object.assign(
-              {},
-              ...Object.entries(outboundHeaders)
-                .filter(
-                  ([h]) =>
-                    !h.startsWith(":") &&
-                    h.toLowerCase() !== "transfer-encoding"
-                )
-                .map(([key, value]) => ({ [key]: value }))
-            ),
-            host: target.hostname,
-          },
-        };
-        const outboundHttp1Response: IncomingMessage =
-          !error &&
-          !http2IsSupported &&
-          target.protocol !== "file:" &&
-          (await new Promise((resolve) => {
-            const outboundHttp1Request: ClientRequest =
-              target.protocol === "https:"
-                ? httpsRequest(http1RequestOptions, resolve)
-                : httpRequest(http1RequestOptions, resolve);
-
-            outboundHttp1Request.on("error", (thrown) => {
-              error = Buffer.from(errorPage(thrown, "request", url, targetUrl));
-              resolve(null as IncomingMessage);
-            });
-            inboundRequest.on("data", (chunk) =>
-              outboundHttp1Request.write(chunk)
-            );
-            inboundRequest.on("end", () => outboundHttp1Request.end());
-          }));
-
-        if (error) {
-          inboundResponse.writeHead(
-            502,
-            undefined, // statusMessage is discarded in http/2
-            {
-              "content-type": "text/html",
-              "content-length": error.length,
-            }
-          );
-          inboundResponse.write(error);
-          inboundResponse.end();
-          return;
-        }
-
-        // phase : request body
-        if (
-          config.ssl && // http/2
-          (inboundRequest as Http2ServerRequest).stream &&
-          (inboundRequest as Http2ServerRequest).stream.readableLength &&
-          outboundExchange
-        ) {
-          outboundExchange.setEncoding("utf8");
-          (inboundRequest as Http2ServerRequest).stream.on("data", (chunk) =>
-            outboundExchange.write(chunk)
-          );
-          (inboundRequest as Http2ServerRequest).stream.on("end", () =>
-            outboundExchange.end()
-          );
-        }
-
-        if (
-          !config.ssl && // http1.1
-          (inboundRequest as IncomingMessage).readableLength &&
-          outboundExchange
-        ) {
-          outboundExchange.setEncoding("utf8");
-          (inboundRequest as IncomingMessage).on("data", (chunk) =>
-            outboundExchange.write(chunk)
-          );
-          (inboundRequest as IncomingMessage).on("end", () =>
-            outboundExchange.end()
-          );
-        }
-
-        // phase : response headers
-        const { outboundResponseHeaders } = await new Promise((resolve) =>
-          outboundExchange
-            ? outboundExchange.on("response", (headers) => {
-                resolve({
-                  outboundResponseHeaders: headers,
-                });
-              })
-            : !outboundExchange && outboundHttp1Response
-            ? resolve({
-                outboundResponseHeaders: outboundHttp1Response.headers,
-              })
-            : resolve({
-                outboundResponseHeaders: {},
-              })
-        );
-
-        const newUrl = !outboundResponseHeaders["location"]
+      // phase: connection
+      let error: Buffer = null;
+      let http2IsSupported = !config.dontUseHttp2Downstream;
+      const outboundRequest: ClientHttp2Session =
+        target.protocol === "file:"
+          ? fileRequest(targetUrl)
+          : !http2IsSupported
           ? null
-          : new URL(
-              outboundResponseHeaders["location"].startsWith("/")
-                ? `${target.href}${outboundResponseHeaders["location"].replace(
-                    /^\/+/,
-                    ``
-                  )}`
-                : outboundResponseHeaders["location"]
-            );
-        const newPath = !newUrl
-          ? null
-          : newUrl.href.substring(newUrl.origin.length);
-        const newTarget = url.origin;
-        const newTargetUrl = !newUrl ? null : `${newTarget}${newPath}`;
-
-        // phase : response body
-        const payloadSource = outboundExchange || outboundHttp1Response;
-        const payload =
-          error ||
-          (await new Promise((resolve) => {
-            let partialBody = Buffer.alloc(0);
-            if (!payloadSource) {
-              resolve(partialBody);
-              return;
-            }
-            (payloadSource as any).on(
-              "data",
-              (chunk: Buffer | string) =>
-                (partialBody = Buffer.concat([
-                  partialBody,
-                  typeof chunk === "string"
-                    ? Buffer.from(chunk as string)
-                    : (chunk as Buffer),
-                ]))
-            );
-            (payloadSource as any).on("end", () => {
-              resolve(partialBody);
-            });
-          }).then((payloadBuffer: Buffer) => {
-            if (!config.replaceResponseBodyUrls) return payloadBuffer;
-            if (!payloadBuffer.length) return payloadBuffer;
-
-            return (outboundResponseHeaders["content-encoding"] || "")
-              .split(",")
-              .reduce((buffer: Promise<Buffer>, formatNotTrimed: string) => {
-                const format = formatNotTrimed.trim().toLowerCase();
-                const method =
-                  format === "gzip" || format === "x-gzip"
-                    ? gunzip
-                    : format === "deflate"
-                    ? inflate
-                    : format === "br"
-                    ? brotliDecompress
-                    : format === "identity" || format === ""
-                    ? (
-                        input: Buffer,
-                        callback: (err?: Error, data?: Buffer) => void
-                      ) => {
-                        callback(null, input);
-                      }
-                    : null;
-                if (method === null)
-                  throw new Error(
-                    `${format} compression not supported by the proxy`
-                  );
-
-                return buffer.then(
-                  (data) =>
-                    new Promise((resolve) =>
-                      method(data, (err, data) => {
-                        if (err) throw err;
-                        resolve(data);
-                      })
-                    )
+          : await Promise.race([
+              new Promise<ClientHttp2Session>((resolve) => {
+                const result = connect(
+                  targetUrl,
+                  {
+                    rejectUnauthorized: false,
+                    protocol: target.protocol,
+                  } as SecureClientSessionOptions,
+                  (_, socketPath) => {
+                    http2IsSupported =
+                      http2IsSupported && !!(socketPath as any).alpnProtocol;
+                    resolve(!http2IsSupported ? null : result);
+                  }
                 );
-              }, Promise.resolve(payloadBuffer))
-              .then((uncompressedBuffer: Buffer) =>
-                !config.replaceResponseBodyUrls
-                  ? uncompressedBuffer.toString()
-                  : Object.entries(config.mapping)
-                      .reduce(
-                        (inProgress, [path, mapping]) =>
-                          !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/)
-                            ? inProgress
-                            : inProgress.replace(
-                                new RegExp(
-                                  mapping
-                                    .replace(/^file:\/\//, "")
-                                    .replace(/[*+?^${}()|[\]\\]/g, ""),
-                                  "ig"
-                                ),
-                                `https://${proxyHostname}${path.replace(
-                                  /\/+$/,
-                                  ""
-                                )}/`
-                              ),
-                        uncompressedBuffer.toString()
-                      )
-                      .split(`${proxyHostname}/:`)
-                      .join(`${proxyHostname}:`)
-              )
-              .then((updatedBody: string) =>
-                (outboundResponseHeaders["content-encoding"] || "")
-                  .split(",")
-                  .reduce(
-                    (buffer: Promise<Buffer>, formatNotTrimed: string) => {
-                      const format = formatNotTrimed.trim().toLowerCase();
-                      const method =
-                        format === "gzip" || format === "x-gzip"
-                          ? gzip
-                          : format === "deflate"
-                          ? deflate
-                          : format === "br"
-                          ? brotliCompress
-                          : format === "identity" || format === ""
-                          ? (
-                              input: Buffer,
-                              callback: (err?: Error, data?: Buffer) => void
-                            ) => {
-                              callback(null, input);
-                            }
-                          : null;
-                      if (method === null)
-                        throw new Error(
-                          `${format} compression not supported by the proxy`
-                        );
-
-                      return buffer.then(
-                        (data) =>
-                          new Promise((resolve) =>
-                            method(data, (err, data) => {
-                              if (err) throw err;
-                              resolve(data);
-                            })
-                          )
+                ((result as unknown) as Http2Session).on(
+                  "error",
+                  (thrown: Error) => {
+                    error =
+                      http2IsSupported &&
+                      Buffer.from(
+                        errorPage(thrown, "connection", url, targetUrl)
                       );
-                    },
-                    Promise.resolve(Buffer.from(updatedBody))
+                  }
+                );
+              }),
+              new Promise<ClientHttp2Session>((resolve) =>
+                setTimeout(() => {
+                  http2IsSupported = false;
+                  resolve(null);
+                }, 3000)
+              ),
+            ]);
+      if (!http2IsSupported && error) error = null;
+
+      const outboundHeaders: OutgoingHttpHeaders = {
+        ...[...Object.entries(inboundRequest.headers)]
+          // host and connection are forbidden in http/2
+          .filter(
+            ([key]) => !["host", "connection"].includes(key.toLowerCase())
+          )
+          .reduce((acc: any, [key, value]) => {
+            acc[key] =
+              (acc[key] || "") +
+              (!Array.isArray(value) ? [value] : value)
+                .map((oneValue) => oneValue.replace(url.hostname, targetHost))
+                .join(", ");
+            return acc;
+          }, {}),
+        origin: target.href,
+        referer: targetUrl.toString(),
+        ":authority": targetHost,
+        ":method": inboundRequest.method,
+        ":path": fullPath,
+        ":scheme": target.protocol.replace(":", ""),
+      };
+
+      const outboundExchange =
+        outboundRequest &&
+        !error &&
+        outboundRequest.request(outboundHeaders, {
+          endStream: config.ssl
+            ? !(inboundRequest as Http2ServerRequest).stream.readableLength
+            : !(inboundRequest as IncomingMessage).readableLength,
+        });
+
+      outboundExchange &&
+        ((outboundExchange as unknown) as Http2Stream).on(
+          "error",
+          (thrown: Error) => {
+            const httpVersionSupported = (thrown as any).errno === -505;
+            error = Buffer.from(
+              errorPage(
+                thrown,
+                "streaming" +
+                  (httpVersionSupported
+                    ? " (error -505 usually means that the downstream service " +
+                      "does not support this http version)"
+                    : ""),
+                url,
+                targetUrl
+              )
+            );
+          }
+        );
+
+      const http1RequestOptions: RequestOptions = {
+        hostname: target.hostname,
+        path: fullPath,
+        port: target.port,
+        protocol: target.protocol,
+        rejectUnauthorized: false,
+        method: inboundRequest.method,
+        headers: {
+          ...Object.assign(
+            {},
+            ...Object.entries(outboundHeaders)
+              .filter(
+                ([h]) =>
+                  !h.startsWith(":") && h.toLowerCase() !== "transfer-encoding"
+              )
+              .map(([key, value]) => ({ [key]: value }))
+          ),
+          host: target.hostname,
+        },
+      };
+      const outboundHttp1Response: IncomingMessage =
+        !error &&
+        !http2IsSupported &&
+        target.protocol !== "file:" &&
+        (await new Promise((resolve) => {
+          const outboundHttp1Request: ClientRequest =
+            target.protocol === "https:"
+              ? httpsRequest(http1RequestOptions, resolve)
+              : httpRequest(http1RequestOptions, resolve);
+
+          outboundHttp1Request.on("error", (thrown) => {
+            error = Buffer.from(errorPage(thrown, "request", url, targetUrl));
+            resolve(null as IncomingMessage);
+          });
+          inboundRequest.on("data", (chunk) =>
+            outboundHttp1Request.write(chunk)
+          );
+          inboundRequest.on("end", () => outboundHttp1Request.end());
+        }));
+
+      if (error) {
+        inboundResponse.writeHead(
+          502,
+          undefined, // statusMessage is discarded in http/2
+          {
+            "content-type": "text/html",
+            "content-length": error.length,
+          }
+        );
+        inboundResponse.write(error);
+        inboundResponse.end();
+        return;
+      }
+
+      // phase : request body
+      if (
+        config.ssl && // http/2
+        (inboundRequest as Http2ServerRequest).stream &&
+        (inboundRequest as Http2ServerRequest).stream.readableLength &&
+        outboundExchange
+      ) {
+        outboundExchange.setEncoding("utf8");
+        (inboundRequest as Http2ServerRequest).stream.on("data", (chunk) =>
+          outboundExchange.write(chunk)
+        );
+        (inboundRequest as Http2ServerRequest).stream.on("end", () =>
+          outboundExchange.end()
+        );
+      }
+
+      if (
+        !config.ssl && // http1.1
+        (inboundRequest as IncomingMessage).readableLength &&
+        outboundExchange
+      ) {
+        outboundExchange.setEncoding("utf8");
+        (inboundRequest as IncomingMessage).on("data", (chunk) =>
+          outboundExchange.write(chunk)
+        );
+        (inboundRequest as IncomingMessage).on("end", () =>
+          outboundExchange.end()
+        );
+      }
+
+      // phase : response headers
+      const { outboundResponseHeaders } = await new Promise((resolve) =>
+        outboundExchange
+          ? outboundExchange.on("response", (headers) => {
+              resolve({
+                outboundResponseHeaders: headers,
+              });
+            })
+          : !outboundExchange && outboundHttp1Response
+          ? resolve({
+              outboundResponseHeaders: outboundHttp1Response.headers,
+            })
+          : resolve({
+              outboundResponseHeaders: {},
+            })
+      );
+
+      const newUrl = !outboundResponseHeaders["location"]
+        ? null
+        : new URL(
+            outboundResponseHeaders["location"].startsWith("/")
+              ? `${target.href}${outboundResponseHeaders["location"].replace(
+                  /^\/+/,
+                  ``
+                )}`
+              : outboundResponseHeaders["location"]
+          );
+      const newPath = !newUrl
+        ? null
+        : newUrl.href.substring(newUrl.origin.length);
+      const newTarget = url.origin;
+      const newTargetUrl = !newUrl ? null : `${newTarget}${newPath}`;
+
+      // phase : response body
+      const payloadSource = outboundExchange || outboundHttp1Response;
+      const payload =
+        error ||
+        (await new Promise((resolve) => {
+          let partialBody = Buffer.alloc(0);
+          if (!payloadSource) {
+            resolve(partialBody);
+            return;
+          }
+          (payloadSource as any).on(
+            "data",
+            (chunk: Buffer | string) =>
+              (partialBody = Buffer.concat([
+                partialBody,
+                typeof chunk === "string"
+                  ? Buffer.from(chunk as string)
+                  : (chunk as Buffer),
+              ]))
+          );
+          (payloadSource as any).on("end", () => {
+            resolve(partialBody);
+          });
+        }).then((payloadBuffer: Buffer) => {
+          if (!config.replaceResponseBodyUrls) return payloadBuffer;
+          if (!payloadBuffer.length) return payloadBuffer;
+
+          return (outboundResponseHeaders["content-encoding"] || "")
+            .split(",")
+            .reduce((buffer: Promise<Buffer>, formatNotTrimed: string) => {
+              const format = formatNotTrimed.trim().toLowerCase();
+              const method =
+                format === "gzip" || format === "x-gzip"
+                  ? gunzip
+                  : format === "deflate"
+                  ? inflate
+                  : format === "br"
+                  ? brotliDecompress
+                  : format === "identity" || format === ""
+                  ? (
+                      input: Buffer,
+                      callback: (err?: Error, data?: Buffer) => void
+                    ) => {
+                      callback(null, input);
+                    }
+                  : null;
+              if (method === null)
+                throw new Error(
+                  `${format} compression not supported by the proxy`
+                );
+
+              return buffer.then(
+                (data) =>
+                  new Promise((resolve) =>
+                    method(data, (err, data) => {
+                      if (err) throw err;
+                      resolve(data);
+                    })
                   )
               );
-          }));
-
-        // phase : inbound response
-        const responseHeaders = {
-          ...Object.entries({
-            ...outboundResponseHeaders,
-            ...(config.replaceResponseBodyUrls
-              ? { ["content-length"]: `${payload.byteLength}` }
-              : {}),
-          })
-            .filter(
-              ([h]) =>
-                !h.startsWith(":") && h.toLowerCase() !== "transfer-encoding"
+            }, Promise.resolve(payloadBuffer))
+            .then((uncompressedBuffer: Buffer) =>
+              !config.replaceResponseBodyUrls
+                ? uncompressedBuffer.toString()
+                : Object.entries(config.mapping)
+                    .reduce(
+                      (inProgress, [path, mapping]) =>
+                        !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/)
+                          ? inProgress
+                          : inProgress.replace(
+                              new RegExp(
+                                mapping
+                                  .replace(/^file:\/\//, "")
+                                  .replace(/[*+?^${}()|[\]\\]/g, ""),
+                                "ig"
+                              ),
+                              `https://${proxyHostname}${path.replace(
+                                /\/+$/,
+                                ""
+                              )}/`
+                            ),
+                      uncompressedBuffer.toString()
+                    )
+                    .split(`${proxyHostname}/:`)
+                    .join(`${proxyHostname}:`)
             )
-            .reduce((acc: any, [key, value]: [string, string | string[]]) => {
-              const allSubdomains = targetHost
-                .split("")
-                .map(
-                  (_, i) =>
-                    targetHost.substring(i).startsWith(".") &&
-                    targetHost.substring(i)
-                )
-                .filter((subdomain) => subdomain) as string[];
-              const transformedValue = [targetHost]
-                .concat(allSubdomains)
-                .reduce(
-                  (acc1, subDomain) =>
-                    (!Array.isArray(acc1) ? [acc1] : (acc1 as string[])).map(
-                      (oneElement) => {
-                        return typeof oneElement === "string"
-                          ? oneElement.replace(
-                              `Domain=${subDomain}`,
-                              `Domain=${url.hostname}`
-                            )
-                          : oneElement;
-                      }
-                    ),
-                  value
-                );
+            .then((updatedBody: string) =>
+              (outboundResponseHeaders["content-encoding"] || "")
+                .split(",")
+                .reduce((buffer: Promise<Buffer>, formatNotTrimed: string) => {
+                  const format = formatNotTrimed.trim().toLowerCase();
+                  const method =
+                    format === "gzip" || format === "x-gzip"
+                      ? gzip
+                      : format === "deflate"
+                      ? deflate
+                      : format === "br"
+                      ? brotliCompress
+                      : format === "identity" || format === ""
+                      ? (
+                          input: Buffer,
+                          callback: (err?: Error, data?: Buffer) => void
+                        ) => {
+                          callback(null, input);
+                        }
+                      : null;
+                  if (method === null)
+                    throw new Error(
+                      `${format} compression not supported by the proxy`
+                    );
 
-              acc[key] = (acc[key] || []).concat(transformedValue);
-              return acc;
-            }, {}),
-          ...(newTargetUrl ? { location: [newTargetUrl] } : {}),
-        };
-        inboundResponse.writeHead(
-          outboundResponseHeaders[":status"] ||
-            outboundHttp1Response.statusCode || 200,
-          config.ssl
-            ? undefined // statusMessage is discarded in http/2
-            : outboundHttp1Response.statusMessage || "Status read from http/2",
-          responseHeaders
-        );
-        if (payload) inboundResponse.end(payload);
-        else inboundResponse.end();
-      }
-    ).listen(config.port)
+                  return buffer.then(
+                    (data) =>
+                      new Promise((resolve) =>
+                        method(data, (err, data) => {
+                          if (err) throw err;
+                          resolve(data);
+                        })
+                      )
+                  );
+                }, Promise.resolve(Buffer.from(updatedBody)))
+            );
+        }));
+
+      // phase : inbound response
+      const responseHeaders = {
+        ...Object.entries({
+          ...outboundResponseHeaders,
+          ...(config.replaceResponseBodyUrls
+            ? { ["content-length"]: `${payload.byteLength}` }
+            : {}),
+        })
+          .filter(
+            ([h]) =>
+              !h.startsWith(":") && h.toLowerCase() !== "transfer-encoding"
+          )
+          .reduce((acc: any, [key, value]: [string, string | string[]]) => {
+            const allSubdomains = targetHost
+              .split("")
+              .map(
+                (_, i) =>
+                  targetHost.substring(i).startsWith(".") &&
+                  targetHost.substring(i)
+              )
+              .filter((subdomain) => subdomain) as string[];
+            const transformedValue = [targetHost].concat(allSubdomains).reduce(
+              (acc1, subDomain) =>
+                (!Array.isArray(acc1) ? [acc1] : (acc1 as string[])).map(
+                  (oneElement) => {
+                    return typeof oneElement === "string"
+                      ? oneElement.replace(
+                          `Domain=${subDomain}`,
+                          `Domain=${url.hostname}`
+                        )
+                      : oneElement;
+                  }
+                ),
+              value
+            );
+
+            acc[key] = (acc[key] || []).concat(transformedValue);
+            return acc;
+          }, {}),
+        ...(newTargetUrl ? { location: [newTargetUrl] } : {}),
+      };
+      inboundResponse.writeHead(
+        outboundResponseHeaders[":status"] ||
+          outboundHttp1Response.statusCode ||
+          200,
+        config.ssl
+          ? undefined // statusMessage is discarded in http/2
+          : outboundHttp1Response.statusMessage || "Status read from http/2",
+        responseHeaders
+      );
+      if (payload) inboundResponse.end(payload);
+      else inboundResponse.end();
+    }
   )
-  .then(() => console.log(`proxy listening on port ${config.port}`));
+    .addListener("error", (err: Error) => {
+      if ((err as any).errno === "EADDRINUSE")
+        log(`port is already used. NOT started`, LogLevel.ERROR, "☠️");
+    })
+    .addListener("listening", () => {
+      logProtocols(config);
+    })
+    .listen(config.port);
+};
+
+load().then(start);
