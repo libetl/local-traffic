@@ -48,7 +48,7 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 
 ## how to change mappings to local / non-local
 
-1. Open `local-traffic.json`
+1. Open `.local-traffic.json`
 2. Edit the matches (keys) and target hosts (values).
 3. No need to restart the server after editing.
 
