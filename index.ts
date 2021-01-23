@@ -691,7 +691,9 @@ const start = () => {
         })
           .filter(
             ([h]) =>
-              !h.startsWith(":") && h.toLowerCase() !== "transfer-encoding"
+              !h.startsWith(":") &&
+              h.toLowerCase() !== "transfer-encoding" &&
+              h.toLowerCase() !== "connection"
           )
           .reduce((acc: any, [key, value]: [string, string | string[]]) => {
             const allSubdomains = targetHost
