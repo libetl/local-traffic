@@ -5,7 +5,7 @@ That is a secure http/2 (or insecure http1.1) reverse-proxy installed on your ma
 - without any library,
 - without startup time
 - without boring steps
-- just a tiny 7.5kb file.
+- just a tiny 9.5kb file.
 
 ## pre-requisite
 

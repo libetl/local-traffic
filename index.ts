@@ -33,7 +33,8 @@ import { resolve, normalize } from "path";
 
 enum LogLevel {
   ERROR = 124,
-  INFO = 35,
+  SUCCESS = 35,
+  INFO = 21,
   WARNING = 172,
 }
 
@@ -106,7 +107,7 @@ const load = async (firstTime: boolean = true) =>
           JSON.parse((data || "{}").toString())
         );
       } catch (e) {
-        log("config syntax incorrect, aborting", LogLevel.ERROR, "⛔");
+        log("config syntax incorrect, aborting", LogLevel.ERROR, "⛈️");
         config = config || { ...defaultConfig };
         resolve(config);
         return;
@@ -123,7 +124,7 @@ const load = async (firstTime: boolean = true) =>
         writeFile(filename, JSON.stringify(defaultConfig), (fileWriteErr) => {
           if (fileWriteErr)
             log("config file NOT created", LogLevel.ERROR, "⁉️");
-          else log("config file created", LogLevel.INFO, "✨");
+          else log("config file created", LogLevel.SUCCESS, "✨");
           resolve(config);
         });
       } else resolve(config);
@@ -157,12 +158,23 @@ const onWatch = async () => {
     log("mapping should be an object. Aborting", LogLevel.ERROR, "⚡");
     return;
   }
-
+  if (
+    config.replaceResponseBodyUrls &&
+    !previousConfig.replaceResponseBodyUrls
+  ) {
+    log("response body url replacement", LogLevel.INFO, "✔️");
+  }
+  if (
+    !config.replaceResponseBodyUrls &&
+    previousConfig.replaceResponseBodyUrls
+  ) {
+    log("response body url NO replacement", LogLevel.INFO, "✖️");
+  }
   log(
     `${Object.keys(config.mapping)
       .length.toString()
       .padStart(5)} loaded mapping rules`,
-    LogLevel.INFO,
+    LogLevel.SUCCESS,
     "↻"
   );
   if (
@@ -738,6 +750,8 @@ const start = () => {
     }
   )
     .addListener("error", (err: Error) => {
+      if ((err as any).errno === "EACCES")
+        log(`permission denied for this port`, LogLevel.ERROR, "⛔");
       if ((err as any).errno === "EADDRINUSE")
         log(`port is already used. NOT started`, LogLevel.ERROR, "☠️");
     })
