@@ -43,6 +43,7 @@ interface LocalConfiguration {
   port?: number;
   replaceResponseBodyUrls?: boolean;
   dontUseHttp2Downstream?: boolean;
+  simpleLogs?: boolean;
 }
 
 const userHomeConfigFile = resolve(process.env.HOME, ".local-traffic.json");
@@ -57,24 +58,34 @@ const defaultConfig: LocalConfiguration = {
   port: 8080,
   replaceResponseBodyUrls: false,
   dontUseHttp2Downstream: false,
+  simpleLogs: false,
 };
 
 let config: LocalConfiguration;
 let server: Server;
-const getCurrentTime = () => {
+const getCurrentTime = (simpleLogs?: boolean) => {
   const date = new Date();
-  return `\u001b[36m${`${date.getHours()}`.padStart(
+  return `${simpleLogs ? "" : "\u001b[36m"}${`${date.getHours()}`.padStart(
     2,
     "0"
-  )}\u001b[33m:\u001b[36m${`${date.getMinutes()}`.padStart(
-    2,
-    "0"
-  )}\u001b[33m:\u001b[36m${`${date.getSeconds()}`.padStart(2, "0")}\u001b[0m`;
+  )}${
+    simpleLogs ? ":" : "\u001b[33m:\u001b[36m"
+  }${`${date.getMinutes()}`.padStart(2, "0")}${
+    simpleLogs ? ":" : "\u001b[33m:\u001b[36m"
+  }${`${date.getSeconds()}`.padStart(2, "0")}${simpleLogs ? "" : "\u001b[0m"}`;
 };
 const log = (text: string, level?: LogLevel, emoji?: string) => {
   console.log(
-    `${getCurrentTime()} ${
-      level
+    `${getCurrentTime(config.simpleLogs)} ${
+      config.simpleLogs
+        ? text
+            .replace(/⎸/g, "|")
+            .replace(/⎹/g, "|")
+            .replace(/\u001b\[[^m]*m/g, "")
+            .replace(/↘️/g, "inbound")
+            .replace(/☎️/g, "port")
+            .replace(/↗️/g, "outbound")
+        : level
         ? `\u001b[48;5;${level}m⎸    ${
             !process.stdout.isTTY ? "" : emoji || ""
           }  ${text.padEnd(36)} ⎹\u001b[0m`
@@ -88,11 +99,18 @@ const load = async (firstTime: boolean = true) =>
       if (error && !firstTime) {
         log("config error. Using default value", LogLevel.ERROR, "❌");
       }
-      config = Object.assign(
-        {},
-        defaultConfig,
-        JSON.parse((data || "{}").toString())
-      );
+      try {
+        config = Object.assign(
+          {},
+          defaultConfig,
+          JSON.parse((data || "{}").toString())
+        );
+      } catch (e) {
+        log("config syntax incorrect, aborting", LogLevel.ERROR, "⛔");
+        config = config || { ...defaultConfig };
+        resolve(config);
+        return;
+      }
       if (!config.mapping[""]) {
         log('default mapping "" not provided.', LogLevel.WARNING, "☢️");
       }
