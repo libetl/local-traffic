@@ -1,8 +1,15 @@
 {
   "name": "local-traffic",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "main": "index.ts",
   "private": false,
+  "keywords": [
+    "reverse-proxy",
+    "proxy",
+    "h2",
+    "http2",
+    "https"
+  ],
   "license": "MIT",
   "repository": "git@github.com:libetl/local-traffic.git",
   "author": "LiBe <libe4@free.fr>",
