@@ -44,6 +44,7 @@ npx local-traffic
 ```bash
 npx local-traffic [location-of-the-local-traffic-config-file]
 ```
+> When not specified, the location of the config file will be `$HOME/.local-traffic.json`
 
 ## how to change mappings to local / non-local
 
