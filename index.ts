@@ -750,9 +750,9 @@ const start = () => {
     }
   )
     .addListener("error", (err: Error) => {
-      if ((err as any).errno === "EACCES")
+      if ((err as any).code === "EACCES")
         log(`permission denied for this port`, LogLevel.ERROR, "⛔");
-      if ((err as any).errno === "EADDRINUSE")
+      if ((err as any).code === "EADDRINUSE")
         log(`port is already used. NOT started`, LogLevel.ERROR, "☠️");
     })
     .addListener("listening", () => {
