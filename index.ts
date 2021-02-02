@@ -20,7 +20,7 @@ import {
 } from "http";
 import { request as httpsRequest, RequestOptions } from "https";
 import { URL } from "url";
-import { watchFile, readFile, writeFile } from "fs";
+import { watchFile, readdir, readFile, writeFile, lstat } from "fs";
 import {
   gzip,
   gunzip,
@@ -204,6 +204,14 @@ const envs: () => { [prefix: string]: URL } = () => ({
 });
 
 const fileRequest = (url: URL): ClientHttp2Session => {
+  const file = resolve(
+    "/",
+    url.hostname,
+    ...url.pathname
+      .replace(/[?#].*$/, "")
+      .replace(/^\/+/, "")
+      .split("/")
+  );
   const clientRequest = function () {
     return {
       error: null as Error,
@@ -213,22 +221,69 @@ const fileRequest = (url: URL): ClientHttp2Session => {
         return this.hasRun
           ? Promise.resolve()
           : new Promise((promiseResolve) =>
-              readFile(
-                resolve(
-                  "/",
-                  url.hostname,
-                  ...url.pathname
-                    .replace(/[?#].*$/, "")
-                    .replace(/^\/+/, "")
-                    .split("/")
-                ),
-                (error, data) => {
-                  this.hasRun = true;
+              readFile(file, (error, data) => {
+                this.hasRun = true;
+                if (!error || error.code !== "EISDIR") {
                   this.error = error;
                   this.data = data;
                   promiseResolve(void 0);
+                  return;
                 }
-              )
+                readdir(file, (readDirError, filelist) => {
+                  this.error = readDirError;
+                  this.data = filelist;
+                  if (readDirError) {
+                    promiseResolve(void 0);
+                    return;
+                  }
+                  Promise.all(
+                    filelist.map(
+                      (file) =>
+                        new Promise((innerResolve) =>
+                          lstat(resolve(url.pathname, file), (err, stats) =>
+                            innerResolve([file, stats, err])
+                          )
+                        )
+                    )
+                  ).then((filesWithTypes) => {
+                    const entries = filesWithTypes
+                      .filter((entry) => !entry[2] && entry[1].isDirectory())
+                      .concat(
+                        filesWithTypes.filter(
+                          (entry) => !entry[2] && entry[1].isFile()
+                        )
+                      );
+                    this.data = `${header(0x1f4c2, "directory", url.href)}
+                      <p>Directory content of <i>${url.href.replace(
+                        /\//g,
+                        "&#x002F;"
+                      )}</i></p>
+                      <ul class="list-group">
+                        <li class="list-group-item">&#x1F4C1;<a href="${
+                          url.pathname.endsWith("/") ? ".." : "."
+                        }">&lt;parent&gt;</a></li>
+                        ${entries
+                          .filter((entry) => !entry[2])
+                          .map((entry) => {
+                            const type = entry[1].isDirectory()
+                              ? 0x1f4c1
+                              : 0x1f4c4;
+                            return `<li class="list-group-item">&#x${type.toString(
+                              16
+                            )};<a href="${
+                              url.pathname.endsWith("/")
+                                ? ""
+                                : `${url.pathname.split("/").slice(-1)[0]}/`
+                            }${entry[0]}">${entry[0]}</a></li>`;
+                          })
+                          .join("\n")}
+                        </li>
+                      </ul>
+                      </body></html>`;
+                    promiseResolve(void 0);
+                  });
+                });
+              })
             );
       },
       events: {} as { [name: string]: (...any: any) => any },
@@ -261,21 +316,29 @@ const fileRequest = (url: URL): ClientHttp2Session => {
   return (newClientRequest as any) as ClientHttp2Session;
 };
 
+const header = (
+  icon: number,
+  category: string,
+  pageTitle: string
+) => `<!doctype html>
+<html lang="en">
+<head>
+<title>&#x${icon.toString(16)}; local-traffic ${category} | ${pageTitle}</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@latest/dist/css/bootstrap.min.css" rel="stylesheet"/>
+<script src="https://cdn.jsdelivr.net/npm/jquery@latest/dist/jquery.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@latest/dist/js/bootstrap.bundle.min.js"></script>
+</head>
+<body><div class="container"><h1>&#x${icon.toString(
+  16
+)}; local-traffic ${category}</h1>
+<br/>`;
+
 const errorPage = (
   thrown: Error,
   phase: string,
   requestedURL: URL,
   downstreamURL?: URL
-) => `<!doctype html>
-<html lang="en">
-<head>
-<title>&#x1F4A3; local-traffic error | ${thrown.message}</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@latest/dist/css/bootstrap.min.css" rel="stylesheet"/>
-<script src="https://cdn.jsdelivr.net/npm/jquery@latest/dist/jquery.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@latest/dist/js/bootstrap.bundle.min.js"></script>
-</head>
-<body><div class="container"><h1>&#x1F4A3; local-traffic error</h1>
-<br/>
+) => `${header(0x1f4a3, "error", thrown.message)}
 <p>An error happened while trying to proxy a remote exchange</p>
 <div class="alert alert-warning" role="alert">
   &#x24D8;&nbsp;This is not an error from the downstream service.
