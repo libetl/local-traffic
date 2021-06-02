@@ -367,6 +367,22 @@ More information about the request :
 </table>
 </div></body></html>`;
 
+const send502 = (
+  inboundResponse: Http2ServerResponse | ServerResponse,
+  errorBuffer: Buffer
+) => {
+  inboundResponse.writeHead(
+    502,
+    undefined, // statusMessage is discarded in http/2
+    {
+      "content-type": "text/html",
+      "content-length": errorBuffer.length,
+    }
+  );
+  inboundResponse.write(errorBuffer);
+  inboundResponse.end();
+};
+
 const start = () => {
   server = (config.ssl
     ? createSecureServer.bind(null, { ...config.ssl, allowHTTP1: true })
@@ -394,23 +410,16 @@ const start = () => {
       const [key, target] =
         Object.entries(envs()).find(([key]) => path.match(RegExp(key))) || [];
       if (!target) {
-        const error = Buffer.from(
-          errorPage(
-            new Error(`No mapping found in config file ${filename}`),
-            "proxy",
-            url
+        send502(
+          inboundResponse,
+          Buffer.from(
+            errorPage(
+              new Error(`No mapping found in config file ${filename}`),
+              "proxy",
+              url
+            )
           )
         );
-        inboundResponse.writeHead(
-          502,
-          undefined, // statusMessage is discarded in http/2
-          {
-            "content-type": "text/html",
-            "content-length": error.length,
-          }
-        );
-        inboundResponse.write(error);
-        inboundResponse.end();
         return;
       }
       const targetHost = target.host.replace(RegExp(/\/+$/), "");
@@ -556,16 +565,7 @@ const start = () => {
         }));
 
       if (error) {
-        inboundResponse.writeHead(
-          502,
-          undefined, // statusMessage is discarded in http/2
-          {
-            "content-type": "text/html",
-            "content-length": error.length,
-          }
-        );
-        inboundResponse.write(error);
-        inboundResponse.end();
+        send502(inboundResponse, error);
         return;
       }
 
@@ -678,19 +678,38 @@ const start = () => {
                       callback(null, input);
                     }
                   : null;
-              if (method === null)
-                throw new Error(
-                  `${format} compression not supported by the proxy`
+              if (method === null) {
+                send502(
+                  inboundResponse,
+                  Buffer.from(
+                    errorPage(
+                      new Error(
+                        `${format} compression not supported by the proxy`
+                      ),
+                      "stream",
+                      url,
+                      targetUrl
+                    )
+                  )
                 );
+                return;
+              }
 
               return buffer.then(
-                (data) =>
-                  new Promise((resolve) =>
-                    method(data, (err, data) => {
-                      if (err) throw err;
+                (openedBuffer) =>
+                  new Promise((resolve) => {
+                    return method(openedBuffer, (err, data) => {
+                      if (err) {
+                        send502(
+                          inboundResponse,
+                          Buffer.from(errorPage(err, "stream", url, targetUrl))
+                        );
+                        resolve("");
+                        return;
+                      }
                       resolve(data);
-                    })
-                  )
+                    });
+                  })
               );
             }, Promise.resolve(payloadBuffer))
             .then((uncompressedBuffer: Buffer) =>
