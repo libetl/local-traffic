@@ -367,20 +367,20 @@ More information about the request :
 </table>
 </div></body></html>`;
 
-const send502 = (
+const send = (
+  code: number,
   inboundResponse: Http2ServerResponse | ServerResponse,
   errorBuffer: Buffer
 ) => {
   inboundResponse.writeHead(
-    502,
+    code,
     undefined, // statusMessage is discarded in http/2
     {
       "content-type": "text/html",
       "content-length": errorBuffer.length,
     }
   );
-  inboundResponse.write(errorBuffer);
-  inboundResponse.end();
+  inboundResponse.end(errorBuffer);
 };
 
 const start = () => {
@@ -392,6 +392,20 @@ const start = () => {
       inboundResponse: Http2ServerResponse | ServerResponse
     ) => {
       // phase: mapping
+      if (!inboundRequest.headers.host) {
+        send(
+          400,
+          inboundResponse,
+          Buffer.from(
+            errorPage(
+              new Error(`client must supply a 'host' header`),
+              "stream",
+              new URL(`http${config.ssl ? "s" : ""}://unknowndomain${inboundRequest.url}`)
+            )
+          )
+        );
+        return;
+      }
       const proxyHostname =
         inboundRequest.headers[":authority"] ||
         `${inboundRequest.headers.host}${
@@ -410,7 +424,8 @@ const start = () => {
       const [key, target] =
         Object.entries(envs()).find(([key]) => path.match(RegExp(key))) || [];
       if (!target) {
-        send502(
+        send(
+          502,
           inboundResponse,
           Buffer.from(
             errorPage(
@@ -565,7 +580,7 @@ const start = () => {
         }));
 
       if (error) {
-        send502(inboundResponse, error);
+        send(502, inboundResponse, error);
         return;
       }
 
@@ -679,7 +694,8 @@ const start = () => {
                     }
                   : null;
               if (method === null) {
-                send502(
+                send(
+                  502,
                   inboundResponse,
                   Buffer.from(
                     errorPage(
@@ -700,7 +716,8 @@ const start = () => {
                   new Promise((resolve) => {
                     return method(openedBuffer, (err, data) => {
                       if (err) {
-                        send502(
+                        send(
+                          502,
                           inboundResponse,
                           Buffer.from(errorPage(err, "stream", url, targetUrl))
                         );
