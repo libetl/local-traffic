@@ -399,7 +399,7 @@ const start = () => {
           Buffer.from(
             errorPage(
               new Error(`client must supply a 'host' header`),
-              "stream",
+              "proxy",
               new URL(`http${config.ssl ? "s" : ""}://unknowndomain${inboundRequest.url}`)
             )
           )
