@@ -392,7 +392,7 @@ const start = () => {
       inboundResponse: Http2ServerResponse | ServerResponse
     ) => {
       // phase: mapping
-      if (!inboundRequest.headers.host) {
+      if (!inboundRequest.headers.host && !inboundRequest.headers[":authority"]) {
         send(
           400,
           inboundResponse,
