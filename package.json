@@ -21,7 +21,7 @@
     "build": "yarn typescript && yarn terser && yarn chmod"
   },
   "devDependencies": {
-    "@types/node": "^16.4.0",
+    "@types/node": "^16.4.1",
     "terser": "^5.7.1",
     "typescript": "^4.3.5"
   },
