@@ -49,7 +49,7 @@ interface LocalConfiguration {
 
 const userHomeConfigFile = resolve(process.env.HOME, ".local-traffic.json");
 const filename = resolve(
-  __dirname,
+  process.cwd(),
   process.argv.slice(-1)[0].endsWith(".json")
     ? process.argv.slice(-1)[0]
     : userHomeConfigFile
@@ -291,7 +291,8 @@ const fileRequest = (url: URL): ClientHttp2Session => {
         this.events[name] = action;
         this.run().then(() => {
           if (name === "response")
-            this.events["response"]({ Server: "local" }, 0);
+            this.events["response"]({ Server: "local", 
+            'Content-Type': file.endsWith('.svg') ? 'image/svg+xml' : null}, 0);
           if (name === "data" && this.data) {
             this.events["data"](this.data);
             this.events["end"]();
