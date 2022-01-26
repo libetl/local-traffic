@@ -516,7 +516,7 @@ const start = () => {
         !error &&
         outboundRequest.request(outboundHeaders, {
           endStream: config.ssl
-            ? !(inboundRequest as Http2ServerRequest).stream.readableLength
+            ? !((inboundRequest as Http2ServerRequest)?.stream?.readableLength ?? true)
             : !(inboundRequest as IncomingMessage).readableLength,
         });
 
@@ -836,6 +836,9 @@ const start = () => {
           }, {}),
         ...(newTargetUrl ? { location: [newTargetUrl] } : {}),
       };
+      Object.entries(responseHeaders).forEach(([headerName, headerValue]) => 
+        headerValue && inboundResponse.setHeader(headerName, headerValue as string)
+      );
       inboundResponse.writeHead(
         outboundResponseHeaders[":status"] ||
           outboundHttp1Response.statusCode ||
