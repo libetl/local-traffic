@@ -9,6 +9,7 @@ import {
   OutgoingHttpHeaders,
   SecureClientSessionOptions,
   SecureServerOptions,
+  ClientHttp2Stream,
 } from "http2";
 import {
   request as httpRequest,
@@ -30,6 +31,7 @@ import {
   brotliDecompress,
 } from "zlib";
 import { resolve, normalize } from "path";
+import type { Duplex } from "stream";
 
 enum LogLevel {
   ERROR = 124,
@@ -528,7 +530,7 @@ const start = () => {
             error = Buffer.from(
               errorPage(
                 thrown,
-                "streaming" +
+                "stream" +
                   (httpVersionSupported
                     ? " (error -505 usually means that the downstream service " +
                       "does not support this http version)"
@@ -592,7 +594,6 @@ const start = () => {
         (inboundRequest as Http2ServerRequest).stream.readableLength &&
         outboundExchange
       ) {
-        outboundExchange.setEncoding("utf8");
         (inboundRequest as Http2ServerRequest).stream.on("data", (chunk) =>
           outboundExchange.write(chunk)
         );
@@ -606,7 +607,6 @@ const start = () => {
         (inboundRequest as IncomingMessage).readableLength &&
         outboundExchange
       ) {
-        outboundExchange.setEncoding("utf8");
         (inboundRequest as IncomingMessage).on("data", (chunk) =>
           outboundExchange.write(chunk)
         );
@@ -651,14 +651,14 @@ const start = () => {
       // phase : response body
       const payloadSource = outboundExchange || outboundHttp1Response;
       const payload =
-        error ||
+        error ??
         (await new Promise((resolve) => {
           let partialBody = Buffer.alloc(0);
           if (!payloadSource) {
             resolve(partialBody);
             return;
           }
-          (payloadSource as any).on(
+          (payloadSource as ClientHttp2Stream | Duplex).on(
             "data",
             (chunk: Buffer | string) =>
               (partialBody = Buffer.concat([
@@ -667,7 +667,7 @@ const start = () => {
                   ? Buffer.from(chunk as string)
                   : (chunk as Buffer),
               ]))
-          );
+            );
           (payloadSource as any).on("end", () => {
             resolve(partialBody);
           });
@@ -677,7 +677,7 @@ const start = () => {
 
           return (outboundResponseHeaders["content-encoding"] || "")
             .split(",")
-            .reduce((buffer: Promise<Buffer>, formatNotTrimed: string) => {
+            .reduce(async (buffer: Promise<Buffer>, formatNotTrimed: string) => {
               const format = formatNotTrimed.trim().toLowerCase();
               const method =
                 format === "gzip" || format === "x-gzip"
@@ -712,22 +712,20 @@ const start = () => {
                 return;
               }
 
-              return buffer.then(
-                (openedBuffer) =>
-                  new Promise((resolve) => {
-                    return method(openedBuffer, (err, data) => {
-                      if (err) {
-                        send(
-                          502,
-                          inboundResponse,
-                          Buffer.from(errorPage(err, "stream", url, targetUrl))
-                        );
-                        resolve("");
-                        return;
-                      }
-                      resolve(data);
-                    });
-                  })
+              const openedBuffer = await buffer;
+              return await new Promise((resolve) => 
+                method(openedBuffer, (err_1, data_1) => {
+                  if (err_1) {
+                    send(
+                      502,
+                      inboundResponse,
+                      Buffer.from(errorPage(err_1, "stream", url, targetUrl))
+                    );
+                    resolve("");
+                    return;
+                  }
+                  resolve(data_1);
+                })
               );
             }, Promise.resolve(payloadBuffer))
             .then((uncompressedBuffer: Buffer) =>
@@ -836,9 +834,13 @@ const start = () => {
           }, {}),
         ...(newTargetUrl ? { location: [newTargetUrl] } : {}),
       };
-      Object.entries(responseHeaders).forEach(([headerName, headerValue]) => 
-        headerValue && inboundResponse.setHeader(headerName, headerValue as string)
-      );
+      try { 
+        Object.entries(responseHeaders).forEach(([headerName, headerValue]) => 
+          headerValue && inboundResponse.setHeader(headerName, headerValue as string)
+        );
+      } catch(e) {
+        // ERR_HTTP2_HEADERS_SENT
+      }
       inboundResponse.writeHead(
         outboundResponseHeaders[":status"] ||
           outboundHttp1Response.statusCode ||
