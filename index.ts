@@ -729,18 +729,24 @@ const start = () => {
               );
             }, Promise.resolve(payloadBuffer))
             .then((uncompressedBuffer: Buffer) =>
+              (uncompressedBuffer.length > 1E6 ||
+              /[^\x00-\x7F]/.test(uncompressedBuffer.toString()) &&
+              !(outboundResponseHeaders["content-type"] ?? "").includes('text/html')) ?
+              uncompressedBuffer :
               !config.replaceResponseBodyUrls
                 ? uncompressedBuffer.toString()
                 : Object.entries(config.mapping)
                     .reduce(
                       (inProgress, [path, mapping]) =>
-                        !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/)
+                        !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/) &&
+                        path !== ''
                           ? inProgress
                           : inProgress.replace(
                               new RegExp(
                                 mapping
                                   .replace(/^file:\/\//, "")
-                                  .replace(/[*+?^${}()|[\]\\]/g, ""),
+                                  .replace(/[*+?^${}()|[\]\\]/g, "")
+                                  .replace(/^https/, 'https?'),
                                 "ig"
                               ),
                               `https://${proxyHostname}${path.replace(
@@ -753,7 +759,7 @@ const start = () => {
                     .split(`${proxyHostname}/:`)
                     .join(`${proxyHostname}:`)
             )
-            .then((updatedBody: string) =>
+            .then((updatedBody: Buffer | string) =>
               (outboundResponseHeaders["content-encoding"] || "")
                 .split(",")
                 .reduce((buffer: Promise<Buffer>, formatNotTrimed: string) => {
