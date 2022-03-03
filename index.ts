@@ -738,15 +738,14 @@ const start = () => {
                 : Object.entries(config.mapping)
                     .reduce(
                       (inProgress, [path, mapping]) =>
-                        !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/) &&
-                        path !== ''
+                        path !== '' && !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/)
                           ? inProgress
                           : inProgress.replace(
                               new RegExp(
                                 mapping
                                   .replace(/^file:\/\//, "")
                                   .replace(/[*+?^${}()|[\]\\]/g, "")
-                                  .replace(/^https/, 'https?'),
+                                  .replace(/^https/, 'https?') + '/*',
                                 "ig"
                               ),
                               `https://${proxyHostname}${path.replace(
