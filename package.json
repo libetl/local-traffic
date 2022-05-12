@@ -27,5 +27,9 @@
   },
   "bin": {
     "local-traffic": "./dist/localTraffic.js"
+  },
+  "volta": {
+    "node": "18.1.0",
+    "npm": "8.8.0"
   }
 }
