@@ -47,6 +47,7 @@ interface LocalConfiguration {
   replaceResponseBodyUrls?: boolean;
   dontUseHttp2Downstream?: boolean;
   simpleLogs?: boolean;
+  websocket?: boolean;
 }
 
 const userHomeConfigFile = resolve(process.env.HOME, ".local-traffic.json");
@@ -62,6 +63,7 @@ const defaultConfig: LocalConfiguration = {
   replaceResponseBodyUrls: false,
   dontUseHttp2Downstream: false,
   simpleLogs: false,
+  websocket: false,
 };
 
 let config: LocalConfiguration;
@@ -171,6 +173,18 @@ const onWatch = async () => {
     previousConfig.replaceResponseBodyUrls
   ) {
     log("response body url NO replacement", LogLevel.INFO, "✖️");
+  }
+  if (
+    config.websocket &&
+    !previousConfig.websocket
+  ) {
+    log("websocket activated", LogLevel.INFO, "☄️");
+  }
+  if (
+    !config.websocket &&
+    previousConfig.websocket
+  ) {
+    log("websocket deactivated", LogLevel.INFO, "☄️");
   }
   log(
     `${Object.keys(config.mapping)
@@ -386,8 +400,39 @@ const send = (
   inboundResponse.end(errorBuffer);
 };
 
+const determineMapping = (inboundRequest: Http2ServerRequest | IncomingMessage): {
+  proxyHostname: string,
+  proxyHostnameAndPort: string,
+  url: URL,
+  path: string,
+  key: string,
+  target: URL
+} => {
+
+  const proxyHostname =
+    (inboundRequest.headers[":authority"]?.toString() ??
+      inboundRequest.headers.host ?? 'localhost').replace(/:.*/, '');
+  const proxyHostnameAndPort =
+    inboundRequest.headers[":authority"] as string ||
+    `${inboundRequest.headers.host}${inboundRequest.headers.host.match(/:[0-9]+$/)
+      ? ""
+      : config.port === 80 && !config.ssl
+        ? ""
+        : config.port === 443 && config.ssl
+          ? ""
+          : `:${config.port}`
+    }`;
+  const url = new URL(
+    `http${config.ssl ? "s" : ""}://${proxyHostnameAndPort}${inboundRequest.url}`
+  );
+  const path = url.href.substring(url.origin.length);
+  const [key, target] =
+    Object.entries(envs()).find(([key]) => path.match(RegExp(key))) || [];
+  return { proxyHostname, proxyHostnameAndPort, url, path, key, target };
+}
+
 const start = () => {
-  server = (config.ssl
+  server = ((config.ssl
     ? createSecureServer.bind(null, { ...config.ssl, allowHTTP1: true })
     : createServer)(
     async (
@@ -409,23 +454,8 @@ const start = () => {
         );
         return;
       }
-      const proxyHostname =
-        inboundRequest.headers[":authority"] ||
-        `${inboundRequest.headers.host}${
-          inboundRequest.headers.host.match(/:[0-9]+$/)
-            ? ""
-            : config.port === 80 && !config.ssl
-            ? ""
-            : config.port === 443 && config.ssl
-            ? ""
-            : `:${config.port}`
-        }`;
-      const url = new URL(
-        `http${config.ssl ? "s" : ""}://${proxyHostname}${inboundRequest.url}`
-      );
-      const path = url.href.substring(url.origin.length);
-      const [key, target] =
-        Object.entries(envs()).find(([key]) => path.match(RegExp(key))) || [];
+      const { proxyHostname, proxyHostnameAndPort, url, path, key, target } =
+        determineMapping(inboundRequest);
       if (!target) {
         send(
           502,
@@ -489,7 +519,7 @@ const start = () => {
                 }, 3000)
               ),
             ]);
-      if (!http2IsSupported && error) error = null;
+      if (!(error instanceof Buffer)) error = null;
 
       const outboundHeaders: OutgoingHttpHeaders = {
         ...[...Object.entries(inboundRequest.headers)]
@@ -581,11 +611,11 @@ const start = () => {
           );
           inboundRequest.on("end", () => outboundHttp1Request.end());
         }));
-
+      // intriguingly, error is reset to "false" at this point, even if it was null
       if (error) {
         send(502, inboundResponse, error);
         return;
-      }
+      } else error = null;
 
       // phase : request body
       if (
@@ -728,10 +758,14 @@ const start = () => {
                 })
               );
             }, Promise.resolve(payloadBuffer))
-            .then((uncompressedBuffer: Buffer) =>
-              (uncompressedBuffer.length > 1E6 ||
-              /[^\x00-\x7F]/.test(uncompressedBuffer.toString()) &&
-              !(outboundResponseHeaders["content-type"] ?? "").includes('text/html')) ?
+            .then((uncompressedBuffer: Buffer) => {
+              const fileTooBig = uncompressedBuffer.length > 1E7;
+              const fileHasSpecialChars = () => /[^\x00-\x7F]/.test(uncompressedBuffer.toString());
+              const contentTypeCanBeProcessed =
+              ['text/html', 'application/javascript', 'application/json'].some(allowedContentType =>
+                (outboundResponseHeaders["content-type"] ?? "").includes(allowedContentType));
+              const willReplace = !fileTooBig && (contentTypeCanBeProcessed || !fileHasSpecialChars());
+              return !willReplace ?
               uncompressedBuffer :
               !config.replaceResponseBodyUrls
                 ? uncompressedBuffer.toString()
@@ -748,16 +782,20 @@ const start = () => {
                                   .replace(/^https/, 'https?') + '/*',
                                 "ig"
                               ),
-                              `https://${proxyHostname}${path.replace(
+                              `https://${proxyHostnameAndPort}${path.replace(
                                 /\/+$/,
                                 ""
                               )}/`
                             ),
                       uncompressedBuffer.toString()
                     )
-                    .split(`${proxyHostname}/:`)
-                    .join(`${proxyHostname}:`)
-            )
+                    .split(`${proxyHostnameAndPort}/:`)
+                    .join(`${proxyHostnameAndPort}:`)
+                    .replace(/\?protocol=wss?%3A&hostname=[^&]+&port=[0-9]+&pathname=/g,
+                      `?protocol=ws${config.ssl ? 
+                        "s" : ""}%3A&hostname=${proxyHostname}&port=${config.port}&pathname=${
+                        encodeURIComponent(key)}`)
+            })
             .then((updatedBody: Buffer | string) =>
               (outboundResponseHeaders["content-encoding"] || "")
                 .split(",")
@@ -858,7 +896,7 @@ const start = () => {
       if (payload) inboundResponse.end(payload);
       else inboundResponse.end();
     }
-  )
+  ) as Server)
     .addListener("error", (err: Error) => {
       if ((err as any).code === "EACCES")
         log(`permission denied for this port`, LogLevel.ERROR, "⛔");
@@ -867,6 +905,45 @@ const start = () => {
     })
     .addListener("listening", () => {
       logProtocols(config);
+    })
+    .on("upgrade", (request: IncomingMessage, upstreamSocket: Duplex) => {
+      if (!config.websocket) {
+        upstreamSocket.end(`HTTP/1.1 503 Service Unavailable\r\n\r\n`)
+        return;
+      }
+
+      const { key, target: targetWithForcedPrefix } = determineMapping(request);
+      const target = new URL(`${targetWithForcedPrefix.protocol}//${
+        targetWithForcedPrefix.host}${request.url.replace(
+          new RegExp(`^${key}`, 'g'), '')}`);
+      const downstreamRequestOptions: RequestOptions = {
+        hostname: target.hostname,
+        path: target.pathname,
+        port: target.port,
+        protocol: target.protocol,
+        rejectUnauthorized: false,
+        method: request.method,
+        headers: request.headers,
+        host: target.hostname,
+      };
+
+      const downstreamRequest = target.protocol === "https:"
+        ? httpsRequest(downstreamRequestOptions)
+        : httpRequest(downstreamRequestOptions);
+      downstreamRequest.end();
+      downstreamRequest.on('upgrade', (response, downstreamSocket) => {
+        const upgradeResponse = `HTTP/${response.httpVersion} ${response.statusCode} ${
+          response.statusMessage}\r\n${Object.entries(response.headers)
+            .flatMap(([key, value]) => (!Array.isArray(value) ? [value] : value)
+              .map(oneValue => [key, oneValue]))
+            .map(([key, value]) =>
+              `${key}: ${value}\r\n`).join('')}\r\n`;
+        upstreamSocket.write(upgradeResponse);
+        upstreamSocket.allowHalfOpen = true;
+        downstreamSocket.allowHalfOpen = true;
+        downstreamSocket.on('data', (data) => upstreamSocket.write(data));
+        upstreamSocket.on('data', (data) => downstreamSocket.write(data));
+      });
     })
     .listen(config.port);
 };
