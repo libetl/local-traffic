@@ -1,6 +1,6 @@
 {
   "name": "local-traffic",
-  "version": "0.0.32",
+  "version": "0.0.33",
   "main": "index.ts",
   "private": false,
   "keywords": [
@@ -8,7 +8,8 @@
     "proxy",
     "h2",
     "http2",
-    "https"
+    "https",
+    "websocket"
   ],
   "license": "MIT",
   "repository": "git@github.com:libetl/local-traffic.git",

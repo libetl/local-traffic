@@ -62,3 +62,4 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 - "replaceResponseBodyUrls": (boolean) replace every matching string from the mapping in the response body.
 - "dontUseHttp2Downstream": (boolean) force calling downstream services in http1.1 only (to save some time)
 - "simpleLogs": (boolean) disable colored logs for text terminals
+- "websocket": (boolean) true to activate websocket connections proxying via sockets
