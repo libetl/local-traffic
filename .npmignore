@@ -2,6 +2,7 @@ index.ts
 tsconfig.json
 yarn.lock
 !dist/localTraffic.js
+dist/terser.js
 dist/index.js
 .vscode
 .github
