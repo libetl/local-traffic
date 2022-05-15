@@ -1,6 +1,6 @@
 .idea
 dist/index.js
-dist/with-terser.js
+dist/terser.js
 dist/localTraffic.js
 node_modules
 .vscode

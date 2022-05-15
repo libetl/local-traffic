@@ -33,6 +33,8 @@ import {
 import { resolve, normalize } from "path";
 import type { Duplex } from "stream";
 
+type ErrorWithErrno = NodeJS.ErrnoException;
+
 enum LogLevel {
   ERROR = 124,
   SUCCESS = 35,
@@ -362,7 +364,7 @@ const errorPage = (
 </div>
 <div class="alert alert-danger" role="alert">
 <pre><code>${thrown.stack || `<i>${thrown.name} : ${thrown.message}</i>`}${
-  (thrown as any).errno ? `<br/>(code : ${(thrown as any).errno})` : ""
+  (thrown as ErrorWithErrno).errno ? `<br/>(code : ${(thrown as ErrorWithErrno).errno})` : ""
 }</code></pre>
 </div>
 More information about the request :
@@ -556,7 +558,7 @@ const start = () => {
         ((outboundExchange as unknown) as Http2Stream).on(
           "error",
           (thrown: Error) => {
-            const httpVersionSupported = (thrown as any).errno === -505;
+            const httpVersionSupported = (thrown as ErrorWithErrno).errno === -505;
             error = Buffer.from(
               errorPage(
                 thrown,
@@ -794,7 +796,7 @@ const start = () => {
                     .replace(/\?protocol=wss?%3A&hostname=[^&]+&port=[0-9]+&pathname=/g,
                       `?protocol=ws${config.ssl ? 
                         "s" : ""}%3A&hostname=${proxyHostname}&port=${config.port}&pathname=${
-                        encodeURIComponent(key)}`)
+                        encodeURIComponent(key.replace(/\/+$/, ''))}`)
             })
             .then((updatedBody: Buffer | string) =>
               (outboundResponseHeaders["content-encoding"] || "")
@@ -898,9 +900,9 @@ const start = () => {
     }
   ) as Server)
     .addListener("error", (err: Error) => {
-      if ((err as any).code === "EACCES")
+      if ((err as ErrorWithErrno).code === "EACCES")
         log(`permission denied for this port`, LogLevel.ERROR, "⛔");
-      if ((err as any).code === "EADDRINUSE")
+      if ((err as ErrorWithErrno).code === "EADDRINUSE")
         log(`port is already used. NOT started`, LogLevel.ERROR, "☠️");
     })
     .addListener("listening", () => {
@@ -915,7 +917,7 @@ const start = () => {
       const { key, target: targetWithForcedPrefix } = determineMapping(request);
       const target = new URL(`${targetWithForcedPrefix.protocol}//${
         targetWithForcedPrefix.host}${request.url.replace(
-          new RegExp(`^${key}`, 'g'), '')}`);
+          new RegExp(`^${key}`, 'g'), '').replace(/^\/*/, '/')}`);
       const downstreamRequestOptions: RequestOptions = {
         hostname: target.hostname,
         path: target.pathname,
@@ -931,6 +933,11 @@ const start = () => {
         ? httpsRequest(downstreamRequestOptions)
         : httpRequest(downstreamRequestOptions);
       downstreamRequest.end();
+      downstreamRequest.on('error', (error) => {
+        log(`websocket request has errored ${
+          (error as ErrorWithErrno).errno ?
+          `(${(error as ErrorWithErrno).errno})` : ''}`, LogLevel.WARNING, "☄️")
+    });
       downstreamRequest.on('upgrade', (response, downstreamSocket) => {
         const upgradeResponse = `HTTP/${response.httpVersion} ${response.statusCode} ${
           response.statusMessage}\r\n${Object.entries(response.headers)
@@ -943,6 +950,16 @@ const start = () => {
         downstreamSocket.allowHalfOpen = true;
         downstreamSocket.on('data', (data) => upstreamSocket.write(data));
         upstreamSocket.on('data', (data) => downstreamSocket.write(data));
+        downstreamSocket.on('error', (error) => {
+          log(`downstream socket has errored ${
+            (error as ErrorWithErrno).errno ?
+            `(${(error as ErrorWithErrno).errno})` : ''}`, LogLevel.WARNING, "☄️")
+        })
+        upstreamSocket.on('error', (error) => {
+          log(`upstream socket has errored ${
+            (error as ErrorWithErrno).errno ?
+            `(${(error as ErrorWithErrno).errno})` : ''}`, LogLevel.WARNING, "☄️")
+        })
       });
     })
     .listen(config.port);

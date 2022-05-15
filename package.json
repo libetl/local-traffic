@@ -17,9 +17,11 @@
   "scripts": {
     "start": "./dist/localTraffic.js",
     "typescript": "tsc",
-    "terser": "echo '#!/usr/bin/env node\n' \"$(terser ./dist/index.js -c -m --toplevel)\" > ./dist/localTraffic.js",
+    "shebang": "echo '#!/usr/bin/env node' | cat - ./dist/terser.js > ./dist/localTraffic.js",
+    "terser": "terser ./dist/index.js -c -m --toplevel > ./dist/terser.js",
     "chmod": "chmod a+x ./dist/localTraffic.js",
-    "build": "yarn typescript && yarn terser && yarn chmod"
+    "clean": "rm -rf dist",
+    "build": "npm run clean && npm run typescript && npm run terser && npm run shebang && npm run chmod"
   },
   "devDependencies": {
     "@types/node": "^17.0.33",
@@ -31,6 +33,6 @@
   },
   "volta": {
     "node": "18.1.0",
-    "npm": "8.8.0"
+    "npm": "8.10.0"
   }
 }
