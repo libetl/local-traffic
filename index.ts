@@ -916,8 +916,9 @@ const start = () => {
 
       const { key, target: targetWithForcedPrefix } = determineMapping(request);
       const target = new URL(`${targetWithForcedPrefix.protocol}//${
-        targetWithForcedPrefix.host}${request.url.replace(
-          new RegExp(`^${key}`, 'g'), '').replace(/^\/*/, '/')}`);
+        targetWithForcedPrefix.host}${request.url.endsWith('/_next/webpack-hmr') 
+        ? request.url 
+        : request.url.replace( new RegExp(`^${key}`, 'g'), '').replace(/^\/*/, '/')}`);
       const downstreamRequestOptions: RequestOptions = {
         hostname: target.hostname,
         path: target.pathname,
