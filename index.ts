@@ -37,9 +37,25 @@ type ErrorWithErrno = NodeJS.ErrnoException;
 
 enum LogLevel {
   ERROR = 124,
-  SUCCESS = 35,
-  INFO = 21,
+  INFO = 93,
   WARNING = 172,
+}
+
+enum EMOJIS {
+  INBOUND = '↘️ ',
+  PORT = '☎️ ',
+  OUTBOUND = '↗️ ',
+  RULES = '🔗',
+  BODY_REPLACEMENT = '✒️ ',
+  WEBSOCKET = '☄️ ',
+  COLORED = '✨',
+  NO = '⛔',
+  ERROR_1 = '❌',
+  ERROR_2 = '⛈️ ',
+  ERROR_3 = '☢️ ',
+  ERROR_4 = '⁉️ ',
+  ERROR_5 = '⚡',
+  ERROR_6 = '☠️ ',
 }
 
 interface LocalConfiguration {
@@ -89,9 +105,14 @@ const log = (text: string, level?: LogLevel, emoji?: string) => {
             .replace(/⎸/g, "|")
             .replace(/⎹/g, "|")
             .replace(/\u001b\[[^m]*m/g, "")
-            .replace(/↘️/g, "inbound")
-            .replace(/☎️/g, "port")
-            .replace(/↗️/g, "outbound")
+            .replace(new RegExp(EMOJIS.INBOUND, "g"), "inbound:")
+            .replace(new RegExp(EMOJIS.PORT, "g"), "port:")
+            .replace(new RegExp(EMOJIS.OUTBOUND, "g"), "outbound:")
+            .replace(new RegExp(EMOJIS.RULES, "g"), 'rules:')
+            .replace(new RegExp(EMOJIS.NO, "g"), '')
+            .replace(new RegExp(EMOJIS.BODY_REPLACEMENT, "g"), 'body replacement')
+            .replace(new RegExp(EMOJIS.WEBSOCKET, "g"), 'websocket')
+            .replace(/\|+/g, '|')
         : level
         ? `\u001b[48;5;${level}m⎸    ${
             !process.stdout.isTTY ? "" : emoji || ""
@@ -100,11 +121,12 @@ const log = (text: string, level?: LogLevel, emoji?: string) => {
     }`
   );
 };
+
 const load = async (firstTime: boolean = true) =>
   new Promise((resolve) =>
     readFile(filename, (error, data) => {
       if (error && !firstTime) {
-        log("config error. Using default value", LogLevel.ERROR, "❌");
+        log("config error. Using default value", LogLevel.ERROR, EMOJIS.ERROR_1);
       }
       try {
         config = Object.assign(
@@ -113,13 +135,13 @@ const load = async (firstTime: boolean = true) =>
           JSON.parse((data || "{}").toString())
         );
       } catch (e) {
-        log("config syntax incorrect, aborting", LogLevel.ERROR, "⛈️");
+        log("config syntax incorrect, aborting", LogLevel.ERROR, EMOJIS.ERROR_2);
         config = config || { ...defaultConfig };
         resolve(config);
         return;
       }
       if (!config.mapping[""]) {
-        log('default mapping "" not provided.', LogLevel.WARNING, "☢️");
+        log('default mapping "" not provided.', LogLevel.WARNING, EMOJIS.ERROR_3);
       }
       if (
         error &&
@@ -129,8 +151,8 @@ const load = async (firstTime: boolean = true) =>
       ) {
         writeFile(filename, JSON.stringify(defaultConfig), (fileWriteErr) => {
           if (fileWriteErr)
-            log("config file NOT created", LogLevel.ERROR, "⁉️");
-          else log("config file created", LogLevel.SUCCESS, "✨");
+            log("config file NOT created", LogLevel.ERROR, EMOJIS.ERROR_4);
+          else log("config file created", LogLevel.INFO, EMOJIS.COLORED);
           resolve(config);
         });
       } else resolve(config);
@@ -139,15 +161,21 @@ const load = async (firstTime: boolean = true) =>
     if (firstTime) watchFile(filename, onWatch);
   });
 
-const logProtocols = (thisConfig: LocalConfiguration) => {
+const quickStatus = (thisConfig: LocalConfiguration) => {
   log(
-    `\u001b[48;5;5m⎸ ↘️  : ${
-      thisConfig.ssl ? "HTTP/2  " : "HTTP 1.1"
-    } \u001b[48;5;21m⎸ ☎️  : ${thisConfig.port
+    `\u001b[48;5;52m⎸${EMOJIS.PORT} ${thisConfig.port
       .toString()
-      .padStart(5)} \u001b[48;5;31m⎸ ↗️  : ${
-      thisConfig.dontUseHttp2Downstream ? "HTTP 1.1" : "HTTP/2  "
-    } ⎹\u001b[0m`
+      .padStart(5)} \u001b[48;5;53m⎸${EMOJIS.INBOUND} ${
+      thisConfig.ssl ? "H/2 " : "H1.1"
+    } \u001b[48;5;54m⎸${EMOJIS.OUTBOUND} ${
+      thisConfig.dontUseHttp2Downstream ? "H1.1" : "H/2 "
+    }⎹\u001b[48;5;55m⎸${EMOJIS.RULES}${Object.keys(config.mapping)
+      .length.toString()
+      .padStart(3)}⎹\u001b[48;5;56m⎸${
+        config.replaceResponseBodyUrls ? 
+          EMOJIS.BODY_REPLACEMENT : EMOJIS.NO}⎹\u001b[48;5;57m⎸${
+          config.websocket ? EMOJIS.WEBSOCKET : EMOJIS.NO}⎹\u001b[48;5;93m⎸${
+            !config.simpleLogs ? EMOJIS.COLORED : EMOJIS.NO}⎹\u001b[0m`
   );
 };
 
@@ -156,45 +184,59 @@ const onWatch = async () => {
   await load(false);
   if (isNaN(config.port) || config.port > 65535 || config.port < 0) {
     config = previousConfig;
-    log("port number invalid. Not refreshing", LogLevel.ERROR, "☎️");
+    log("port number invalid. Not refreshing", LogLevel.ERROR, EMOJIS.PORT);
     return;
   }
   if (typeof config.mapping !== "object") {
     config = previousConfig;
-    log("mapping should be an object. Aborting", LogLevel.ERROR, "⚡");
+    log("mapping should be an object. Aborting", LogLevel.ERROR, EMOJIS.ERROR_5);
     return;
   }
   if (
-    config.replaceResponseBodyUrls &&
-    !previousConfig.replaceResponseBodyUrls
+    config.replaceResponseBodyUrls !== previousConfig.replaceResponseBodyUrls
   ) {
-    log("response body url replacement", LogLevel.INFO, "✔️");
+    log(`response body url ${
+      !config.replaceResponseBodyUrls ? 'NO ' : ''
+    }replacement`, LogLevel.INFO, EMOJIS.BODY_REPLACEMENT);
   }
   if (
-    !config.replaceResponseBodyUrls &&
-    previousConfig.replaceResponseBodyUrls
+    config.dontUseHttp2Downstream !== previousConfig.dontUseHttp2Downstream
   ) {
-    log("response body url NO replacement", LogLevel.INFO, "✖️");
+    log(`http/2 ${
+      config.dontUseHttp2Downstream ? 'de' : ''}activated downstream`, LogLevel.INFO, EMOJIS.OUTBOUND);
   }
   if (
-    config.websocket &&
-    !previousConfig.websocket
+    config.websocket !== previousConfig.websocket
   ) {
-    log("websocket activated", LogLevel.INFO, "☄️");
+    log(`websocket ${
+      !config.websocket ? 'de' : ''}activated`, LogLevel.INFO, EMOJIS.WEBSOCKET);
   }
   if (
-    !config.websocket &&
-    previousConfig.websocket
+    config.simpleLogs !== previousConfig.simpleLogs
   ) {
-    log("websocket deactivated", LogLevel.INFO, "☄️");
+    log(`simple logs ${
+      !config.simpleLogs ? 'off' : 'on'}`, LogLevel.INFO, EMOJIS.COLORED);
   }
-  log(
-    `${Object.keys(config.mapping)
-      .length.toString()
-      .padStart(5)} loaded mapping rules`,
-    LogLevel.SUCCESS,
-    "↻"
-  );
+  if (Object.keys(config.mapping).join('\n') !== Object.keys(previousConfig.mapping).join('\n')) {
+    log(
+      `${Object.keys(config.mapping)
+        .length.toString()
+        .padStart(5)} loaded mapping rules`,
+      LogLevel.INFO,
+      EMOJIS.RULES
+    );
+  }
+  if (
+    config.port !== previousConfig.port
+  ) {
+    log(`port changed from ${previousConfig.port} to ${config.port}`, LogLevel.INFO, EMOJIS.PORT);
+  }
+  if (config.ssl && !previousConfig.ssl) {
+    log(`ssl configuration added`, LogLevel.INFO, EMOJIS.INBOUND);
+  }
+  if (!config.ssl && previousConfig.ssl) {
+    log(`ssl configuration removed`, LogLevel.INFO, EMOJIS.INBOUND);
+  }
   if (
     config.port !== previousConfig.port ||
     JSON.stringify(config.ssl) !== JSON.stringify(previousConfig.ssl)
@@ -203,11 +245,7 @@ const onWatch = async () => {
       !server ? resolve(void 0) : server.close(resolve)
     );
     start();
-  } else if (
-    config.dontUseHttp2Downstream !== previousConfig.dontUseHttp2Downstream
-  ) {
-    logProtocols(config);
-  }
+  } else quickStatus(config);
 };
 
 const unixNorm = (path: string) =>
@@ -901,12 +939,12 @@ const start = () => {
   ) as Server)
     .addListener("error", (err: Error) => {
       if ((err as ErrorWithErrno).code === "EACCES")
-        log(`permission denied for this port`, LogLevel.ERROR, "⛔");
+        log(`permission denied for this port`, LogLevel.ERROR, EMOJIS.NO);
       if ((err as ErrorWithErrno).code === "EADDRINUSE")
-        log(`port is already used. NOT started`, LogLevel.ERROR, "☠️");
+        log(`port is already used. NOT started`, LogLevel.ERROR, EMOJIS.ERROR_6);
     })
     .addListener("listening", () => {
-      logProtocols(config);
+      quickStatus(config);
     })
     .on("upgrade", (request: IncomingMessage, upstreamSocket: Duplex) => {
       if (!config.websocket) {
