@@ -975,7 +975,8 @@ const start = () => {
       downstreamRequest.on('error', (error) => {
         log(`websocket request has errored ${
           (error as ErrorWithErrno).errno ?
-          `(${(error as ErrorWithErrno).errno})` : ''}`, LogLevel.WARNING, "☄️")
+          `(${(error as ErrorWithErrno).errno})` : ''}`,
+          LogLevel.WARNING, EMOJIS.WEBSOCKET)
     });
       downstreamRequest.on('upgrade', (response, downstreamSocket) => {
         const upgradeResponse = `HTTP/${response.httpVersion} ${response.statusCode} ${
@@ -992,12 +993,14 @@ const start = () => {
         downstreamSocket.on('error', (error) => {
           log(`downstream socket has errored ${
             (error as ErrorWithErrno).errno ?
-            `(${(error as ErrorWithErrno).errno})` : ''}`, LogLevel.WARNING, "☄️")
+            `(${(error as ErrorWithErrno).errno})` : ''}`,
+            LogLevel.WARNING, EMOJIS.WEBSOCKET)
         })
         upstreamSocket.on('error', (error) => {
           log(`upstream socket has errored ${
             (error as ErrorWithErrno).errno ?
-            `(${(error as ErrorWithErrno).errno})` : ''}`, LogLevel.WARNING, "☄️")
+            `(${(error as ErrorWithErrno).errno})` : ''}`,
+            LogLevel.WARNING, EMOJIS.WEBSOCKET)
         })
       });
     })
