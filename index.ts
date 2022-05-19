@@ -122,6 +122,24 @@ const log = (text: string, level?: LogLevel, emoji?: string) => {
   );
 };
 
+const quickStatus = (thisConfig: LocalConfiguration) => {
+  log(
+    `\u001b[48;5;52m⎸${EMOJIS.PORT} ${thisConfig.port
+      .toString()
+      .padStart(5)} \u001b[48;5;53m⎸${EMOJIS.INBOUND} ${
+      thisConfig.ssl ? "H/2 " : "H1.1"
+    } \u001b[48;5;54m⎸${EMOJIS.OUTBOUND} ${
+      thisConfig.dontUseHttp2Downstream ? "H1.1" : "H/2 "
+    }⎹\u001b[48;5;55m⎸${EMOJIS.RULES}${Object.keys(config.mapping)
+      .length.toString()
+      .padStart(3)}⎹\u001b[48;5;56m⎸${
+        config.replaceResponseBodyUrls ? 
+          EMOJIS.BODY_REPLACEMENT : EMOJIS.NO}⎹\u001b[48;5;57m⎸${
+          config.websocket ? EMOJIS.WEBSOCKET : EMOJIS.NO}⎹\u001b[48;5;93m⎸${
+            !config.simpleLogs ? EMOJIS.COLORED : EMOJIS.NO}⎹\u001b[0m`
+  );
+};
+
 const load = async (firstTime: boolean = true) =>
   new Promise((resolve) =>
     readFile(filename, (error, data) => {
@@ -160,24 +178,6 @@ const load = async (firstTime: boolean = true) =>
   ).then(() => {
     if (firstTime) watchFile(filename, onWatch);
   });
-
-const quickStatus = (thisConfig: LocalConfiguration) => {
-  log(
-    `\u001b[48;5;52m⎸${EMOJIS.PORT} ${thisConfig.port
-      .toString()
-      .padStart(5)} \u001b[48;5;53m⎸${EMOJIS.INBOUND} ${
-      thisConfig.ssl ? "H/2 " : "H1.1"
-    } \u001b[48;5;54m⎸${EMOJIS.OUTBOUND} ${
-      thisConfig.dontUseHttp2Downstream ? "H1.1" : "H/2 "
-    }⎹\u001b[48;5;55m⎸${EMOJIS.RULES}${Object.keys(config.mapping)
-      .length.toString()
-      .padStart(3)}⎹\u001b[48;5;56m⎸${
-        config.replaceResponseBodyUrls ? 
-          EMOJIS.BODY_REPLACEMENT : EMOJIS.NO}⎹\u001b[48;5;57m⎸${
-          config.websocket ? EMOJIS.WEBSOCKET : EMOJIS.NO}⎹\u001b[48;5;93m⎸${
-            !config.simpleLogs ? EMOJIS.COLORED : EMOJIS.NO}⎹\u001b[0m`
-  );
-};
 
 const onWatch = async () => {
   const previousConfig = { ...config };
@@ -467,7 +467,8 @@ const determineMapping = (inboundRequest: Http2ServerRequest | IncomingMessage):
   );
   const path = url.href.substring(url.origin.length);
   const [key, target] =
-    Object.entries(envs()).find(([key]) => path.match(RegExp(key))) || [];
+    Object.entries(envs())
+    .find(([key]) => path.match(RegExp(key.replace(/^\//, '^/')))) || [];
   return { proxyHostname, proxyHostnameAndPort, url, path, key, target };
 }
 
