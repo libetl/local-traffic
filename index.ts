@@ -10,11 +10,13 @@ import {
   SecureClientSessionOptions,
   SecureServerOptions,
   ClientHttp2Stream,
+  IncomingHttpStatusHeader,
 } from "http2";
 import {
   request as httpRequest,
   IncomingMessage,
   ClientRequest,
+  IncomingHttpHeaders,
   createServer,
   ServerResponse,
   Server,
@@ -301,7 +303,7 @@ const fileRequest = (url: URL): ClientHttp2Session => {
       .replace(/^\/+/, "")
       .split("/"),
   );
-  return {
+  return ({
     error: null as Error,
     data: null as string | Buffer,
     hasRun: false,
@@ -399,7 +401,7 @@ const fileRequest = (url: URL): ClientHttp2Session => {
     request: function () {
       return this;
     },
-  } as unknown as ClientHttp2Session;
+  } as unknown) as ClientHttp2Session;
 };
 
 const header = (
@@ -511,306 +513,413 @@ const determineMapping = (
 };
 
 const start = () => {
-  server = (
-    (config.ssl
-      ? createSecureServer.bind(null, { ...config.ssl, allowHTTP1: true })
-      : createServer)(
-      async (
-        inboundRequest: Http2ServerRequest | IncomingMessage,
-        inboundResponse: Http2ServerResponse | ServerResponse,
-      ) => {
-        // phase: mapping
-        if (
-          !inboundRequest.headers.host &&
-          !inboundRequest.headers[":authority"]
-        ) {
-          send(
-            400,
-            inboundResponse,
-            Buffer.from(
-              errorPage(
-                new Error(`client must supply a 'host' header`),
-                "proxy",
-                new URL(
-                  `http${config.ssl ? "s" : ""}://unknowndomain${
-                    inboundRequest.url
-                  }`,
-                ),
+  server = ((config.ssl
+    ? createSecureServer.bind(null, { ...config.ssl, allowHTTP1: true })
+    : createServer)(
+    async (
+      inboundRequest: Http2ServerRequest | IncomingMessage,
+      inboundResponse: Http2ServerResponse | ServerResponse,
+    ) => {
+      // phase: mapping
+      if (
+        !inboundRequest.headers.host &&
+        !inboundRequest.headers[":authority"]
+      ) {
+        send(
+          400,
+          inboundResponse,
+          Buffer.from(
+            errorPage(
+              new Error(`client must supply a 'host' header`),
+              "proxy",
+              new URL(
+                `http${config.ssl ? "s" : ""}://unknowndomain${
+                  inboundRequest.url
+                }`,
               ),
             ),
-          );
-          return;
-        }
-        const { proxyHostname, proxyHostnameAndPort, url, path, key, target } =
-          determineMapping(inboundRequest);
-        if (!target) {
-          send(
-            502,
-            inboundResponse,
-            Buffer.from(
-              errorPage(
-                new Error(`No mapping found in config file ${filename}`),
-                "proxy",
-                url,
-              ),
+          ),
+        );
+        return;
+      }
+      const {
+        proxyHostname,
+        proxyHostnameAndPort,
+        url,
+        path,
+        key,
+        target,
+      } = determineMapping(inboundRequest);
+      if (!target) {
+        send(
+          502,
+          inboundResponse,
+          Buffer.from(
+            errorPage(
+              new Error(`No mapping found in config file ${filename}`),
+              "proxy",
+              url,
             ),
-          );
-          return;
-        }
-        const targetHost = target.host.replace(RegExp(/\/+$/), "");
-        const targetPrefix = target.href.substring(
-          "https://".length + target.host.length,
+          ),
         );
-        const fullPath = `${targetPrefix}${unixNorm(
-          path.replace(RegExp(unixNorm(key)), ""),
-        )}`.replace(/^\/*/, "/");
-        const targetUrl = new URL(
-          `${target.protocol}//${targetHost}${fullPath}`,
-        );
+        return;
+      }
+      const targetHost = target.host.replace(RegExp(/\/+$/), "");
+      const targetPrefix = target.href.substring(
+        "https://".length + target.host.length,
+      );
+      const fullPath = `${targetPrefix}${unixNorm(
+        path.replace(RegExp(unixNorm(key)), ""),
+      )}`.replace(/^\/*/, "/");
+      const targetUrl = new URL(`${target.protocol}//${targetHost}${fullPath}`);
 
-        // phase: connection
-        let error: Buffer = null;
-        let http2IsSupported = !config.dontUseHttp2Downstream;
-        const outboundRequest: ClientHttp2Session =
-          target.protocol === "file:"
-            ? fileRequest(targetUrl)
-            : !http2IsSupported
-            ? null
-            : await Promise.race([
-                new Promise<ClientHttp2Session>(resolve => {
-                  const result = connect(
-                    targetUrl,
-                    {
-                      rejectUnauthorized: false,
-                      protocol: target.protocol,
-                    } as SecureClientSessionOptions,
-                    (_, socketPath) => {
-                      http2IsSupported =
-                        http2IsSupported && !!(socketPath as any).alpnProtocol;
-                      resolve(!http2IsSupported ? null : result);
-                    },
-                  );
-                  (result as unknown as Http2Session).on(
-                    "error",
-                    (thrown: Error) => {
-                      error =
-                        http2IsSupported &&
-                        Buffer.from(
-                          errorPage(thrown, "connection", url, targetUrl),
-                        );
-                    },
-                  );
-                }),
-                new Promise<ClientHttp2Session>(resolve =>
-                  setTimeout(() => {
-                    http2IsSupported = false;
-                    resolve(null);
-                  }, 3000),
-                ),
-              ]);
-        if (!(error instanceof Buffer)) error = null;
-
-        const outboundHeaders: OutgoingHttpHeaders = {
-          ...[...Object.entries(inboundRequest.headers)]
-            // host and connection are forbidden in http/2
-            .filter(
-              ([key]) => !["host", "connection"].includes(key.toLowerCase()),
-            )
-            .reduce((acc: any, [key, value]) => {
-              acc[key] =
-                (acc[key] || "") +
-                (!Array.isArray(value) ? [value] : value)
-                  .map(oneValue => oneValue.replace(url.hostname, targetHost))
-                  .join(", ");
-              return acc;
-            }, {}),
-          origin: target.href,
-          referer: targetUrl.toString(),
-          ":authority": targetHost,
-          ":method": inboundRequest.method,
-          ":path": fullPath,
-          ":scheme": target.protocol.replace(":", ""),
-        };
-
-        const outboundExchange =
-          outboundRequest &&
-          !error &&
-          outboundRequest.request(outboundHeaders, {
-            endStream: config.ssl
-              ? !(
-                  (inboundRequest as Http2ServerRequest)?.stream
-                    ?.readableLength ?? true
-                )
-              : !(inboundRequest as IncomingMessage).readableLength,
-          });
-
-        outboundExchange &&
-          (outboundExchange as unknown as Http2Stream).on(
-            "error",
-            (thrown: Error) => {
-              const httpVersionSupported =
-                (thrown as ErrorWithErrno).errno === -505;
-              error = Buffer.from(
-                errorPage(
-                  thrown,
-                  "stream" +
-                    (httpVersionSupported
-                      ? " (error -505 usually means that the downstream service " +
-                        "does not support this http version)"
-                      : ""),
-                  url,
+      // phase: connection
+      let error: Buffer = null;
+      let http2IsSupported = !config.dontUseHttp2Downstream;
+      const outboundRequest: ClientHttp2Session =
+        target.protocol === "file:"
+          ? fileRequest(targetUrl)
+          : !http2IsSupported
+          ? null
+          : await Promise.race([
+              new Promise<ClientHttp2Session>(resolve => {
+                const result = connect(
                   targetUrl,
+                  {
+                    rejectUnauthorized: false,
+                    protocol: target.protocol,
+                  } as SecureClientSessionOptions,
+                  (_, socketPath) => {
+                    http2IsSupported =
+                      http2IsSupported && !!(socketPath as any).alpnProtocol;
+                    resolve(!http2IsSupported ? null : result);
+                  },
+                );
+                ((result as unknown) as Http2Session).on(
+                  "error",
+                  (thrown: Error) => {
+                    error =
+                      http2IsSupported &&
+                      Buffer.from(
+                        errorPage(thrown, "connection", url, targetUrl),
+                      );
+                  },
+                );
+              }),
+              new Promise<ClientHttp2Session>(resolve =>
+                setTimeout(() => {
+                  http2IsSupported = false;
+                  resolve(null);
+                }, 3000),
+              ),
+            ]);
+      if (!(error instanceof Buffer)) error = null;
+
+      const outboundHeaders: OutgoingHttpHeaders = {
+        ...[...Object.entries(inboundRequest.headers)]
+          // host and connection are forbidden in http/2
+          .filter(
+            ([key]) => !["host", "connection"].includes(key.toLowerCase()),
+          )
+          .reduce((acc: any, [key, value]) => {
+            acc[key] =
+              (acc[key] || "") +
+              (!Array.isArray(value) ? [value] : value)
+                .map(oneValue => oneValue.replace(url.hostname, targetHost))
+                .join(", ");
+            return acc;
+          }, {}),
+        origin: target.href,
+        referer: targetUrl.toString(),
+        ":authority": targetHost,
+        ":method": inboundRequest.method,
+        ":path": fullPath,
+        ":scheme": target.protocol.replace(":", ""),
+      };
+
+      const outboundExchange =
+        outboundRequest &&
+        !error &&
+        outboundRequest.request(outboundHeaders, {
+          endStream: config.ssl
+            ? !(
+                (inboundRequest as Http2ServerRequest)?.stream
+                  ?.readableLength ?? true
+              )
+            : !(inboundRequest as IncomingMessage).readableLength,
+        });
+
+      outboundExchange?.on("error", (thrown: Error) => {
+        const httpVersionSupported = (thrown as ErrorWithErrno).errno === -505;
+        error = Buffer.from(
+          errorPage(
+            thrown,
+            "stream" +
+              (httpVersionSupported
+                ? " (error -505 usually means that the downstream service " +
+                  "does not support this http version)"
+                : ""),
+            url,
+            targetUrl,
+          ),
+        );
+      });
+
+      const http1RequestOptions: RequestOptions = {
+        hostname: target.hostname,
+        path: fullPath,
+        port: target.port,
+        protocol: target.protocol,
+        rejectUnauthorized: false,
+        method: inboundRequest.method,
+        headers: {
+          ...Object.assign(
+            {},
+            ...Object.entries(outboundHeaders)
+              .filter(
+                ([h]) =>
+                  !h.startsWith(":") && h.toLowerCase() !== "transfer-encoding",
+              )
+              .map(([key, value]) => ({ [key]: value })),
+          ),
+          host: target.hostname,
+        },
+      };
+      const outboundHttp1Response: IncomingMessage =
+        !error &&
+        !http2IsSupported &&
+        target.protocol !== "file:" &&
+        (await new Promise(resolve => {
+          const outboundHttp1Request: ClientRequest =
+            target.protocol === "https:"
+              ? httpsRequest(http1RequestOptions, resolve)
+              : httpRequest(http1RequestOptions, resolve);
+
+          outboundHttp1Request.on("error", thrown => {
+            error = Buffer.from(errorPage(thrown, "request", url, targetUrl));
+            resolve(null as IncomingMessage);
+          });
+          inboundRequest.on("data", chunk => outboundHttp1Request.write(chunk));
+          inboundRequest.on("end", () => outboundHttp1Request.end());
+        }));
+      // intriguingly, error is reset to "false" at this point, even if it was null
+      if (error) {
+        send(502, inboundResponse, error);
+        return;
+      } else error = null;
+
+      // phase : request body
+      if (
+        config.ssl && // http/2
+        (inboundRequest as Http2ServerRequest).stream &&
+        (inboundRequest as Http2ServerRequest).stream.readableLength &&
+        outboundExchange
+      ) {
+        (inboundRequest as Http2ServerRequest).stream.on("data", chunk =>
+          outboundExchange.write(chunk),
+        );
+        (inboundRequest as Http2ServerRequest).stream.on("end", () =>
+          outboundExchange.end(),
+        );
+      }
+
+      if (
+        !config.ssl && // http1.1
+        (inboundRequest as IncomingMessage).readableLength &&
+        outboundExchange
+      ) {
+        (inboundRequest as IncomingMessage).on("data", chunk =>
+          outboundExchange.write(chunk),
+        );
+        (inboundRequest as IncomingMessage).on("end", () =>
+          outboundExchange.end(),
+        );
+      }
+
+      // phase : response headers
+      const { outboundResponseHeaders } = await new Promise<{
+        outboundResponseHeaders: IncomingHttpHeaders & IncomingHttpStatusHeader;
+      }>(resolve =>
+        outboundExchange
+          ? outboundExchange.on("response", headers => {
+              resolve({
+                outboundResponseHeaders: headers,
+              });
+            })
+          : !outboundExchange && outboundHttp1Response
+          ? resolve({
+              outboundResponseHeaders: outboundHttp1Response.headers,
+            })
+          : resolve({
+              outboundResponseHeaders: {},
+            }),
+      );
+
+      const newUrl = !outboundResponseHeaders["location"]
+        ? null
+        : new URL(
+            outboundResponseHeaders["location"].startsWith("/")
+              ? `${target.href}${outboundResponseHeaders["location"].replace(
+                  /^\/+/,
+                  ``,
+                )}`
+              : outboundResponseHeaders["location"],
+          );
+      const newPath = !newUrl
+        ? null
+        : newUrl.href.substring(newUrl.origin.length);
+      const newTarget = url.origin;
+      const newTargetUrl = !newUrl ? null : `${newTarget}${newPath}`;
+
+      // phase : response body
+      const payloadSource = outboundExchange || outboundHttp1Response;
+      const payload: Buffer =
+        error ??
+        (await new Promise(resolve => {
+          let partialBody = Buffer.alloc(0);
+          if (!payloadSource) {
+            resolve(partialBody);
+            return;
+          }
+          (payloadSource as ClientHttp2Stream | Duplex).on(
+            "data",
+            (chunk: Buffer | string) =>
+              (partialBody = Buffer.concat([
+                partialBody,
+                typeof chunk === "string"
+                  ? Buffer.from(chunk as string)
+                  : (chunk as Buffer),
+              ])),
+          );
+          (payloadSource as any).on("end", () => {
+            resolve(partialBody);
+          });
+        }).then((payloadBuffer: Buffer) => {
+          if (!config.replaceResponseBodyUrls) return payloadBuffer;
+          if (!payloadBuffer.length) return payloadBuffer;
+
+          return (outboundResponseHeaders["content-encoding"] || "")
+            .split(",")
+            .reduce(
+              async (buffer: Promise<Buffer>, formatNotTrimed: string) => {
+                const format = formatNotTrimed.trim().toLowerCase();
+                const method =
+                  format === "gzip" || format === "x-gzip"
+                    ? gunzip
+                    : format === "deflate"
+                    ? inflate
+                    : format === "br"
+                    ? brotliDecompress
+                    : format === "identity" || format === ""
+                    ? (
+                        input: Buffer,
+                        callback: (err?: Error, data?: Buffer) => void,
+                      ) => {
+                        callback(null, input);
+                      }
+                    : null;
+                if (method === null) {
+                  send(
+                    502,
+                    inboundResponse,
+                    Buffer.from(
+                      errorPage(
+                        new Error(
+                          `${format} compression not supported by the proxy`,
+                        ),
+                        "stream",
+                        url,
+                        targetUrl,
+                      ),
+                    ),
+                  );
+                  return;
+                }
+
+                const openedBuffer = await buffer;
+                return await new Promise<Buffer>(resolve =>
+                  method(openedBuffer, (err_1, data_1) => {
+                    if (err_1) {
+                      send(
+                        502,
+                        inboundResponse,
+                        Buffer.from(errorPage(err_1, "stream", url, targetUrl)),
+                      );
+                      resolve(Buffer.from(""));
+                      return;
+                    }
+                    resolve(data_1);
+                  }),
+                );
+              },
+              Promise.resolve(payloadBuffer),
+            )
+            .then((uncompressedBuffer: Buffer) => {
+              const fileTooBig = uncompressedBuffer.length > 1e7;
+              const fileHasSpecialChars = () =>
+                /[^\x00-\x7F]/.test(uncompressedBuffer.toString());
+              const contentTypeCanBeProcessed = [
+                "text/html",
+                "application/javascript",
+                "application/json",
+              ].some(allowedContentType =>
+                (outboundResponseHeaders["content-type"] ?? "").includes(
+                  allowedContentType,
                 ),
               );
-            },
-          );
-
-        const http1RequestOptions: RequestOptions = {
-          hostname: target.hostname,
-          path: fullPath,
-          port: target.port,
-          protocol: target.protocol,
-          rejectUnauthorized: false,
-          method: inboundRequest.method,
-          headers: {
-            ...Object.assign(
-              {},
-              ...Object.entries(outboundHeaders)
-                .filter(
-                  ([h]) =>
-                    !h.startsWith(":") &&
-                    h.toLowerCase() !== "transfer-encoding",
-                )
-                .map(([key, value]) => ({ [key]: value })),
-            ),
-            host: target.hostname,
-          },
-        };
-        const outboundHttp1Response: IncomingMessage =
-          !error &&
-          !http2IsSupported &&
-          target.protocol !== "file:" &&
-          (await new Promise(resolve => {
-            const outboundHttp1Request: ClientRequest =
-              target.protocol === "https:"
-                ? httpsRequest(http1RequestOptions, resolve)
-                : httpRequest(http1RequestOptions, resolve);
-
-            outboundHttp1Request.on("error", thrown => {
-              error = Buffer.from(errorPage(thrown, "request", url, targetUrl));
-              resolve(null as IncomingMessage);
-            });
-            inboundRequest.on("data", chunk =>
-              outboundHttp1Request.write(chunk),
-            );
-            inboundRequest.on("end", () => outboundHttp1Request.end());
-          }));
-        // intriguingly, error is reset to "false" at this point, even if it was null
-        if (error) {
-          send(502, inboundResponse, error);
-          return;
-        } else error = null;
-
-        // phase : request body
-        if (
-          config.ssl && // http/2
-          (inboundRequest as Http2ServerRequest).stream &&
-          (inboundRequest as Http2ServerRequest).stream.readableLength &&
-          outboundExchange
-        ) {
-          (inboundRequest as Http2ServerRequest).stream.on("data", chunk =>
-            outboundExchange.write(chunk),
-          );
-          (inboundRequest as Http2ServerRequest).stream.on("end", () =>
-            outboundExchange.end(),
-          );
-        }
-
-        if (
-          !config.ssl && // http1.1
-          (inboundRequest as IncomingMessage).readableLength &&
-          outboundExchange
-        ) {
-          (inboundRequest as IncomingMessage).on("data", chunk =>
-            outboundExchange.write(chunk),
-          );
-          (inboundRequest as IncomingMessage).on("end", () =>
-            outboundExchange.end(),
-          );
-        }
-
-        // phase : response headers
-        const { outboundResponseHeaders } = await new Promise(resolve =>
-          outboundExchange
-            ? outboundExchange.on("response", headers => {
-                resolve({
-                  outboundResponseHeaders: headers,
-                });
-              })
-            : !outboundExchange && outboundHttp1Response
-            ? resolve({
-                outboundResponseHeaders: outboundHttp1Response.headers,
-              })
-            : resolve({
-                outboundResponseHeaders: {},
-              }),
-        );
-
-        const newUrl = !outboundResponseHeaders["location"]
-          ? null
-          : new URL(
-              outboundResponseHeaders["location"].startsWith("/")
-                ? `${target.href}${outboundResponseHeaders["location"].replace(
-                    /^\/+/,
-                    ``,
-                  )}`
-                : outboundResponseHeaders["location"],
-            );
-        const newPath = !newUrl
-          ? null
-          : newUrl.href.substring(newUrl.origin.length);
-        const newTarget = url.origin;
-        const newTargetUrl = !newUrl ? null : `${newTarget}${newPath}`;
-
-        // phase : response body
-        const payloadSource = outboundExchange || outboundHttp1Response;
-        const payload =
-          error ??
-          (await new Promise(resolve => {
-            let partialBody = Buffer.alloc(0);
-            if (!payloadSource) {
-              resolve(partialBody);
-              return;
-            }
-            (payloadSource as ClientHttp2Stream | Duplex).on(
-              "data",
-              (chunk: Buffer | string) =>
-                (partialBody = Buffer.concat([
-                  partialBody,
-                  typeof chunk === "string"
-                    ? Buffer.from(chunk as string)
-                    : (chunk as Buffer),
-                ])),
-            );
-            (payloadSource as any).on("end", () => {
-              resolve(partialBody);
-            });
-          }).then((payloadBuffer: Buffer) => {
-            if (!config.replaceResponseBodyUrls) return payloadBuffer;
-            if (!payloadBuffer.length) return payloadBuffer;
-
-            return (outboundResponseHeaders["content-encoding"] || "")
-              .split(",")
-              .reduce(
-                async (buffer: Promise<Buffer>, formatNotTrimed: string) => {
+              const willReplace =
+                !fileTooBig &&
+                (contentTypeCanBeProcessed || !fileHasSpecialChars());
+              return !willReplace
+                ? uncompressedBuffer
+                : !config.replaceResponseBodyUrls
+                ? uncompressedBuffer.toString()
+                : Object.entries(config.mapping)
+                    .reduce(
+                      (inProgress, [path, mapping]) =>
+                        path !== "" &&
+                        !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/)
+                          ? inProgress
+                          : inProgress.replace(
+                              new RegExp(
+                                mapping
+                                  .replace(/^file:\/\//, "")
+                                  .replace(/[*+?^${}()|[\]\\]/g, "")
+                                  .replace(/^https/, "https?") + "/*",
+                                "ig",
+                              ),
+                              `https://${proxyHostnameAndPort}${path.replace(
+                                /\/+$/,
+                                "",
+                              )}/`,
+                            ),
+                      uncompressedBuffer.toString(),
+                    )
+                    .split(`${proxyHostnameAndPort}/:`)
+                    .join(`${proxyHostnameAndPort}:`)
+                    .replace(
+                      /\?protocol=wss?%3A&hostname=[^&]+&port=[0-9]+&pathname=/g,
+                      `?protocol=ws${
+                        config.ssl ? "s" : ""
+                      }%3A&hostname=${proxyHostname}&port=${
+                        config.port
+                      }&pathname=${encodeURIComponent(
+                        key.replace(/\/+$/, ""),
+                      )}`,
+                    );
+            })
+            .then((updatedBody: Buffer | string) =>
+              (outboundResponseHeaders["content-encoding"] || "")
+                .split(",")
+                .reduce((buffer: Promise<Buffer>, formatNotTrimed: string) => {
                   const format = formatNotTrimed.trim().toLowerCase();
                   const method =
                     format === "gzip" || format === "x-gzip"
-                      ? gunzip
+                      ? gzip
                       : format === "deflate"
-                      ? inflate
+                      ? deflate
                       : format === "br"
-                      ? brotliDecompress
+                      ? brotliCompress
                       : format === "identity" || format === ""
                       ? (
                           input: Buffer,
@@ -819,207 +928,89 @@ const start = () => {
                           callback(null, input);
                         }
                       : null;
-                  if (method === null) {
-                    send(
-                      502,
-                      inboundResponse,
-                      Buffer.from(
-                        errorPage(
-                          new Error(
-                            `${format} compression not supported by the proxy`,
-                          ),
-                          "stream",
-                          url,
-                          targetUrl,
-                        ),
-                      ),
+                  if (method === null)
+                    throw new Error(
+                      `${format} compression not supported by the proxy`,
                     );
-                    return;
-                  }
 
-                  const openedBuffer = await buffer;
-                  return await new Promise(resolve =>
-                    method(openedBuffer, (err_1, data_1) => {
-                      if (err_1) {
-                        send(
-                          502,
-                          inboundResponse,
-                          Buffer.from(
-                            errorPage(err_1, "stream", url, targetUrl),
-                          ),
-                        );
-                        resolve("");
-                        return;
-                      }
-                      resolve(data_1);
-                    }),
+                  return buffer.then(
+                    data =>
+                      new Promise<Buffer>(resolve =>
+                        method(data, (err, data) => {
+                          if (err) throw err;
+                          resolve(data);
+                        }),
+                      ),
                   );
-                },
-                Promise.resolve(payloadBuffer),
+                }, Promise.resolve(Buffer.from(updatedBody))),
+            );
+        }));
+
+      // phase : inbound response
+      const responseHeaders = {
+        ...Object.entries({
+          ...outboundResponseHeaders,
+          ...(config.replaceResponseBodyUrls
+            ? { ["content-length"]: `${payload.byteLength}` }
+            : {}),
+        })
+          .filter(
+            ([h]) =>
+              !h.startsWith(":") &&
+              h.toLowerCase() !== "transfer-encoding" &&
+              h.toLowerCase() !== "connection",
+          )
+          .reduce((acc: any, [key, value]: [string, string | string[]]) => {
+            const allSubdomains = targetHost
+              .split("")
+              .map(
+                (_, i) =>
+                  targetHost.substring(i).startsWith(".") &&
+                  targetHost.substring(i),
               )
-              .then((uncompressedBuffer: Buffer) => {
-                const fileTooBig = uncompressedBuffer.length > 1e7;
-                const fileHasSpecialChars = () =>
-                  /[^\x00-\x7F]/.test(uncompressedBuffer.toString());
-                const contentTypeCanBeProcessed = [
-                  "text/html",
-                  "application/javascript",
-                  "application/json",
-                ].some(allowedContentType =>
-                  (outboundResponseHeaders["content-type"] ?? "").includes(
-                    allowedContentType,
-                  ),
-                );
-                const willReplace =
-                  !fileTooBig &&
-                  (contentTypeCanBeProcessed || !fileHasSpecialChars());
-                return !willReplace
-                  ? uncompressedBuffer
-                  : !config.replaceResponseBodyUrls
-                  ? uncompressedBuffer.toString()
-                  : Object.entries(config.mapping)
-                      .reduce(
-                        (inProgress, [path, mapping]) =>
-                          path !== "" &&
-                          !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/)
-                            ? inProgress
-                            : inProgress.replace(
-                                new RegExp(
-                                  mapping
-                                    .replace(/^file:\/\//, "")
-                                    .replace(/[*+?^${}()|[\]\\]/g, "")
-                                    .replace(/^https/, "https?") + "/*",
-                                  "ig",
-                                ),
-                                `https://${proxyHostnameAndPort}${path.replace(
-                                  /\/+$/,
-                                  "",
-                                )}/`,
-                              ),
-                        uncompressedBuffer.toString(),
-                      )
-                      .split(`${proxyHostnameAndPort}/:`)
-                      .join(`${proxyHostnameAndPort}:`)
-                      .replace(
-                        /\?protocol=wss?%3A&hostname=[^&]+&port=[0-9]+&pathname=/g,
-                        `?protocol=ws${
-                          config.ssl ? "s" : ""
-                        }%3A&hostname=${proxyHostname}&port=${
-                          config.port
-                        }&pathname=${encodeURIComponent(
-                          key.replace(/\/+$/, ""),
-                        )}`,
-                      );
-              })
-              .then((updatedBody: Buffer | string) =>
-                (outboundResponseHeaders["content-encoding"] || "")
-                  .split(",")
-                  .reduce(
-                    (buffer: Promise<Buffer>, formatNotTrimed: string) => {
-                      const format = formatNotTrimed.trim().toLowerCase();
-                      const method =
-                        format === "gzip" || format === "x-gzip"
-                          ? gzip
-                          : format === "deflate"
-                          ? deflate
-                          : format === "br"
-                          ? brotliCompress
-                          : format === "identity" || format === ""
-                          ? (
-                              input: Buffer,
-                              callback: (err?: Error, data?: Buffer) => void,
-                            ) => {
-                              callback(null, input);
-                            }
-                          : null;
-                      if (method === null)
-                        throw new Error(
-                          `${format} compression not supported by the proxy`,
-                        );
+              .filter(subdomain => subdomain) as string[];
+            const transformedValue = [targetHost].concat(allSubdomains).reduce(
+              (acc1, subDomain) =>
+                (!Array.isArray(acc1) ? [acc1] : (acc1 as string[])).map(
+                  oneElement => {
+                    return typeof oneElement === "string"
+                      ? oneElement.replace(
+                          `Domain=${subDomain}`,
+                          `Domain=${url.hostname}`,
+                        )
+                      : oneElement;
+                  },
+                ),
+              value,
+            );
 
-                      return buffer.then(
-                        data =>
-                          new Promise(resolve =>
-                            method(data, (err, data) => {
-                              if (err) throw err;
-                              resolve(data);
-                            }),
-                          ),
-                      );
-                    },
-                    Promise.resolve(Buffer.from(updatedBody)),
-                  ),
-              );
-          }));
-
-        // phase : inbound response
-        const responseHeaders = {
-          ...Object.entries({
-            ...outboundResponseHeaders,
-            ...(config.replaceResponseBodyUrls
-              ? { ["content-length"]: `${payload.byteLength}` }
-              : {}),
-          })
-            .filter(
-              ([h]) =>
-                !h.startsWith(":") &&
-                h.toLowerCase() !== "transfer-encoding" &&
-                h.toLowerCase() !== "connection",
-            )
-            .reduce((acc: any, [key, value]: [string, string | string[]]) => {
-              const allSubdomains = targetHost
-                .split("")
-                .map(
-                  (_, i) =>
-                    targetHost.substring(i).startsWith(".") &&
-                    targetHost.substring(i),
-                )
-                .filter(subdomain => subdomain) as string[];
-              const transformedValue = [targetHost]
-                .concat(allSubdomains)
-                .reduce(
-                  (acc1, subDomain) =>
-                    (!Array.isArray(acc1) ? [acc1] : (acc1 as string[])).map(
-                      oneElement => {
-                        return typeof oneElement === "string"
-                          ? oneElement.replace(
-                              `Domain=${subDomain}`,
-                              `Domain=${url.hostname}`,
-                            )
-                          : oneElement;
-                      },
-                    ),
-                  value,
-                );
-
-              acc[key] = (acc[key] || []).concat(transformedValue);
-              return acc;
-            }, {}),
-          ...(newTargetUrl ? { location: [newTargetUrl] } : {}),
-        };
-        try {
-          Object.entries(responseHeaders).forEach(
-            ([headerName, headerValue]) =>
-              headerValue &&
-              inboundResponse.setHeader(headerName, headerValue as string),
-          );
-        } catch (e) {
-          // ERR_HTTP2_HEADERS_SENT
-        }
-        inboundResponse.writeHead(
-          outboundResponseHeaders[":status"] ||
-            outboundHttp1Response.statusCode ||
-            200,
-          config.ssl
-            ? undefined // statusMessage is discarded in http/2
-            : outboundHttp1Response.statusMessage || "Status read from http/2",
-          responseHeaders,
+            acc[key] = (acc[key] || []).concat(transformedValue);
+            return acc;
+          }, {}),
+        ...(newTargetUrl ? { location: [newTargetUrl] } : {}),
+      };
+      try {
+        Object.entries(responseHeaders).forEach(
+          ([headerName, headerValue]) =>
+            headerValue &&
+            inboundResponse.setHeader(headerName, headerValue as string),
         );
-        if (payload) inboundResponse.end(payload);
-        else inboundResponse.end();
-      },
-    ) as Server
-  )
+      } catch (e) {
+        // ERR_HTTP2_HEADERS_SENT
+      }
+      inboundResponse.writeHead(
+        outboundResponseHeaders[":status"] ||
+          outboundHttp1Response.statusCode ||
+          200,
+        config.ssl
+          ? undefined // statusMessage is discarded in http/2
+          : outboundHttp1Response.statusMessage || "Status read from http/2",
+        responseHeaders,
+      );
+      if (payload) inboundResponse.end(payload);
+      else inboundResponse.end();
+    },
+  ) as Server)
     .addListener("error", (err: Error) => {
       if ((err as ErrorWithErrno).code === "EACCES")
         log(`permission denied for this port`, LogLevel.ERROR, EMOJIS.NO);
