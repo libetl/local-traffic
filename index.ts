@@ -958,7 +958,8 @@ const start = () => {
             ([h]) =>
               !h.startsWith(":") &&
               h.toLowerCase() !== "transfer-encoding" &&
-              h.toLowerCase() !== "connection",
+              h.toLowerCase() !== "connection" &&
+              h.toLowerCase() !== "keep-alive",
           )
           .reduce((acc: any, [key, value]: [string, string | string[]]) => {
             const allSubdomains = targetHost
