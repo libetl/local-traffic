@@ -617,9 +617,9 @@ const start = () => {
 
       const outboundHeaders: OutgoingHttpHeaders = {
         ...[...Object.entries(inboundRequest.headers)]
-          // host and connection are forbidden in http/2
+          // host, connection and keep-alive are forbidden in http/2
           .filter(
-            ([key]) => !["host", "connection"].includes(key.toLowerCase()),
+            ([key]) => !["host", "connection", "keep-alive"].includes(key.toLowerCase()),
           )
           .reduce((acc: any, [key, value]) => {
             acc[key] =
