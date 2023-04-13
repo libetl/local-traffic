@@ -32,6 +32,7 @@ import {
   brotliDecompress,
 } from "zlib";
 import { resolve, normalize } from "path";
+import { createHash } from "crypto";
 import type { Duplex } from "stream";
 
 type ErrorWithErrno = NodeJS.ErrnoException;
@@ -90,6 +91,7 @@ const defaultConfig: LocalConfiguration = {
 
 let config: LocalConfiguration;
 let server: Server;
+let logsListeners: Duplex[] = [];
 const getCurrentTime = (simpleLogs?: boolean) => {
   const date = new Date();
   return `${simpleLogs ? "" : "\u001b[36m"}${`${date.getHours()}`.padStart(
@@ -102,25 +104,27 @@ const getCurrentTime = (simpleLogs?: boolean) => {
   }${`${date.getSeconds()}`.padStart(2, "0")}${simpleLogs ? "" : "\u001b[0m"}`;
 };
 const log = (text: string, level?: LogLevel, emoji?: string) => {
+  const simpleLog =
+    config?.simpleLogs || logsListeners.length
+      ? text
+          .replace(/⎸/g, "|")
+          .replace(/⎹/g, "|")
+          .replace(/\u001b\[[^m]*m/g, "")
+          .replace(new RegExp(EMOJIS.INBOUND, "g"), "inbound:")
+          .replace(new RegExp(EMOJIS.PORT, "g"), "port:")
+          .replace(new RegExp(EMOJIS.OUTBOUND, "g"), "outbound:")
+          .replace(new RegExp(EMOJIS.RULES, "g"), "rules:")
+          .replace(new RegExp(EMOJIS.NO, "g"), "")
+          .replace(new RegExp(EMOJIS.BODY_REPLACEMENT, "g"), "body replacement")
+          .replace(new RegExp(EMOJIS.WEBSOCKET, "g"), "websocket")
+          .replace(new RegExp(EMOJIS.SHIELD, "g"), "web-security")
+          .replace(/\|+/g, "|")
+      : text;
+
   console.log(
     `${getCurrentTime(config?.simpleLogs)} ${
       config?.simpleLogs
-        ? text
-            .replace(/⎸/g, "|")
-            .replace(/⎹/g, "|")
-            .replace(/\u001b\[[^m]*m/g, "")
-            .replace(new RegExp(EMOJIS.INBOUND, "g"), "inbound:")
-            .replace(new RegExp(EMOJIS.PORT, "g"), "port:")
-            .replace(new RegExp(EMOJIS.OUTBOUND, "g"), "outbound:")
-            .replace(new RegExp(EMOJIS.RULES, "g"), "rules:")
-            .replace(new RegExp(EMOJIS.NO, "g"), "")
-            .replace(
-              new RegExp(EMOJIS.BODY_REPLACEMENT, "g"),
-              "body replacement",
-            )
-            .replace(new RegExp(EMOJIS.WEBSOCKET, "g"), "websocket")
-            .replace(new RegExp(EMOJIS.SHIELD, "g"), "web-security")
-            .replace(/\|+/g, "|")
+        ? simpleLog
         : level
         ? `\u001b[48;5;${level}m⎸    ${
             !process.stdout.isTTY ? "" : emoji || ""
@@ -128,6 +132,23 @@ const log = (text: string, level?: LogLevel, emoji?: string) => {
         : text
     }`,
   );
+  notifyLogsListener({ logEvent: simpleLog, level });
+};
+
+const notifyLogsListener = (data: Record<string, unknown>) => {
+  if (!logsListeners.length) return;
+  const text = JSON.stringify(data);
+  const mask = Array(4)
+    .fill(0)
+    .map(() => Math.floor(Math.random() * (2 << 7)));
+  const maskedTextBits = [...text].map((c, i) => c.charCodeAt(0) ^ mask[i & 3]);
+  const header = Buffer.from(
+    Uint8Array.from([(1 << 7) + 1, (1 << 7) + text.length]).buffer,
+  );
+  const maskingKey = Buffer.from(Int8Array.from(mask).buffer);
+  const payload = Buffer.from(Int8Array.from(maskedTextBits).buffer);
+  const value = Buffer.concat([header, maskingKey, payload]);
+  logsListeners.forEach(logsListener => logsListener.write(value));
 };
 
 const quickStatus = (thisConfig: LocalConfiguration) => {
@@ -416,6 +437,113 @@ const fileRequest = (url: URL): ClientHttp2Session => {
   } as unknown as ClientHttp2Session;
 };
 
+const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
+  ({
+    error: null as Error,
+    data: null as string | Buffer,
+    run: function () {
+      return new Promise(resolve => {
+        this.data = `${header(
+          0x1f4fa,
+          "logs",
+          "",
+        )}<p>Logs page</p><table class="table table-striped">
+    <thead>
+      <tr>
+        <th scope="col">Date</th>
+        <th scope="col">Level</th>
+        <th scope="col">Message</th>
+      </tr>
+    </thead>
+    <tbody id="logs">
+    </tbody>
+    </table>
+    <script type="text/javascript">
+    function start() {
+      const socket = new WebSocket("wss://${proxyHostnameAndPort}/local-traffic-logs");
+      socket.onmessage = function(event) {
+        let data = event.data
+        try { data = JSON.parse(event.data) } catch(e) { }
+        const eventText = typeof data === 'object' ? '<pre>' + JSON.stringify(data, null, 3)
+        .replace(/&/g, '&amp;').replace(/\\\\"/g, '&quot;')
+        .replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/^( *)("[\\w]+": )?("[^"]*"|[\\w.+-]*)?([,[{])?$/mg, (match, pIndent, pKey, pVal, pEnd) => {
+          const key = '<span class="json-key">';
+          const val = '<span class="json-value">';
+          const str = '<span class="json-string">';
+          let r = pIndent || '';
+          if (pKey)
+             r = r + key + pKey.replace(/[": ]/g, '') + '</span>: ';
+          if (pVal)
+             r = r + (pVal[0] == '"' ? str : val) + pVal + '</span>';
+          return r + (pEnd || '');
+          }) + '</pre>'
+        : data
+        document.getElementById("logs")
+          .insertAdjacentHTML('beforeend', '<tr><td scope="col">' + new Date().toUTCString() + '</td>' +
+                '<td scope="col">' + (data.level || '93')+ '</td>' + 
+                '<td scope="col">' + eventText + '</td></tr>')
+      };
+    
+      socket.onerror = function(error) {
+        console.log(\`[error] \${error}\`);
+        setTimeout(start, 5000);
+      };
+
+    };
+    start();
+    </script>
+    <style type="text/css">
+    pre {
+      background-color: ghostwhite;
+      border: 1px solid silver;
+      padding: 10px 20px;
+      margin: 20px; 
+      }
+   .json-key {
+      color: brown;
+      }
+   .json-value {
+      color: navy;
+      }
+   .json-string {
+      color: olive;
+      }
+    </style>
+    </body></html>`;
+        resolve(void 0);
+      });
+    },
+    events: {} as { [name: string]: (...any: any) => any },
+    on: function (name: string, action: (...any: any) => any) {
+      this.events[name] = action;
+      this.run().then(() => {
+        if (name === "response")
+          this.events["response"](
+            {
+              Server: "local",
+              "Content-Type": "text/html",
+            },
+            0,
+          );
+        if (name === "data" && this.data) {
+          this.events["data"](this.data);
+          this.events["end"]();
+        }
+        if (name === "error" && this.error) {
+          this.events["error"](this.error);
+        }
+      });
+      return this;
+    },
+    end: function () {
+      return this;
+    },
+    request: function () {
+      return this;
+    },
+  } as unknown as ClientHttp2Session);
+
 const header = (
   icon: number,
   category: string,
@@ -588,6 +716,8 @@ const start = () => {
         const outboundRequest: ClientHttp2Session =
           target.protocol === "file:"
             ? fileRequest(targetUrl)
+            : target.protocol === "logs:"
+            ? logsPage(proxyHostnameAndPort)
             : !http2IsSupported
             ? null
             : await Promise.race([
@@ -622,6 +752,11 @@ const start = () => {
                   }, 3000),
                 ),
               ]);
+        notifyLogsListener({
+          protocol: http2IsSupported ? "HTTP/2" : "HTTP1.1",
+          method: inboundRequest.method,
+          path: fullPath,
+        });
         if (!(error instanceof Buffer)) error = null;
 
         const outboundHeaders: OutgoingHttpHeaders = {
@@ -702,7 +837,7 @@ const start = () => {
         const outboundHttp1Response: IncomingMessage =
           !error &&
           !http2IsSupported &&
-          target.protocol !== "file:" &&
+          !["file:", "logs:"].includes(target.protocol) &&
           (await new Promise(resolve => {
             const outboundHttp1Request: ClientRequest =
               target.protocol === "https:"
@@ -896,13 +1031,14 @@ const start = () => {
                   : Object.entries(config.mapping)
                       .reduce(
                         (inProgress, [path, mapping]) =>
-                          path !== "" &&
-                          !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/)
+                          mapping.startsWith("logs:") ||
+                          (path !== "" &&
+                            !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
                             ? inProgress
                             : inProgress.replace(
                                 new RegExp(
                                   mapping
-                                    .replace(/^file:\/\//, "")
+                                    .replace(/^(file|logs):\/\//, "")
                                     .replace(/[*+?^${}()|[\]\\]/g, "")
                                     .replace(/^https/, "https?") + "/*",
                                   "ig",
@@ -1064,7 +1200,39 @@ const start = () => {
         return;
       }
 
-      const { key, target: targetWithForcedPrefix } = determineMapping(request);
+      const {
+        key,
+        target: targetWithForcedPrefix,
+        path,
+      } = determineMapping(request);
+
+      const shasum = createHash("sha1");
+      shasum.update(
+        request.headers["sec-websocket-key"] +
+          "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+      );
+      const accept = shasum.digest("base64");
+
+      if (path === "/local-traffic-logs") {
+        upstreamSocket.allowHalfOpen = true;
+        upstreamSocket.write(
+          "HTTP/1.1 101 Switching Protocols\r\n" +
+            `date: ${new Date().toUTCString()}\r\n` +
+            "connection: upgrade\r\n" +
+            "upgrade: websocket\r\n" +
+            "server: local\r\n" +
+            `sec-websocket-accept: ${accept}\r\n` +
+            "\r\n",
+        );
+        upstreamSocket.on("close", () => {
+          logsListeners = logsListeners.filter(
+            oneLogsListener => upstreamSocket !== oneLogsListener,
+          );
+        });
+        logsListeners.push(upstreamSocket);
+        return;
+      }
+
       const target = new URL(
         `${targetWithForcedPrefix.protocol}//${targetWithForcedPrefix.host}${
           request.url.endsWith("/_next/webpack-hmr")
