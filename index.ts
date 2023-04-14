@@ -103,6 +103,12 @@ const getCurrentTime = (simpleLogs?: boolean) => {
     simpleLogs ? ":" : "\u001b[33m:\u001b[36m"
   }${`${date.getSeconds()}`.padStart(2, "0")}${simpleLogs ? "" : "\u001b[0m"}`;
 };
+const levelToString = (level: LogLevel) =>
+  level === LogLevel.ERROR
+    ? "error"
+    : level === LogLevel.WARNING
+    ? "warning"
+    : "info";
 const log = (text: string, level?: LogLevel, emoji?: string) => {
   const simpleLog =
     config?.simpleLogs || logsListeners.length
@@ -132,7 +138,10 @@ const log = (text: string, level?: LogLevel, emoji?: string) => {
         : text
     }`,
   );
-  notifyLogsListener({ logEvent: simpleLog, level });
+  notifyLogsListener({
+    logEvent: simpleLog,
+    level: levelToString(level),
+  });
 };
 
 const notifyLogsListener = (data: Record<string, unknown>) => {
@@ -142,9 +151,15 @@ const notifyLogsListener = (data: Record<string, unknown>) => {
     .fill(0)
     .map(() => Math.floor(Math.random() * (2 << 7)));
   const maskedTextBits = [...text].map((c, i) => c.charCodeAt(0) ^ mask[i & 3]);
-  const header = Buffer.from(
-    Uint8Array.from([(1 << 7) + 1, (1 << 7) + text.length]).buffer,
-  );
+  const length = text.length;
+  const header =
+    text.length < (2 << 6) - 2
+      ? Buffer.from(Uint8Array.from([(1 << 7) + 1, (1 << 7) + length]).buffer)
+      : Buffer.concat([
+          Buffer.from(Uint8Array.from([(1 << 7) + 1, (2 << 7) - 2]).buffer),
+          Buffer.from(Uint8Array.from([length >> 8]).buffer),
+          Buffer.from(Uint8Array.from([length & ((2 << 7) - 1)]).buffer),
+        ]);
   const maskingKey = Buffer.from(Int8Array.from(mask).buffer);
   const payload = Buffer.from(Int8Array.from(maskedTextBits).buffer);
   const value = Buffer.concat([header, maskingKey, payload]);
@@ -443,11 +458,8 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
     data: null as string | Buffer,
     run: function () {
       return new Promise(resolve => {
-        this.data = `${header(
-          0x1f4fa,
-          "logs",
-          "",
-        )}<p>Logs page</p><table class="table table-striped">
+        this.data = `${header(0x1f4fa, "logs", "")}<p>Logs page</p>
+    <table id="table" class="table table-striped" style="display: block; width: 100%; overflow-y: auto">
     <thead>
       <tr>
         <th scope="col">Date</th>
@@ -460,10 +472,17 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
     </table>
     <script type="text/javascript">
     function start() {
+      document.getElementById('table').style.height =
+        (document.documentElement.clientHeight - 150) + 'px';
       const socket = new WebSocket("wss://${proxyHostnameAndPort}/local-traffic-logs");
       socket.onmessage = function(event) {
         let data = event.data
-        try { data = JSON.parse(event.data) } catch(e) { }
+        let uniqueHash;
+        try {
+          const { uniqueHash: uniqueHash1, ...data1 } = JSON.parse(event.data);
+          data = data1;
+          uniqueHash = uniqueHash1;
+        } catch(e) { }
         const eventText = typeof data === 'object' ? '<pre>' + JSON.stringify(data, null, 3)
         .replace(/&/g, '&amp;').replace(/\\\\"/g, '&quot;')
         .replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -478,20 +497,31 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
              r = r + (pVal[0] == '"' ? str : val) + pVal + '</span>';
           return r + (pEnd || '');
           }) + '</pre>'
-        : data
+        : data;
+        const button = uniqueHash ? '<button data-uniquehash="'+uniqueHash+'" onclick="javasript:replay(event)" ' +
+          'type="button" class="btn btn-primary">Replay</button>' : '';
         document.getElementById("logs")
           .insertAdjacentHTML('beforeend', '<tr><td scope="col">' + new Date().toUTCString() + '</td>' +
-                '<td scope="col">' + (data.level || '93')+ '</td>' + 
-                '<td scope="col">' + eventText + '</td></tr>')
+                '<td scope="col">' + (data.level || 'info')+ '</td>' + 
+                '<td scope="col">' + eventText + button + '</td></tr>')
       };
-    
       socket.onerror = function(error) {
         console.log(\`[error] \${error}\`);
         setTimeout(start, 5000);
       };
-
     };
-    start();
+    function replay(event) {
+      const uniqueHash = event.target.dataset.uniquehash;
+      const { method, url, headers, body } = JSON.parse(atob(uniqueHash));
+      fetch(url, {
+        method,
+        headers,
+        body: !body.data || !body.data.length 
+          ? undefined
+          : new TextDecoder().decode(new Int8Array(body.data))
+      });
+    }
+    window.addEventListener("DOMContentLoaded", start);
     </script>
     <style type="text/css">
     pre {
@@ -752,11 +782,6 @@ const start = () => {
                   }, 3000),
                 ),
               ]);
-        notifyLogsListener({
-          protocol: http2IsSupported ? "HTTP/2" : "HTTP1.1",
-          method: inboundRequest.method,
-          path: fullPath,
-        });
         if (!(error instanceof Buffer)) error = null;
 
         const outboundHeaders: OutgoingHttpHeaders = {
@@ -859,6 +884,7 @@ const start = () => {
           return;
         } else error = null;
 
+        let bufferMirrorForLogs = Buffer.from([]);
         // phase : request body
         if (
           config.ssl && // http/2
@@ -866,9 +892,14 @@ const start = () => {
           (inboundRequest as Http2ServerRequest).stream.readableLength &&
           outboundExchange
         ) {
-          (inboundRequest as Http2ServerRequest).stream.on("data", chunk =>
-            outboundExchange.write(chunk),
-          );
+          (inboundRequest as Http2ServerRequest).stream.on("data", chunk => {
+            outboundExchange.write(chunk);
+            if (logsListeners.length)
+              bufferMirrorForLogs = Buffer.concat([
+                bufferMirrorForLogs,
+                Buffer.from(chunk),
+              ]);
+          });
           (inboundRequest as Http2ServerRequest).stream.on("end", () =>
             outboundExchange.end(),
           );
@@ -879,9 +910,14 @@ const start = () => {
           (inboundRequest as IncomingMessage).readableLength &&
           outboundExchange
         ) {
-          (inboundRequest as IncomingMessage).on("data", chunk =>
-            outboundExchange.write(chunk),
-          );
+          (inboundRequest as IncomingMessage).on("data", chunk => {
+            outboundExchange.write(chunk);
+            if (logsListeners.length)
+              bufferMirrorForLogs = Buffer.concat([
+                bufferMirrorForLogs,
+                Buffer.from(chunk),
+              ]);
+          });
           (inboundRequest as IncomingMessage).on("end", () =>
             outboundExchange.end(),
           );
@@ -906,6 +942,25 @@ const start = () => {
                 outboundResponseHeaders: {},
               }),
         );
+
+        notifyLogsListener({
+          level: "info",
+          protocol: http2IsSupported ? "HTTP/2" : "HTTP1.1",
+          method: inboundRequest.method,
+          path: fullPath,
+          uniqueHash: Buffer.from(
+            JSON.stringify({
+              method: inboundRequest.method,
+              url: inboundRequest.url,
+              headers: Object.fromEntries(
+                Object.entries(inboundRequest.headers).filter(([headerName]) =>
+                  !headerName.startsWith(":"),
+                ),
+              ),
+              body: bufferMirrorForLogs.toJSON(),
+            }),
+          ).toString("base64"),
+        });
 
         const newUrl = !outboundResponseHeaders["location"]
           ? null
