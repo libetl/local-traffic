@@ -1169,10 +1169,10 @@ const start = () => {
             JSON.stringify({
               method: inboundRequest.method,
               url: inboundRequest.url,
-              headers: Object.fromEntries(
-                Object.entries(inboundRequest.headers).filter(
+              headers: Object.assign({},
+                ...Object.entries(inboundRequest.headers).filter(
                   ([headerName]) => !headerName.startsWith(":"),
-                ),
+                ).map(([key, value]) => ({[key]: value})),
               ),
               body: requestBody?.toJSON(),
             }),
