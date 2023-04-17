@@ -33,7 +33,7 @@ import {
 } from "zlib";
 import { resolve, normalize } from "path";
 import { createHash } from "crypto";
-import type { Duplex } from "stream";
+import type { Duplex, Readable } from "stream";
 
 type ErrorWithErrno = NodeJS.ErrnoException;
 
@@ -48,7 +48,8 @@ enum EMOJIS {
   PORT = "☎️ ",
   OUTBOUND = "↗️ ",
   RULES = "🔗",
-  BODY_REPLACEMENT = "✒️ ",
+  REWRITE = "✒️ ",
+  RESTART = "🔄",
   WEBSOCKET = "☄️ ",
   COLORED = "✨",
   SHIELD = "🛡️ ",
@@ -61,10 +62,16 @@ enum EMOJIS {
   ERROR_6 = "☠️ ",
 }
 
+enum REPLACEMENT_DIRECTION {
+  INBOUND = "INBOUND",
+  OUTBOUND = "OUTBOUND",
+}
+
 interface LocalConfiguration {
   mapping?: { [subPath: string]: string };
   ssl?: SecureServerOptions;
   port?: number;
+  replaceRequestBodyUrls?: boolean;
   replaceResponseBodyUrls?: boolean;
   dontUseHttp2Downstream?: boolean;
   simpleLogs?: boolean;
@@ -82,6 +89,7 @@ const filename = resolve(
 const defaultConfig: LocalConfiguration = {
   mapping: {},
   port: 8080,
+  replaceRequestBodyUrls: false,
   replaceResponseBodyUrls: false,
   dontUseHttp2Downstream: false,
   simpleLogs: false,
@@ -121,7 +129,7 @@ const log = (text: string, level?: LogLevel, emoji?: string) => {
           .replace(new RegExp(EMOJIS.OUTBOUND, "g"), "outbound:")
           .replace(new RegExp(EMOJIS.RULES, "g"), "rules:")
           .replace(new RegExp(EMOJIS.NO, "g"), "")
-          .replace(new RegExp(EMOJIS.BODY_REPLACEMENT, "g"), "body replacement")
+          .replace(new RegExp(EMOJIS.REWRITE, "g"), "+rewrite")
           .replace(new RegExp(EMOJIS.WEBSOCKET, "g"), "websocket")
           .replace(new RegExp(EMOJIS.SHIELD, "g"), "web-security")
           .replace(/\|+/g, "|")
@@ -172,17 +180,19 @@ const quickStatus = (thisConfig: LocalConfiguration) => {
       .toString()
       .padStart(5)} \u001b[48;5;53m⎸${EMOJIS.INBOUND} ${
       thisConfig.ssl ? "H/2 " : "H1.1"
-    } \u001b[48;5;54m⎸${EMOJIS.OUTBOUND} ${
+    }${
+      thisConfig.replaceRequestBodyUrls ? EMOJIS.REWRITE : "  "
+    }⎹\u001b[48;5;54m⎸${EMOJIS.OUTBOUND} ${
       thisConfig.dontUseHttp2Downstream ? "H1.1" : "H/2 "
+    }${
+      thisConfig.replaceResponseBodyUrls ? EMOJIS.REWRITE : "  "
     }⎹\u001b[48;5;55m⎸${EMOJIS.RULES}${Object.keys(config.mapping)
       .length.toString()
       .padStart(3)}⎹\u001b[48;5;56m⎸${
-      config.replaceResponseBodyUrls ? EMOJIS.BODY_REPLACEMENT : EMOJIS.NO
-    }⎹\u001b[48;5;57m⎸${
       config.websocket ? EMOJIS.WEBSOCKET : EMOJIS.NO
-    }⎹\u001b[48;5;93m⎸${
+    }⎹\u001b[48;5;57m⎸${
       !config.simpleLogs ? EMOJIS.COLORED : EMOJIS.NO
-    }⎹\u001b[48;5;98m⎸${
+    }⎹\u001b[48;5;93m⎸${
       config.disableWebSecurity ? EMOJIS.NO : EMOJIS.SHIELD
     }⎹\u001b[0m`,
   );
@@ -256,15 +266,24 @@ const onWatch = async () => {
     );
     return;
   }
+  if (config.replaceRequestBodyUrls !== previousConfig.replaceRequestBodyUrls) {
+    log(
+      `request body url ${
+        !config.replaceRequestBodyUrls ? "NO " : ""
+      }rewriting`,
+      LogLevel.INFO,
+      EMOJIS.REWRITE,
+    );
+  }
   if (
     config.replaceResponseBodyUrls !== previousConfig.replaceResponseBodyUrls
   ) {
     log(
       `response body url ${
         !config.replaceResponseBodyUrls ? "NO " : ""
-      }replacement`,
+      }rewriting`,
       LogLevel.INFO,
-      EMOJIS.BODY_REPLACEMENT,
+      EMOJIS.REWRITE,
     );
   }
   if (config.dontUseHttp2Downstream !== previousConfig.dontUseHttp2Downstream) {
@@ -327,6 +346,7 @@ const onWatch = async () => {
     await new Promise(resolve =>
       !server ? resolve(void 0) : server.close(resolve),
     );
+    log(`restarting server`, LogLevel.INFO, EMOJIS.RESTART);
     start();
   } else quickStatus(config);
 };
@@ -474,7 +494,9 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
     function start() {
       document.getElementById('table').style.height =
         (document.documentElement.clientHeight - 150) + 'px';
-      const socket = new WebSocket("wss://${proxyHostnameAndPort}/local-traffic-logs");
+      const socket = new WebSocket("ws${
+        config.ssl ? "s" : ""
+      }://${proxyHostnameAndPort}/local-traffic-logs");
       socket.onmessage = function(event) {
         let data = event.data
         let uniqueHash;
@@ -626,6 +648,138 @@ More information about the request :
   </tbody>
 </table>
 </div></body></html>`;
+
+const replaceBody = async (
+  payloadBuffer: Buffer,
+  headers: Record<string, number | string | string[]>,
+  parameters: {
+    proxyHostnameAndPort: string;
+    proxyHostname: string;
+    key: string;
+    direction: REPLACEMENT_DIRECTION;
+  },
+) =>
+  (headers["content-encoding"]?.toString() ?? "")
+    .split(",")
+    .reduce(async (buffer: Promise<Buffer>, formatNotTrimed: string) => {
+      const format = formatNotTrimed.trim().toLowerCase();
+      const method =
+        format === "gzip" || format === "x-gzip"
+          ? gunzip
+          : format === "deflate"
+          ? inflate
+          : format === "br"
+          ? brotliDecompress
+          : format === "identity" || format === ""
+          ? (input: Buffer, callback: (err?: Error, data?: Buffer) => void) => {
+              callback(null, input);
+            }
+          : null;
+      if (method === null) {
+        throw new Error(`${format} compression not supported by the proxy`);
+      }
+
+      const openedBuffer = await buffer;
+      return await new Promise<Buffer>((resolve, reject) =>
+        method(openedBuffer, (err_1, data_1) => {
+          if (err_1) {
+            reject(err_1);
+          }
+          resolve(data_1);
+        }),
+      );
+    }, Promise.resolve(payloadBuffer))
+    .then((uncompressedBuffer: Buffer) => {
+      const fileTooBig = uncompressedBuffer.length > 1e7;
+      const fileHasSpecialChars = () =>
+        /[^\x00-\x7F]/.test(uncompressedBuffer.toString());
+      const contentTypeCanBeProcessed = [
+        "text/html",
+        "application/javascript",
+        "application/json",
+      ].some(allowedContentType =>
+        (headers["content-type"] ?? "").toString().includes(allowedContentType),
+      );
+      const willReplace =
+        !fileTooBig && (contentTypeCanBeProcessed || !fileHasSpecialChars());
+
+      return !willReplace
+        ? uncompressedBuffer
+        : !config.replaceResponseBodyUrls
+        ? uncompressedBuffer.toString()
+        : Object.entries(config.mapping)
+            .reduce(
+              (inProgress, [path, mapping]) =>
+                mapping.startsWith("logs:") ||
+                (path !== "" && !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
+                  ? inProgress
+                  : parameters.direction === REPLACEMENT_DIRECTION.INBOUND
+                  ? inProgress.replace(
+                      new RegExp(
+                        mapping
+                          .replace(/^(file|logs):\/\//, "")
+                          .replace(/[*+?^${}()|[\]\\]/g, "")
+                          .replace(/^https/, "https?") + "/*",
+                        "ig",
+                      ),
+                      `http${config.ssl ? "s" : ""}://${
+                        parameters.proxyHostnameAndPort
+                      }${path.replace(/\/+$/, "")}/`,
+                    )
+                  : inProgress
+                      .split(
+                        `http${config.ssl ? "s" : ""}://${
+                          parameters.proxyHostnameAndPort
+                        }${path.replace(/\/+$/, "")}`,
+                      )
+                      .join(mapping),
+              uncompressedBuffer.toString(),
+            )
+            .split(`${parameters.proxyHostnameAndPort}/:`)
+            .join(`${parameters.proxyHostnameAndPort}:`)
+            .replace(
+              /\?protocol=wss?%3A&hostname=[^&]+&port=[0-9]+&pathname=/g,
+              `?protocol=ws${config.ssl ? "s" : ""}%3A&hostname=${
+                parameters.proxyHostname
+              }&port=${config.port}&pathname=${encodeURIComponent(
+                parameters.key.replace(/\/+$/, ""),
+              )}`,
+            );
+    })
+    .then((updatedBody: Buffer | string) =>
+      (headers["content-encoding"]?.toString() ?? "")
+        .split(",")
+        .reduce((buffer: Promise<Buffer>, formatNotTrimed: string) => {
+          const format = formatNotTrimed.trim().toLowerCase();
+          const method =
+            format === "gzip" || format === "x-gzip"
+              ? gzip
+              : format === "deflate"
+              ? deflate
+              : format === "br"
+              ? brotliCompress
+              : format === "identity" || format === ""
+              ? (
+                  input: Buffer,
+                  callback: (err?: Error, data?: Buffer) => void,
+                ) => {
+                  callback(null, input);
+                }
+              : null;
+          if (method === null)
+            throw new Error(`${format} compression not supported by the proxy`);
+
+          return buffer.then(
+            data =>
+              new Promise<Buffer>(resolve =>
+                method(data, (err, data) => {
+                  if (err) throw err;
+                  resolve(data);
+                }),
+              ),
+          );
+        }, Promise.resolve(Buffer.from(updatedBody))),
+    );
 
 const send = (
   code: number,
@@ -784,6 +938,40 @@ const start = () => {
               ]);
         if (!(error instanceof Buffer)) error = null;
 
+        const http1WithRequestBody = (inboundRequest as IncomingMessage)
+          ?.readableLength;
+        const http2WithRequestBody = (inboundRequest as Http2ServerRequest)
+          ?.stream?.readableLength;
+
+        let requestBody: Buffer | null = null;
+        if (config.replaceRequestBodyUrls || logsListeners.length) {
+          // this is optional,
+          // I don't want to buffer request bodies none of the options are activated
+          const requestBodyReadable: Readable =
+            (inboundRequest as Http2ServerRequest)?.stream ??
+            (inboundRequest as IncomingMessage);
+
+          let requestBodyBuffer: Buffer = Buffer.from([]);
+          await new Promise(resolve => {
+            if (http2WithRequestBody === 0) resolve(void 0);
+            requestBodyReadable.on("data", chunk => {
+              requestBodyBuffer = Buffer.concat([requestBodyBuffer, chunk]);
+            });
+            requestBodyReadable.on("end", resolve);
+            requestBodyReadable.on("error", resolve);
+          });
+          requestBody = await replaceBody(
+            requestBodyBuffer,
+            inboundRequest.headers,
+            {
+              proxyHostnameAndPort,
+              proxyHostname,
+              key,
+              direction: REPLACEMENT_DIRECTION.OUTBOUND,
+            },
+          );
+        }
+
         const outboundHeaders: OutgoingHttpHeaders = {
           ...[...Object.entries(inboundRequest.headers)]
             // host, connection and keep-alive are forbidden in http/2
@@ -803,6 +991,8 @@ const start = () => {
             }, {}),
           origin: target.href,
           referer: targetUrl.toString(),
+          "content-length":
+            requestBody?.length ?? inboundRequest.headers["content-length"],
           ":authority": targetHost,
           ":method": inboundRequest.method,
           ":path": fullPath,
@@ -814,11 +1004,8 @@ const start = () => {
           !error &&
           outboundRequest.request(outboundHeaders, {
             endStream: config.ssl
-              ? !(
-                  (inboundRequest as Http2ServerRequest)?.stream
-                    ?.readableLength ?? true
-                )
-              : !(inboundRequest as IncomingMessage).readableLength,
+              ? !(http2WithRequestBody ?? true)
+              : !http1WithRequestBody,
           });
 
         outboundExchange?.on("error", (thrown: Error) => {
@@ -873,10 +1060,17 @@ const start = () => {
               error = Buffer.from(errorPage(thrown, "request", url, targetUrl));
               resolve(null as IncomingMessage);
             });
-            inboundRequest.on("data", chunk =>
-              outboundHttp1Request.write(chunk),
-            );
-            inboundRequest.on("end", () => outboundHttp1Request.end());
+            if (config.replaceRequestBodyUrls) {
+              outboundHttp1Request.write(requestBody);
+              outboundHttp1Request.end();
+            }
+
+            if (!config.replaceRequestBodyUrls) {
+              inboundRequest.on("data", chunk =>
+                outboundHttp1Request.write(chunk),
+              );
+              inboundRequest.on("end", () => outboundHttp1Request.end());
+            }
           }));
         // intriguingly, error is reset to "false" at this point, even if it was null
         if (error) {
@@ -884,43 +1078,37 @@ const start = () => {
           return;
         } else error = null;
 
-        let bufferMirrorForLogs = Buffer.from([]);
         // phase : request body
-        if (
-          config.ssl && // http/2
-          (inboundRequest as Http2ServerRequest).stream &&
-          (inboundRequest as Http2ServerRequest).stream.readableLength &&
-          outboundExchange
-        ) {
-          (inboundRequest as Http2ServerRequest).stream.on("data", chunk => {
-            outboundExchange.write(chunk);
-            if (logsListeners.length)
-              bufferMirrorForLogs = Buffer.concat([
-                bufferMirrorForLogs,
-                Buffer.from(chunk),
-              ]);
-          });
-          (inboundRequest as Http2ServerRequest).stream.on("end", () =>
-            outboundExchange.end(),
-          );
+        if (config.ssl && http2WithRequestBody && outboundExchange) {
+          if (config.replaceRequestBodyUrls) {
+            outboundExchange.write(requestBody);
+            outboundExchange.end();
+          }
+
+          if (!config.replaceRequestBodyUrls) {
+            (inboundRequest as Http2ServerRequest).stream.on("data", chunk => {
+              outboundExchange.write(chunk);
+            });
+            (inboundRequest as Http2ServerRequest).stream.on("end", () =>
+              outboundExchange.end(),
+            );
+          }
         }
 
-        if (
-          !config.ssl && // http1.1
-          (inboundRequest as IncomingMessage).readableLength &&
-          outboundExchange
-        ) {
-          (inboundRequest as IncomingMessage).on("data", chunk => {
-            outboundExchange.write(chunk);
-            if (logsListeners.length)
-              bufferMirrorForLogs = Buffer.concat([
-                bufferMirrorForLogs,
-                Buffer.from(chunk),
-              ]);
-          });
-          (inboundRequest as IncomingMessage).on("end", () =>
-            outboundExchange.end(),
-          );
+        if (!config.ssl && http1WithRequestBody && outboundExchange) {
+          if (config.replaceRequestBodyUrls) {
+            outboundExchange.write(requestBody);
+            outboundExchange.end();
+          }
+
+          if (!config.replaceRequestBodyUrls) {
+            (inboundRequest as IncomingMessage).on("data", chunk => {
+              outboundExchange.write(chunk);
+            });
+            (inboundRequest as IncomingMessage).on("end", () =>
+              outboundExchange.end(),
+            );
+          }
         }
 
         // phase : response headers
@@ -953,11 +1141,11 @@ const start = () => {
               method: inboundRequest.method,
               url: inboundRequest.url,
               headers: Object.fromEntries(
-                Object.entries(inboundRequest.headers).filter(([headerName]) =>
-                  !headerName.startsWith(":"),
+                Object.entries(inboundRequest.headers).filter(
+                  ([headerName]) => !headerName.startsWith(":"),
                 ),
               ),
-              body: bufferMirrorForLogs.toJSON(),
+              body: requestBody?.toJSON(),
             }),
           ).toString("base64"),
         });
@@ -1005,158 +1193,19 @@ const start = () => {
             if (!config.replaceResponseBodyUrls) return payloadBuffer;
             if (!payloadBuffer.length) return payloadBuffer;
 
-            return (outboundResponseHeaders["content-encoding"] || "")
-              .split(",")
-              .reduce(
-                async (buffer: Promise<Buffer>, formatNotTrimed: string) => {
-                  const format = formatNotTrimed.trim().toLowerCase();
-                  const method =
-                    format === "gzip" || format === "x-gzip"
-                      ? gunzip
-                      : format === "deflate"
-                      ? inflate
-                      : format === "br"
-                      ? brotliDecompress
-                      : format === "identity" || format === ""
-                      ? (
-                          input: Buffer,
-                          callback: (err?: Error, data?: Buffer) => void,
-                        ) => {
-                          callback(null, input);
-                        }
-                      : null;
-                  if (method === null) {
-                    send(
-                      502,
-                      inboundResponse,
-                      Buffer.from(
-                        errorPage(
-                          new Error(
-                            `${format} compression not supported by the proxy`,
-                          ),
-                          "stream",
-                          url,
-                          targetUrl,
-                        ),
-                      ),
-                    );
-                    return;
-                  }
-
-                  const openedBuffer = await buffer;
-                  return await new Promise<Buffer>(resolve =>
-                    method(openedBuffer, (err_1, data_1) => {
-                      if (err_1) {
-                        send(
-                          502,
-                          inboundResponse,
-                          Buffer.from(
-                            errorPage(err_1, "stream", url, targetUrl),
-                          ),
-                        );
-                        resolve(Buffer.from(""));
-                        return;
-                      }
-                      resolve(data_1);
-                    }),
-                  );
-                },
-                Promise.resolve(payloadBuffer),
-              )
-              .then((uncompressedBuffer: Buffer) => {
-                const fileTooBig = uncompressedBuffer.length > 1e7;
-                const fileHasSpecialChars = () =>
-                  /[^\x00-\x7F]/.test(uncompressedBuffer.toString());
-                const contentTypeCanBeProcessed = [
-                  "text/html",
-                  "application/javascript",
-                  "application/json",
-                ].some(allowedContentType =>
-                  (outboundResponseHeaders["content-type"] ?? "").includes(
-                    allowedContentType,
-                  ),
-                );
-                const willReplace =
-                  !fileTooBig &&
-                  (contentTypeCanBeProcessed || !fileHasSpecialChars());
-                return !willReplace
-                  ? uncompressedBuffer
-                  : !config.replaceResponseBodyUrls
-                  ? uncompressedBuffer.toString()
-                  : Object.entries(config.mapping)
-                      .reduce(
-                        (inProgress, [path, mapping]) =>
-                          mapping.startsWith("logs:") ||
-                          (path !== "" &&
-                            !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
-                            ? inProgress
-                            : inProgress.replace(
-                                new RegExp(
-                                  mapping
-                                    .replace(/^(file|logs):\/\//, "")
-                                    .replace(/[*+?^${}()|[\]\\]/g, "")
-                                    .replace(/^https/, "https?") + "/*",
-                                  "ig",
-                                ),
-                                `https://${proxyHostnameAndPort}${path.replace(
-                                  /\/+$/,
-                                  "",
-                                )}/`,
-                              ),
-                        uncompressedBuffer.toString(),
-                      )
-                      .split(`${proxyHostnameAndPort}/:`)
-                      .join(`${proxyHostnameAndPort}:`)
-                      .replace(
-                        /\?protocol=wss?%3A&hostname=[^&]+&port=[0-9]+&pathname=/g,
-                        `?protocol=ws${
-                          config.ssl ? "s" : ""
-                        }%3A&hostname=${proxyHostname}&port=${
-                          config.port
-                        }&pathname=${encodeURIComponent(
-                          key.replace(/\/+$/, ""),
-                        )}`,
-                      );
-              })
-              .then((updatedBody: Buffer | string) =>
-                (outboundResponseHeaders["content-encoding"] || "")
-                  .split(",")
-                  .reduce(
-                    (buffer: Promise<Buffer>, formatNotTrimed: string) => {
-                      const format = formatNotTrimed.trim().toLowerCase();
-                      const method =
-                        format === "gzip" || format === "x-gzip"
-                          ? gzip
-                          : format === "deflate"
-                          ? deflate
-                          : format === "br"
-                          ? brotliCompress
-                          : format === "identity" || format === ""
-                          ? (
-                              input: Buffer,
-                              callback: (err?: Error, data?: Buffer) => void,
-                            ) => {
-                              callback(null, input);
-                            }
-                          : null;
-                      if (method === null)
-                        throw new Error(
-                          `${format} compression not supported by the proxy`,
-                        );
-
-                      return buffer.then(
-                        data =>
-                          new Promise<Buffer>(resolve =>
-                            method(data, (err, data) => {
-                              if (err) throw err;
-                              resolve(data);
-                            }),
-                          ),
-                      );
-                    },
-                    Promise.resolve(Buffer.from(updatedBody)),
-                  ),
+            return replaceBody(payloadBuffer, outboundResponseHeaders, {
+              proxyHostnameAndPort,
+              proxyHostname,
+              key,
+              direction: REPLACEMENT_DIRECTION.INBOUND,
+            }).catch((e: Error) => {
+              send(
+                502,
+                inboundResponse,
+                Buffer.from(errorPage(e, "stream", url, targetUrl)),
               );
+              return Buffer.from("");
+            });
           }));
 
         // phase : inbound response
