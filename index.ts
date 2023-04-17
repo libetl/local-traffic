@@ -486,7 +486,15 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
     data: null as string | Buffer,
     run: function () {
       return new Promise(resolve => {
-        this.data = `${header(0x1f4fa, "logs", "")}<p>Logs page</p>
+        this.data = `${header(
+          0x1f4fa,
+          "logs",
+          "",
+        )}<p>Logs page, limited to <select id="limit" onchange="javascript:cleanup()">
+        <option value="-1">0 (clear)</option><option value="10">10</option>
+        <option value="50">50</option><option value="100">100</option><option value="200">200</option>
+        <option selected="selected" value="500">500</option><option value="0">Infinity (discouraged)</option>
+        </select></p>
     <table id="table" class="table table-striped" style="display: block; width: 100%; overflow-y: auto">
     <thead>
       <tr>
@@ -528,18 +536,26 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
           return r + (pEnd || '');
           }) + '</pre>'
         : data;
-        const button = uniqueHash ? '<button data-uniquehash="'+uniqueHash+'" onclick="javasript:replay(event)" ' +
+        const button = uniqueHash ? '<button data-uniquehash="'+uniqueHash+'" onclick="javascript:replay(event)" ' +
           'type="button" class="btn btn-primary">Replay</button>' : '';
         document.getElementById("logs")
           .insertAdjacentHTML('beforeend', '<tr><td scope="col">' + new Date().toUTCString() + '</td>' +
                 '<td scope="col">' + (data.level || 'info')+ '</td>' + 
-                '<td scope="col">' + eventText + button + '</td></tr>')
+                '<td scope="col">' + eventText + button + '</td></tr>');
+        cleanup();
       };
       socket.onerror = function(error) {
         console.log(\`[error] \${error}\`);
         setTimeout(start, 5000);
       };
     };
+    function cleanup() {
+      const currentLimit = parseInt(document.getElementById('limit').value)
+      while (currentLimit && document.getElementById('logs').childNodes.length && 
+      document.getElementById('logs').childNodes.length > currentLimit) {
+        document.getElementById('logs').childNodes[0].remove();
+      }
+    }
     function replay(event) {
       const uniqueHash = event.target.dataset.uniquehash;
       const { method, url, headers, body } = JSON.parse(atob(uniqueHash));
@@ -952,9 +968,12 @@ const start = () => {
           ?.stream?.readableLength;
 
         let requestBody: Buffer | null = null;
-        if (config.replaceRequestBodyUrls || logsListeners.length) {
+        const bufferedRequestBody =
+          config.replaceRequestBodyUrls || logsListeners.length;
+        if (bufferedRequestBody) {
           // this is optional,
-          // I don't want to buffer request bodies none of the options are activated
+          // I don't want to buffer request bodies if
+          // none of the options are activated
           const requestBodyReadable: Readable =
             (inboundRequest as Http2ServerRequest)?.stream ??
             (inboundRequest as IncomingMessage);
@@ -1070,12 +1089,12 @@ const start = () => {
               error = Buffer.from(errorPage(thrown, "request", url, targetUrl));
               resolve(null as IncomingMessage);
             });
-            if (config.replaceRequestBodyUrls) {
+            if (bufferedRequestBody) {
               outboundHttp1Request.write(requestBody);
               outboundHttp1Request.end();
             }
 
-            if (!config.replaceRequestBodyUrls) {
+            if (!bufferedRequestBody) {
               inboundRequest.on("data", chunk =>
                 outboundHttp1Request.write(chunk),
               );
@@ -1090,12 +1109,12 @@ const start = () => {
 
         // phase : request body
         if (config.ssl && http2WithRequestBody && outboundExchange) {
-          if (config.replaceRequestBodyUrls) {
+          if (bufferedRequestBody) {
             outboundExchange.write(requestBody);
             outboundExchange.end();
           }
 
-          if (!config.replaceRequestBodyUrls) {
+          if (!bufferedRequestBody) {
             (inboundRequest as Http2ServerRequest).stream.on("data", chunk => {
               outboundExchange.write(chunk);
             });
@@ -1106,12 +1125,12 @@ const start = () => {
         }
 
         if (!config.ssl && http1WithRequestBody && outboundExchange) {
-          if (config.replaceRequestBodyUrls) {
+          if (bufferedRequestBody) {
             outboundExchange.write(requestBody);
             outboundExchange.end();
           }
 
-          if (!config.replaceRequestBodyUrls) {
+          if (!bufferedRequestBody) {
             (inboundRequest as IncomingMessage).on("data", chunk => {
               outboundExchange.write(chunk);
             });
@@ -1320,14 +1339,13 @@ const start = () => {
         path,
       } = determineMapping(request);
 
-      const shasum = createHash("sha1");
-      shasum.update(
-        request.headers["sec-websocket-key"] +
-          "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
-      );
-      const accept = shasum.digest("base64");
-
       if (path === "/local-traffic-logs") {
+        const shasum = createHash("sha1");
+        shasum.update(
+          request.headers["sec-websocket-key"] +
+            "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+        );
+        const accept = shasum.digest("base64");
         upstreamSocket.allowHalfOpen = true;
         upstreamSocket.write(
           "HTTP/1.1 101 Switching Protocols\r\n" +
