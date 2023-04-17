@@ -539,7 +539,7 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
         const button = uniqueHash ? '<button data-uniquehash="'+uniqueHash+'" onclick="javascript:replay(event)" ' +
           'type="button" class="btn btn-primary">Replay</button>' : '';
         document.getElementById("logs")
-          .insertAdjacentHTML('beforeend', '<tr><td scope="col">' + new Date().toUTCString() + '</td>' +
+          .insertAdjacentHTML('afterbegin', '<tr><td scope="col">' + new Date().toUTCString() + '</td>' +
                 '<td scope="col">' + (data.level || 'info')+ '</td>' + 
                 '<td scope="col">' + eventText + button + '</td></tr>');
         cleanup();
@@ -553,7 +553,7 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
       const currentLimit = parseInt(document.getElementById('limit').value)
       while (currentLimit && document.getElementById('logs').childNodes.length && 
       document.getElementById('logs').childNodes.length > currentLimit) {
-        document.getElementById('logs').childNodes[0].remove();
+        [...document.getElementById('logs').childNodes].slice(-1)[0].remove();
       }
     }
     function replay(event) {
