@@ -158,8 +158,10 @@ const notifyLogsListener = (data: Record<string, unknown>) => {
   const mask = Array(4)
     .fill(0)
     .map(() => Math.floor(Math.random() * (2 << 7)));
-  const maskedTextBits = [...text].map((c, i) => c.charCodeAt(0) ^ mask[i & 3]);
-  const length = text.length;
+  const maskedTextBits = [...text.substring(0, 2 << 15)].map(
+    (c, i) => c.charCodeAt(0) ^ mask[i & 3],
+  );
+  const length = Math.min((2 << 15) - 1, text.length);
   const header =
     text.length < (2 << 6) - 2
       ? Buffer.from(Uint8Array.from([(1 << 7) + 1, (1 << 7) + length]).buffer)
@@ -171,7 +173,13 @@ const notifyLogsListener = (data: Record<string, unknown>) => {
   const maskingKey = Buffer.from(Int8Array.from(mask).buffer);
   const payload = Buffer.from(Int8Array.from(maskedTextBits).buffer);
   const value = Buffer.concat([header, maskingKey, payload]);
-  logsListeners.forEach(logsListener => logsListener.write(value));
+  logsListeners.forEach(logsListener => {
+    try {
+      logsListener.write(value);
+    } catch (e) {
+      // ignore logs that trigger errors in the pipe
+    }
+  });
 };
 
 const quickStatus = (thisConfig: LocalConfiguration) => {
@@ -992,7 +1000,9 @@ const start = () => {
           origin: target.href,
           referer: targetUrl.toString(),
           "content-length":
-            requestBody?.length ?? inboundRequest.headers["content-length"],
+            requestBody?.length ??
+            inboundRequest.headers["content-length"] ??
+            0,
           ":authority": targetHost,
           ":method": inboundRequest.method,
           ":path": fullPath,
