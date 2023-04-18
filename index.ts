@@ -87,13 +87,15 @@ const filename = resolve(
     : userHomeConfigFile,
 );
 const defaultConfig: LocalConfiguration = {
-  mapping: {},
+  mapping: {
+    "/logs/": "logs://",
+  },
   port: 8080,
   replaceRequestBodyUrls: false,
   replaceResponseBodyUrls: false,
   dontUseHttp2Downstream: false,
   simpleLogs: false,
-  websocket: false,
+  websocket: true,
   disableWebSecurity: false,
 };
 
@@ -351,10 +353,26 @@ const onWatch = async () => {
     config.port !== previousConfig.port ||
     JSON.stringify(config.ssl) !== JSON.stringify(previousConfig.ssl)
   ) {
-    await new Promise(resolve =>
-      !server ? resolve(void 0) : server.close(resolve),
-    );
     log(`restarting server`, LogLevel.INFO, EMOJIS.RESTART);
+    await Promise.all(
+      logsListeners.map(
+        logsListener => new Promise(resolve => logsListener.end(resolve)),
+      ),
+    );
+    logsListeners = [];
+    const stopped = await Promise.race([
+      new Promise(resolve =>
+        !server ? resolve(void 0) : server.close(resolve),
+      ).then(() => true),
+      new Promise(resolve => setTimeout(resolve, 5000)).then(() => false),
+    ]);
+    if (!stopped) {
+      log(
+        `error during restart (websockets ?)`,
+        LogLevel.WARNING,
+        EMOJIS.RESTART,
+      );
+    }
     start();
   } else quickStatus(config);
 };
@@ -1169,10 +1187,11 @@ const start = () => {
             JSON.stringify({
               method: inboundRequest.method,
               url: inboundRequest.url,
-              headers: Object.assign({},
-                ...Object.entries(inboundRequest.headers).filter(
-                  ([headerName]) => !headerName.startsWith(":"),
-                ).map(([key, value]) => ({[key]: value})),
+              headers: Object.assign(
+                {},
+                ...Object.entries(inboundRequest.headers)
+                  .filter(([headerName]) => !headerName.startsWith(":"))
+                  .map(([key, value]) => ({ [key]: value })),
               ),
               body: requestBody?.toJSON(),
             }),
