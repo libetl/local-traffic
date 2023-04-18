@@ -26,8 +26,9 @@ npx local-traffic
 ```json
 {
   "mapping": {
-    "/npm": "https://www.npmjs.com/",
-    "/my-static-webapp": "file:///home/user/projects/my-static-webapp",
+    "/npm/": "https://www.npmjs.com/",
+    "/my-static-webapp/": "file:///home/user/projects/my-static-webapp/",
+    "/logs/": "logs://",
     "": "https://github.com/"
   }
 }
@@ -35,10 +36,11 @@ npx local-traffic
 
 > "" mapping must always come last
 
-2. Go to [https://localhost/prettier](https://localhost/prettier) with your browser
-3. Go to [https://localhost/npm](https://localhost/npm) with your browser
-4. Go to [https://localhost/my-static-webapp](https://localhost/my-static-webapp/index.html) with your browser (given your project name is my-static-webapp, but I am not 100% sure)
-5. Your server now proxies the mapping that you have configured
+2. Go to [http://localhost:8080/prettier](http://localhost:8080/prettier) with your browser
+3. Go to [http://localhost:8080/npm/](http://localhost:8080/npm) with your browser
+4. Go to [http://localhost:8080/my-static-webapp/index.html](http://localhost:8080/my-static-webapp/index.html) with your browser (given your project name is my-static-webapp, but I am not 100% sure)
+5. Go to [http://localhost:8080/logs/](http://localhost:8080/logs/) to watch the request logs
+6. Your server now proxies the mapping that you have configured
 
 ## usage
 
@@ -61,6 +63,7 @@ npx local-traffic [location-of-the-local-traffic-config-file]
   - "ssl.cert" : (string) Certificate (PEM format)
   - "ssl.key" : (string) Private Key (PEM format)
 - "port" : (number) port number
+- "replaceRequestBodyUrls": (boolean) replace every matching string from the mapping in the request body.
 - "replaceResponseBodyUrls": (boolean) replace every matching string from the mapping in the response body.
 - "dontUseHttp2Downstream": (boolean) force calling downstream services in http1.1 only (to save some time)
 - "simpleLogs": (boolean) disable colored logs for text terminals
