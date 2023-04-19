@@ -188,15 +188,15 @@ const quickStatus = (thisConfig: LocalConfiguration) => {
   log(
     `\u001b[48;5;52m⎸${EMOJIS.PORT} ${thisConfig.port
       .toString()
-      .padStart(5)} \u001b[48;5;53m⎸${EMOJIS.INBOUND} ${
-      thisConfig.ssl ? "H/2 " : "H1.1"
-    }${
-      thisConfig.replaceRequestBodyUrls ? EMOJIS.REWRITE : "  "
-    }⎹\u001b[48;5;54m⎸${EMOJIS.OUTBOUND} ${
+      .padStart(5)} \u001b[48;5;53m⎸${EMOJIS.OUTBOUND} ${
       thisConfig.dontUseHttp2Downstream ? "H1.1" : "H/2 "
     }${
+      thisConfig.replaceRequestBodyUrls ? EMOJIS.REWRITE : "  "
+    }⎹⎸${EMOJIS.INBOUND} ${
+      thisConfig.ssl ? "H/2 " : "H1.1"
+    }${
       thisConfig.replaceResponseBodyUrls ? EMOJIS.REWRITE : "  "
-    }⎹\u001b[48;5;55m⎸${EMOJIS.RULES}${Object.keys(config.mapping)
+    }⎹\u001b[48;5;54m\u001b[48;5;55m⎸${EMOJIS.RULES}${Object.keys(config.mapping)
       .length.toString()
       .padStart(3)}⎹\u001b[48;5;56m⎸${
       config.websocket ? EMOJIS.WEBSOCKET : EMOJIS.NO
