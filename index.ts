@@ -32,7 +32,8 @@ import {
   brotliDecompress,
 } from "zlib";
 import { resolve, normalize } from "path";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
+import { hrtime } from "process";
 import type { Duplex, Readable } from "stream";
 
 type ErrorWithErrno = NodeJS.ErrnoException;
@@ -149,7 +150,7 @@ const log = (text: string, level?: LogLevel, emoji?: string) => {
     }`,
   );
   notifyLogsListener({
-    logEvent: simpleLog,
+    event: simpleLog,
     level: levelToString(level),
   });
 };
@@ -190,13 +191,13 @@ const quickStatus = (thisConfig: LocalConfiguration) => {
       .toString()
       .padStart(5)} \u001b[48;5;53m⎸${EMOJIS.OUTBOUND} ${
       thisConfig.dontUseHttp2Downstream ? "H1.1" : "H/2 "
-    }${
-      thisConfig.replaceRequestBodyUrls ? EMOJIS.REWRITE : "  "
-    }⎹⎸${EMOJIS.INBOUND} ${
-      thisConfig.ssl ? "H/2 " : "H1.1"
-    }${
+    }${thisConfig.replaceRequestBodyUrls ? EMOJIS.REWRITE : "  "}⎹⎸${
+      EMOJIS.INBOUND
+    } ${thisConfig.ssl ? "H/2 " : "H1.1"}${
       thisConfig.replaceResponseBodyUrls ? EMOJIS.REWRITE : "  "
-    }⎹\u001b[48;5;54m\u001b[48;5;55m⎸${EMOJIS.RULES}${Object.keys(config.mapping)
+    }⎹\u001b[48;5;54m\u001b[48;5;55m⎸${EMOJIS.RULES}${Object.keys(
+      config.mapping,
+    )
       .length.toString()
       .padStart(3)}⎹\u001b[48;5;56m⎸${
       config.websocket ? EMOJIS.WEBSOCKET : EMOJIS.NO
@@ -504,29 +505,57 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
     data: null as string | Buffer,
     run: function () {
       return new Promise(resolve => {
-        this.data = `${header(
-          0x1f4fa,
-          "logs",
-          "",
-        )}<p>Logs page, limited to <select id="limit" onchange="javascript:cleanup()">
-        <option value="-1">0 (clear)</option><option value="10">10</option>
+        this.data = `${header(0x1f4fa, "logs", "")}
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary nav-fill">
+  <div class="container-fluid">
+    <ul class="navbar-nav">
+      <li class="nav-item">
+        <a class="nav-link active" aria-current="page" href="javascript:show(0)">Access</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" href="javascript:show(1)">Proxy</a>
+      </li>
+    </ul>
+    <span class="navbar-text">
+      Limit : <select id="limit" onchange="javascript:cleanup()"><option value="-1">0 (clear)</option><option value="10">10</option>
         <option value="50">50</option><option value="100">100</option><option value="200">200</option>
         <option selected="selected" value="500">500</option><option value="0">Infinity (discouraged)</option>
-        </select></p>
-    <table id="table" class="table table-striped" style="display: block; width: 100%; overflow-y: auto">
-    <thead>
-      <tr>
-        <th scope="col">Date</th>
-        <th scope="col">Level</th>
-        <th scope="col">Message</th>
-      </tr>
-    </thead>
-    <tbody id="logs">
-    </tbody>
-    </table>
-    <script type="text/javascript">
+      </select> rows
+    </span>
+  </div>
+</nav>
+<table id="table-access" class="table table-striped" style="display: block; width: 100%; overflow-y: auto">
+  <thead>
+    <tr>
+      <th scope="col">...</th>
+      <th scope="col">Date</th>
+      <th scope="col">Level</th>
+      <th scope="col">Protocol</th>
+      <th scope="col">Method</th>
+      <th scope="col">Status</th>
+      <th scope="col">Duration</th>
+      <th scope="col">Path</th>
+    </tr>
+  </thead>
+  <tbody id="access">
+  </tbody>
+</table>
+<table id="table-proxy" class="table table-striped" style="display: none; width: 100%; overflow-y: auto">
+  <thead>
+    <tr>
+      <th scope="col">Date</th>
+      <th scope="col">Level</th>
+      <th scope="col">Message</th>
+    </tr>
+  </thead>
+  <tbody id="proxy">
+  </tbody>
+</table>
+<script type="text/javascript">
     function start() {
-      document.getElementById('table').style.height =
+      document.getElementById('table-access').style.height =
+        (document.documentElement.clientHeight - 150) + 'px';
+      document.getElementById('table-proxy').style.height =
         (document.documentElement.clientHeight - 150) + 'px';
       const socket = new WebSocket("ws${
         config.ssl ? "s" : ""
@@ -539,27 +568,44 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
           data = data1;
           uniqueHash = uniqueHash1;
         } catch(e) { }
-        const eventText = typeof data === 'object' ? '<pre>' + JSON.stringify(data, null, 3)
-        .replace(/&/g, '&amp;').replace(/\\\\"/g, '&quot;')
-        .replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/^( *)("[\\w]+": )?("[^"]*"|[\\w.+-]*)?([,[{])?$/mg, (match, pIndent, pKey, pVal, pEnd) => {
-          const key = '<span class="json-key">';
-          const val = '<span class="json-value">';
-          const str = '<span class="json-string">';
-          let r = pIndent || '';
-          if (pKey)
-             r = r + key + pKey.replace(/[": ]/g, '') + '</span>: ';
-          if (pVal)
-             r = r + (pVal[0] == '"' ? str : val) + pVal + '</span>';
-          return r + (pEnd || '');
-          }) + '</pre>'
-        : data;
-        const button = uniqueHash ? '<button data-uniquehash="'+uniqueHash+'" onclick="javascript:replay(event)" ' +
-          'type="button" class="btn btn-primary">Replay</button>' : '';
-        document.getElementById("logs")
-          .insertAdjacentHTML('afterbegin', '<tr><td scope="col">' + new Date().toUTCString() + '</td>' +
+        const time = new Date().toISOString().split('T')[1].replace('Z', '');
+        if (uniqueHash) {
+          const button = '<button data-uniquehash="'+uniqueHash+'" onclick="javascript:replay(event)" ' +
+            'type="button" class="btn btn-primary">&#x1F501;</button>';
+          document.getElementById("access")
+            .insertAdjacentHTML('afterbegin', '<tr id="event-' + data.randomId + '">' +
+                '<td scope="col">' + button + '</td>' +
+                '<td scope="col">' + time + '</td>' +
                 '<td scope="col">' + (data.level || 'info')+ '</td>' + 
-                '<td scope="col">' + eventText + button + '</td></tr>');
+                '<td scope="col">' + data.protocol + '</td>' + 
+                '<td scope="col">' + data.method + '</td>' + 
+                '<td scope="col" class="statusCode"><span class="badge bg-secondary">...</span></td>' +
+                '<td scope="col" class="duration">&#x23F1;</td>' +
+                '<td scope="col">' + data.path + '</td>' + 
+                '</tr>');
+        } else if(data.statusCode) {
+          const color = Math.floor(data.statusCode / 100) === 1 ? "info" :
+            Math.floor(data.statusCode / 100) === 2 ? "success" :
+            Math.floor(data.statusCode / 100) === 3 ? "dark" :
+            Math.floor(data.statusCode / 100) === 4 ? "warning" :
+            Math.floor(data.statusCode / 100) === 5 ? "danger" :
+            "secondary";
+          const statusCodeColumn = document.querySelector("#event-" + data.randomId + " .statusCode");
+          if (statusCodeColumn)
+            statusCodeColumn.innerHTML = '<span class="badge bg-' + color + '">' + data.statusCode + '</span>';
+
+          const durationColumn = document.querySelector("#event-" + data.randomId + " .duration");
+          if (durationColumn) {
+            const duration = data.duration > 10000 ? Math.floor(data.duration / 1000) + 's' :
+              data.duration + 'ms';
+            durationColumn.innerHTML = duration;
+          }
+        } else if(data.event) {
+          document.getElementById("proxy")
+            .insertAdjacentHTML('afterbegin', '<tr><td scope="col">' + time + '</td>' +
+                '<td scope="col">' + (data.level || 'info')+ '</td>' + 
+                '<td scope="col">' + data.event + '</td></tr>');
+        }
         cleanup();
       };
       socket.onerror = function(error) {
@@ -567,11 +613,21 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
         setTimeout(start, 5000);
       };
     };
+    function show(id) {
+      [...document.querySelectorAll('table')].forEach((table, index) => {
+        table.style.display = index === id ? 'block': 'none'
+      });
+      [...document.querySelectorAll('.navbar-nav .nav-item .nav-link')].forEach((link, index) => {
+        if (index === id) { link.classList.add('active') } else link.classList.remove('active');
+      });
+    }
     function cleanup() {
       const currentLimit = parseInt(document.getElementById('limit').value)
-      while (currentLimit && document.getElementById('logs').childNodes.length && 
-      document.getElementById('logs').childNodes.length > currentLimit) {
-        [...document.getElementById('logs').childNodes].slice(-1)[0].remove();
+      for (let table of ['access', 'proxy']) {
+        while (currentLimit && document.getElementById(table).childNodes.length && 
+        document.getElementById(table).childNodes.length > currentLimit) {
+          [...document.getElementById(table).childNodes].slice(-1)[0].remove();
+        }
       }
     }
     function replay(event) {
@@ -586,25 +642,8 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
       });
     }
     window.addEventListener("DOMContentLoaded", start);
-    </script>
-    <style type="text/css">
-    pre {
-      background-color: ghostwhite;
-      border: 1px solid silver;
-      padding: 10px 20px;
-      margin: 20px; 
-      }
-   .json-key {
-      color: brown;
-      }
-   .json-value {
-      color: navy;
-      }
-   .json-string {
-      color: olive;
-      }
-    </style>
-    </body></html>`;
+</script>
+</body></html>`;
         resolve(void 0);
       });
     },
@@ -925,6 +964,7 @@ const start = () => {
           );
           return;
         }
+        const randomId = randomBytes(20).toString("hex");
         const targetHost = target.host.replace(RegExp(/\/+$/), "");
         const targetPrefix = target.href.substring(
           "https://".length + target.host.length,
@@ -937,6 +977,7 @@ const start = () => {
         );
 
         // phase: connection
+        const startTime = hrtime.bigint();
         let error: Buffer = null;
         let http2IsSupported = !config.dontUseHttp2Downstream;
         const outboundRequest: ClientHttp2Session =
@@ -1183,6 +1224,7 @@ const start = () => {
           protocol: http2IsSupported ? "HTTP/2" : "HTTP1.1",
           method: inboundRequest.method,
           path: fullPath,
+          randomId,
           uniqueHash: Buffer.from(
             JSON.stringify({
               method: inboundRequest.method,
@@ -1319,10 +1361,12 @@ const start = () => {
         } catch (e) {
           // ERR_HTTP2_HEADERS_SENT
         }
-        inboundResponse.writeHead(
+        const statusCode =
           outboundResponseHeaders[":status"] ||
-            outboundHttp1Response.statusCode ||
-            200,
+          outboundHttp1Response.statusCode ||
+          200;
+        inboundResponse.writeHead(
+          statusCode,
           config.ssl
             ? undefined // statusMessage is discarded in http/2
             : outboundHttp1Response.statusMessage || "Status read from http/2",
@@ -1330,6 +1374,13 @@ const start = () => {
         );
         if (payload) inboundResponse.end(payload);
         else inboundResponse.end();
+        const endTime = hrtime.bigint();
+
+        notifyLogsListener({
+          randomId,
+          statusCode,
+          duration: Math.floor(Number(endTime - startTime) / 1000000),
+        });
       },
     ) as Server
   )
