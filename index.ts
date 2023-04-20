@@ -569,21 +569,10 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
           uniqueHash = uniqueHash1;
         } catch(e) { }
         const time = new Date().toISOString().split('T')[1].replace('Z', '');
-        if (uniqueHash) {
-          const button = '<button data-uniquehash="'+uniqueHash+'" onclick="javascript:replay(event)" ' +
-            'type="button" class="btn btn-primary">&#x1F501;</button>';
-          document.getElementById("access")
-            .insertAdjacentHTML('afterbegin', '<tr id="event-' + data.randomId + '">' +
-                '<td scope="col">' + button + '</td>' +
-                '<td scope="col">' + time + '</td>' +
-                '<td scope="col">' + (data.level || 'info')+ '</td>' + 
-                '<td scope="col">' + data.protocol + '</td>' + 
-                '<td scope="col">' + data.method + '</td>' + 
-                '<td scope="col" class="statusCode"><span class="badge bg-secondary">...</span></td>' +
-                '<td scope="col" class="duration">&#x23F1;</td>' +
-                '<td scope="col">' + data.path + '</td>' + 
-                '</tr>');
-        } else if(data.statusCode) {
+        const replay = uniqueHash ? '<button data-uniquehash="' + uniqueHash + '" onclick="javascript:replay(event)" ' +
+          'type="button" class="btn btn-primary"' + 
+          (uniqueHash === 'N/A' ? ' disabled="disabled"' : '') + '>&#x1F501;</button>' : '';
+        if(data.statusCode && uniqueHash) {
           const color = Math.floor(data.statusCode / 100) === 1 ? "info" :
             Math.floor(data.statusCode / 100) === 2 ? "success" :
             Math.floor(data.statusCode / 100) === 3 ? "dark" :
@@ -600,7 +589,29 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
               data.duration + 'ms';
             durationColumn.innerHTML = duration;
           }
-        } else if(data.event) {
+
+          const protocolColumn = document.querySelector("#event-" + data.randomId + " .protocol");
+          if (protocolColumn) {
+            protocolColumn.innerHTML = data.protocol;
+          }
+
+          const replayColumn = document.querySelector("#event-" + data.randomId + " .replay");
+          if (replayColumn) {
+            replayColumn.innerHTML = replay;
+          }
+        } else if (uniqueHash) {
+            document.getElementById("access")
+              .insertAdjacentHTML('afterbegin', '<tr id="event-' + data.randomId + '">' +
+                  '<td scope="col" class="replay">' + replay + '</td>' +
+                  '<td scope="col">' + time + '</td>' +
+                  '<td scope="col">' + (data.level || 'info')+ '</td>' + 
+                  '<td scope="col" class="protocol">' + data.protocol + '</td>' + 
+                  '<td scope="col">' + data.method + '</td>' + 
+                  '<td scope="col" class="statusCode"><span class="badge bg-secondary">...</span></td>' +
+                  '<td scope="col" class="duration">&#x23F1;</td>' +
+                  '<td scope="col">' + data.path + '</td>' + 
+                  '</tr>');
+          } else if(data.event) {
           document.getElementById("proxy")
             .insertAdjacentHTML('afterbegin', '<tr><td scope="col">' + time + '</td>' +
                 '<td scope="col">' + (data.level || 'info')+ '</td>' + 
@@ -964,7 +975,6 @@ const start = () => {
           );
           return;
         }
-        const randomId = randomBytes(20).toString("hex");
         const targetHost = target.host.replace(RegExp(/\/+$/), "");
         const targetPrefix = target.href.substring(
           "https://".length + target.host.length,
@@ -976,10 +986,20 @@ const start = () => {
           `${target.protocol}//${targetHost}${fullPath}`,
         );
 
+        let http2IsSupported = !config.dontUseHttp2Downstream;
+        const randomId = randomBytes(20).toString("hex");
+        notifyLogsListener({
+          level: "info",
+          protocol: http2IsSupported ? "HTTP/2" : "HTTP1.1",
+          method: inboundRequest.method,
+          path: fullPath,
+          randomId,
+          uniqueHash: "N/A",
+        });
+
         // phase: connection
         const startTime = hrtime.bigint();
         let error: Buffer = null;
-        let http2IsSupported = !config.dontUseHttp2Downstream;
         const outboundRequest: ClientHttp2Session =
           target.protocol === "file:"
             ? fileRequest(targetUrl)
@@ -1219,27 +1239,6 @@ const start = () => {
               }),
         );
 
-        notifyLogsListener({
-          level: "info",
-          protocol: http2IsSupported ? "HTTP/2" : "HTTP1.1",
-          method: inboundRequest.method,
-          path: fullPath,
-          randomId,
-          uniqueHash: Buffer.from(
-            JSON.stringify({
-              method: inboundRequest.method,
-              url: inboundRequest.url,
-              headers: Object.assign(
-                {},
-                ...Object.entries(inboundRequest.headers)
-                  .filter(([headerName]) => !headerName.startsWith(":"))
-                  .map(([key, value]) => ({ [key]: value })),
-              ),
-              body: requestBody?.toJSON(),
-            }),
-          ).toString("base64"),
-        });
-
         const newUrl = !outboundResponseHeaders["location"]
           ? null
           : new URL(
@@ -1379,7 +1378,21 @@ const start = () => {
         notifyLogsListener({
           randomId,
           statusCode,
+          protocol: http2IsSupported ? "HTTP/2" : "HTTP1.1",
           duration: Math.floor(Number(endTime - startTime) / 1000000),
+          uniqueHash: Buffer.from(
+            JSON.stringify({
+              method: inboundRequest.method,
+              url: inboundRequest.url,
+              headers: Object.assign(
+                {},
+                ...Object.entries(inboundRequest.headers)
+                  .filter(([headerName]) => !headerName.startsWith(":"))
+                  .map(([key, value]) => ({ [key]: value })),
+              ),
+              body: requestBody?.toJSON(),
+            }),
+          ).toString("base64"),
         });
       },
     ) as Server
