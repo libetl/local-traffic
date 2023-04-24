@@ -24,7 +24,7 @@
     "build": "npm run clean && npm run typescript && npm run terser && npm run shebang && npm run chmod"
   },
   "devDependencies": {
-    "@types/node": "^18.15.13",
+    "@types/node": "^18.16.0",
     "terser": "^5.17.1",
     "typescript": "^5.0.4"
   },
