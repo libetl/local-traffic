@@ -65,14 +65,14 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 
 ## all the options
 
-- "mapping": (`{[path: string]: string | {replaceBody: string ; downstreamUrl: string}`) routing rules (required)
-- "ssl" : SSL options
-  - "ssl.cert" : (`string`) Certificate (PEM format)
-  - "ssl.key" : (`string`) Private Key (PEM format)
-- "port" : (`number`) port number
-- "replaceRequestBodyUrls": (`boolean`) replace every matching string from the mapping in the request body.
-- "replaceResponseBodyUrls": (`boolean`) replace every matching string from the mapping in the response body.
-- "dontUseHttp2Downstream": (`boolean`) force calling downstream services in http1.1 only (to save some time)
-- "simpleLogs": (`boolean`) disable colored logs for text terminals
-- "websocket": (`boolean`) true to activate websocket connections proxying via sockets. Required for logs UI.
-- "disableWebSecurity": (`boolean`) true for easygoing values in cross origin requests or content security policy headers
+- `mapping`: (`{[path: string]: string | {replaceBody: string ; downstreamUrl: string}`) routing rules (required)
+- `ssl` : SSL options
+  - `ssl.cert` : (`string`) Certificate (PEM format)
+  - `ssl.key` : (`string`) Private Key (PEM format)
+- `port` : (`number`) port number
+- `replaceRequestBodyUrls`: (`boolean`) replace every matching string from the mapping in the request body.
+- `replaceResponseBodyUrls`: (`boolean`) replace every matching string from the mapping in the response body.
+- `dontUseHttp2Downstream`: (`boolean`) force calling downstream services in http1.1 only (to save some time)
+- `simpleLogs`: (`boolean`) disable colored logs for text terminals
+- `websocket`: (`boolean`) true to activate websocket connections proxying via sockets. Required for logs UI.
+- `disableWebSecurity`: (`boolean`) true for easygoing values in cross origin requests or content security policy headers
