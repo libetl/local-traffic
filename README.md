@@ -59,7 +59,7 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 
 ## how to change mappings to local / non-local
 
-1. Open `.local-traffic.json`
+1. Open `.local-traffic.json` while running it
 2. Edit the mapping keys and downstream urls
 3. See the status update in the terminal, that's it.
 
