@@ -23,7 +23,7 @@ npx local-traffic
 
 ## how to use it
 
-1. Change that mapping in the `.local-traffic.json` file:
+1. Change the mapping object in the `.local-traffic.json` file:
 
 ```json
 {
@@ -40,7 +40,7 @@ npx local-traffic
 }
 ```
 
-> "" mapping must always come last
+> if you need to deactivate a rule, move it below the "" key
 
 2. Go to [http://localhost:8080/prettier](http://localhost:8080/prettier) with your browser
 3. Go to [http://localhost:8080/npm/](http://localhost:8080/npm) with your browser
