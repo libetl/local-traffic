@@ -69,7 +69,9 @@ enum REPLACEMENT_DIRECTION {
 }
 
 interface LocalConfiguration {
-  mapping?: { [subPath: string]: string };
+  mapping?: {
+    [subPath: string]: string | { replaceBody: string; downstreamUrl: string };
+  };
   ssl?: SecureServerOptions;
   port?: number;
   replaceRequestBodyUrls?: boolean;
@@ -384,7 +386,9 @@ const envs: () => { [prefix: string]: URL } = () => ({
   ...Object.assign(
     {},
     ...Object.entries(config.mapping).map(([key, value]) => ({
-      [key]: new URL(unixNorm(value)),
+      [key]: new URL(
+        unixNorm(typeof value === "string" ? value : value.downstreamUrl),
+      ),
     })),
   ),
 });
@@ -800,15 +804,19 @@ const replaceBody = async (
         : !config.replaceResponseBodyUrls
         ? uncompressedBuffer.toString()
         : Object.entries(config.mapping)
+            .map(([key, value]) => [
+              key,
+              typeof value === "string" ? value : value.replaceBody,
+            ])
             .reduce(
-              (inProgress, [path, mapping]) =>
-                mapping.startsWith("logs:") ||
+              (inProgress, [path, value]) =>
+                value.startsWith("logs:") ||
                 (path !== "" && !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
                   ? inProgress
                   : parameters.direction === REPLACEMENT_DIRECTION.INBOUND
                   ? inProgress.replace(
                       new RegExp(
-                        mapping
+                        value
                           .replace(/^(file|logs):\/\//, "")
                           .replace(/[*+?^${}()|[\]\\]/g, "")
                           .replace(/^https/, "https?") + "/*",
@@ -824,7 +832,7 @@ const replaceBody = async (
                           parameters.proxyHostnameAndPort
                         }${path.replace(/\/+$/, "")}`,
                       )
-                      .join(mapping),
+                      .join(value),
               uncompressedBuffer.toString(),
             )
             .split(`${parameters.proxyHostnameAndPort}/:`)
