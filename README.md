@@ -29,6 +29,10 @@ npx local-traffic
     "/npm/": "https://www.npmjs.com/",
     "/my-static-webapp/": "file:///home/user/projects/my-static-webapp/",
     "/logs/": "logs://",
+    "/jquery-local/jquery.js": {
+      "replaceBody": "https://mycdn.net/jquery/jquery-3.6.4.js",
+      "downstreamUrl": "file:///home/user/projects/zepto/dist/zepto.js"
+    },
     "": "https://github.com/"
   }
 }
@@ -40,7 +44,8 @@ npx local-traffic
 3. Go to [http://localhost:8080/npm/](http://localhost:8080/npm) with your browser
 4. Go to [http://localhost:8080/my-static-webapp/index.html](http://localhost:8080/my-static-webapp/index.html) with your browser (given your project name is my-static-webapp, but I am not 100% sure)
 5. Go to [http://localhost:8080/logs/](http://localhost:8080/logs/) to watch the request logs
-6. Your server now proxies the mapping that you have configured
+6. Your page will use /jquery-local/jquery.js instead of the CDN asset, and will serve the file from your hard drive
+7. Your server now proxies the mapping that you have configured
 
 ## usage
 
