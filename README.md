@@ -2,10 +2,12 @@
 
 That is a secure http/2 (or insecure http1.1) reverse-proxy installed on your machine
 
-- without any library,
-- without startup time
-- without boring steps
-- just a single 23kb index.js file.
+- with 0 transitive dependency
+- with 1 install step
+- with a startup time of a few milliseconds
+- with one 26kb index.js file
+
+How simple is that ?
 
 ## pre-requisite
 
