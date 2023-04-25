@@ -19,7 +19,7 @@ node.js >= 8
 npx local-traffic
 ```
 
-(sudo prefix only for MacOS / linux)
+> sudo prefix only required for Linux, when port number < 1024
 
 ## how to use it
 
