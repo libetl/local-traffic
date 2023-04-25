@@ -40,7 +40,7 @@ npx local-traffic
 }
 ```
 
-> if you need to deactivate a rule, move it below the "" key
+> if you need to deactivate a mapping entry, move it below the "" key
 
 2. Go to [http://localhost:8080/prettier](http://localhost:8080/prettier) with your browser
 3. Go to [http://localhost:8080/npm/](http://localhost:8080/npm) with your browser
