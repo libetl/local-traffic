@@ -1075,14 +1075,28 @@ const start = () => {
             (inboundRequest as IncomingMessage);
 
           let requestBodyBuffer: Buffer = Buffer.from([]);
-          await new Promise(resolve => {
-            if (http2WithRequestBody === 0) resolve(void 0);
-            requestBodyReadable.on("data", chunk => {
-              requestBodyBuffer = Buffer.concat([requestBodyBuffer, chunk]);
-            });
-            requestBodyReadable.on("end", resolve);
-            requestBodyReadable.on("error", resolve);
-          });
+          const requestBodyExpected = !(
+            http2WithRequestBody === 0 &&
+            (inboundRequest.headers["content-length"] === "0" ||
+              inboundRequest.headers["content-length"] === undefined)
+          );
+          await Promise.race([
+            new Promise(resolve => setTimeout(resolve, 10000)),
+            new Promise(resolve => {
+              if (!requestBodyExpected) resolve(void 0);
+              requestBodyReadable.on("data", chunk => {
+                requestBodyBuffer = Buffer.concat([requestBodyBuffer, chunk]);
+              });
+              requestBodyReadable.on("end", resolve);
+              requestBodyReadable.on("error", resolve);
+            }),
+          ]);
+          if (requestBodyExpected && !requestBodyBuffer.length)
+            log(
+              `body replacement error ${path.slice(-17)}`,
+              LogLevel.WARNING,
+              EMOJIS.ERROR_4,
+            );
           requestBody = await replaceBody(
             requestBodyBuffer,
             inboundRequest.headers,
