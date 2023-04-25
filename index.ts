@@ -803,48 +803,18 @@ const replaceBody = async (
         ? uncompressedBuffer
         : !config.replaceResponseBodyUrls
         ? uncompressedBuffer.toString()
-        : Object.entries(config.mapping)
-            .map(([key, value]) => [
-              key,
-              typeof value === "string" ? value : value.replaceBody,
-            ])
-            .reduce(
-              (inProgress, [path, value]) =>
-                value.startsWith("logs:") ||
-                (path !== "" && !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
-                  ? inProgress
-                  : parameters.direction === REPLACEMENT_DIRECTION.INBOUND
-                  ? inProgress.replace(
-                      new RegExp(
-                        value
-                          .replace(/^(file|logs):\/\//, "")
-                          .replace(/[*+?^${}()|[\]\\]/g, "")
-                          .replace(/^https/, "https?") + "/*",
-                        "ig",
-                      ),
-                      `http${config.ssl ? "s" : ""}://${
-                        parameters.proxyHostnameAndPort
-                      }${path.replace(/\/+$/, "")}/`,
-                    )
-                  : inProgress
-                      .split(
-                        `http${config.ssl ? "s" : ""}://${
-                          parameters.proxyHostnameAndPort
-                        }${path.replace(/\/+$/, "")}`,
-                      )
-                      .join(value),
-              uncompressedBuffer.toString(),
-            )
-            .split(`${parameters.proxyHostnameAndPort}/:`)
-            .join(`${parameters.proxyHostnameAndPort}:`)
-            .replace(
-              /\?protocol=wss?%3A&hostname=[^&]+&port=[0-9]+&pathname=/g,
-              `?protocol=ws${config.ssl ? "s" : ""}%3A&hostname=${
-                parameters.proxyHostname
-              }&port=${config.port}&pathname=${encodeURIComponent(
-                parameters.key.replace(/\/+$/, ""),
-              )}`,
-            );
+        : replaceTextUsingMapping(
+            uncompressedBuffer.toString(),
+            parameters.direction,
+            parameters.proxyHostnameAndPort,
+          ).replace(
+            /\?protocol=wss?%3A&hostname=[^&]+&port=[0-9]+&pathname=/g,
+            `?protocol=ws${config.ssl ? "s" : ""}%3A&hostname=${
+              parameters.proxyHostname
+            }&port=${config.port}&pathname=${encodeURIComponent(
+              parameters.key.replace(/\/+$/, ""),
+            )}`,
+          );
     })
     .then((updatedBody: Buffer | string) =>
       (headers["content-encoding"]?.toString() ?? "")
@@ -880,6 +850,45 @@ const replaceBody = async (
           );
         }, Promise.resolve(Buffer.from(updatedBody))),
     );
+const replaceTextUsingMapping = (
+  text: string,
+  direction: REPLACEMENT_DIRECTION,
+  proxyHostnameAndPort: string,
+) =>
+  Object.entries(config.mapping)
+    .map(([key, value]) => [
+      key,
+      typeof value === "string" ? value : value.replaceBody,
+    ])
+    .reduce(
+      (inProgress, [path, value]) =>
+        value.startsWith("logs:") ||
+        (path !== "" && !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
+          ? inProgress
+          : direction === REPLACEMENT_DIRECTION.INBOUND
+          ? inProgress.replace(
+              new RegExp(
+                value
+                  .replace(/^(file|logs):\/\//, "")
+                  .replace(/[*+?^${}()|[\]\\]/g, "")
+                  .replace(/^https/, "https?") + "/*",
+                "ig",
+              ),
+              `http${
+                config.ssl ? "s" : ""
+              }://${proxyHostnameAndPort}${path.replace(/\/+$/, "")}/`,
+            )
+          : inProgress
+              .split(
+                `http${
+                  config.ssl ? "s" : ""
+                }://${proxyHostnameAndPort}${path.replace(/\/+$/, "")}`,
+              )
+              .join(value),
+      text,
+    )
+    .split(`${proxyHostnameAndPort}/:`)
+    .join(`${proxyHostnameAndPort}:`);
 
 const send = (
   code: number,
@@ -1247,7 +1256,7 @@ const start = () => {
               }),
         );
 
-        const newUrl = !outboundResponseHeaders["location"]
+        const redirectUrl = !outboundResponseHeaders["location"]
           ? null
           : new URL(
               outboundResponseHeaders["location"].startsWith("/")
@@ -1255,13 +1264,20 @@ const start = () => {
                     /^\/+/,
                     ``,
                   )}`
-                : outboundResponseHeaders["location"],
+                : outboundResponseHeaders["location"]
+                    .replace(/^file:\/+/, "file:///")
+                    .replace(/^(http)(s?):\/+/, "$1$2://"),
             );
-        const newPath = !newUrl
-          ? null
-          : newUrl.href.substring(newUrl.origin.length);
-        const newTarget = url.origin;
-        const newTargetUrl = !newUrl ? null : `${newTarget}${newPath}`;
+        const replacedRedirectUrl =
+          !config.replaceResponseBodyUrls || !redirectUrl
+            ? redirectUrl
+            : new URL(
+                replaceTextUsingMapping(
+                  redirectUrl.href,
+                  REPLACEMENT_DIRECTION.INBOUND,
+                  proxyHostnameAndPort,
+                ).replace(/^(logs:|file:)\/+/, ""),
+              );
 
         // phase : response body
         const payloadSource = outboundExchange || outboundHttp1Response;
@@ -1357,7 +1373,7 @@ const start = () => {
               acc[key] = (acc[key] || []).concat(transformedValue);
               return acc;
             }, {}),
-          ...(newTargetUrl ? { location: [newTargetUrl] } : {}),
+          ...(replacedRedirectUrl ? { location: [replacedRedirectUrl] } : {}),
         };
         try {
           Object.entries(responseHeaders).forEach(
