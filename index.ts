@@ -179,11 +179,7 @@ const notifyLogsListener = (data: Record<string, unknown>) => {
   const payload = Buffer.from(Int8Array.from(maskedTextBits).buffer);
   const value = Buffer.concat([header, maskingKey, payload]);
   logsListeners.forEach(logsListener => {
-    try {
-      logsListener.write(value);
-    } catch (e) {
-      // ignore logs that trigger errors in the pipe
-    }
+    logsListener.write(value, "ascii", () => {});
   });
 };
 
@@ -538,7 +534,8 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
       <th scope="col">Method</th>
       <th scope="col">Status</th>
       <th scope="col">Duration</th>
-      <th scope="col">Path</th>
+      <th scope="col">Upstream Path</th>
+      <th scope="col">Downstream Path</th>
     </tr>
   </thead>
   <tbody id="access">
@@ -613,7 +610,8 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
                   '<td scope="col">' + data.method + '</td>' + 
                   '<td scope="col" class="statusCode"><span class="badge bg-secondary">...</span></td>' +
                   '<td scope="col" class="duration">&#x23F1;</td>' +
-                  '<td scope="col">' + data.path + '</td>' + 
+                  '<td scope="col">' + data.upstreamPath + '</td>' + 
+                  '<td scope="col">' + data.downstreamPath + '</td>' + 
                   '</tr>');
           } else if(data.event) {
           document.getElementById("proxy")
@@ -1009,7 +1007,8 @@ const start = () => {
           level: "info",
           protocol: http2IsSupported ? "HTTP/2" : "HTTP1.1",
           method: inboundRequest.method,
-          path: fullPath,
+          upstreamPath: path,
+          downstreamPath: targetUrl.href,
           randomId,
           uniqueHash: "N/A",
         });
@@ -1565,5 +1564,11 @@ const start = () => {
     })
     .listen(config.port);
 };
+
+process.on("error", function (err) {
+  if (err.code === "EPIPE") {
+    log("ignoring EPIPE error", LogLevel.WARNING, EMOJIS.ERROR_5);
+  }
+});
 
 load().then(start);

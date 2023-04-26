@@ -1,6 +1,6 @@
 {
   "name": "local-traffic",
-  "version": "0.0.58",
+  "version": "0.0.59",
   "main": "index.ts",
   "private": false,
   "keywords": [
@@ -30,9 +30,5 @@
   },
   "bin": {
     "local-traffic": "./dist/localTraffic.js"
-  },
-  "volta": {
-    "node": "18.15.0",
-    "npm": "9.2.0"
   }
 }
