@@ -77,6 +77,7 @@ interface LocalConfiguration {
   replaceRequestBodyUrls?: boolean;
   replaceResponseBodyUrls?: boolean;
   dontUseHttp2Downstream?: boolean;
+  dontTranslateLocationHeader?: boolean;
   simpleLogs?: boolean;
   websocket?: boolean;
   disableWebSecurity?: boolean;
@@ -97,6 +98,7 @@ const defaultConfig: LocalConfiguration = {
   replaceRequestBodyUrls: false,
   replaceResponseBodyUrls: false,
   dontUseHttp2Downstream: false,
+  dontTranslateLocationHeader: false,
   simpleLogs: false,
   websocket: true,
   disableWebSecurity: false,
@@ -291,6 +293,18 @@ const onWatch = async () => {
       `response body url ${
         !config.replaceResponseBodyUrls ? "NO " : ""
       }rewriting`,
+      LogLevel.INFO,
+      EMOJIS.REWRITE,
+    );
+  }
+  if (
+    config.dontTranslateLocationHeader !==
+    previousConfig.dontTranslateLocationHeader
+  ) {
+    log(
+      `response location header ${
+        config.dontTranslateLocationHeader ? "NO " : ""
+      }translation`,
       LogLevel.INFO,
       EMOJIS.REWRITE,
     );
@@ -1075,7 +1089,8 @@ const start = () => {
 
           let requestBodyBuffer: Buffer = Buffer.from([]);
           const requestBodyExpected = !(
-            http2WithRequestBody === 0 &&
+            ((config.ssl && http2WithRequestBody === 0) ||
+              (!config.ssl && http1WithRequestBody === 0)) &&
             (inboundRequest.headers["content-length"] === "0" ||
               inboundRequest.headers["content-length"] === undefined)
           );
@@ -1291,6 +1306,14 @@ const start = () => {
                   proxyHostnameAndPort,
                 ).replace(/^(logs:|file:)\/+/, ""),
               );
+        const translatedReplacedRedirectUrl = !redirectUrl
+          ? redirectUrl
+          : replacedRedirectUrl.origin !== redirectUrl.origin ||
+            config.dontTranslateLocationHeader
+          ? replacedRedirectUrl
+          : `${url.origin}${replacedRedirectUrl.href.substring(
+              replacedRedirectUrl.origin.length,
+            )}`;
 
         // phase : response body
         const payloadSource = outboundExchange || outboundHttp1Response;
@@ -1386,7 +1409,9 @@ const start = () => {
               acc[key] = (acc[key] || []).concat(transformedValue);
               return acc;
             }, {}),
-          ...(replacedRedirectUrl ? { location: [replacedRedirectUrl] } : {}),
+          ...(translatedReplacedRedirectUrl
+            ? { location: [translatedReplacedRedirectUrl] }
+            : {}),
         };
         try {
           Object.entries(responseHeaders).forEach(

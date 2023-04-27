@@ -65,6 +65,8 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 
 ## all the options
 
+All boolean settings default to false when unspecified.
+
 - `mapping`: (`{[path: string]: string | {replaceBody: string ; downstreamUrl: string}`) routing rules (required)
 - `ssl` : SSL options
   - `ssl.cert` : (`string`) Certificate (PEM format)
@@ -72,6 +74,7 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 - `port` : (`number`) port number
 - `replaceRequestBodyUrls`: (`boolean`) replace every matching string from the mapping in the request body.
 - `replaceResponseBodyUrls`: (`boolean`) replace every matching string from the mapping in the response body.
+- `dontTranslateLocationHeader`: (`boolean`) when getting a response location header, in case `replaceResponseBodyUrls` does not change the URL, change the origin to the proxy anyway
 - `dontUseHttp2Downstream`: (`boolean`) force calling downstream services in http1.1 only (to save some time)
 - `simpleLogs`: (`boolean`) disable colored logs for text terminals
 - `websocket`: (`boolean`) true to activate websocket connections proxying via sockets. Required for logs UI.
