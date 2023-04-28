@@ -106,7 +106,7 @@ const defaultConfig: LocalConfiguration = {
 
 let config: LocalConfiguration;
 let server: Server;
-let logsListeners: Duplex[] = [];
+let logsListeners: { stream: Duplex; wantsMask: boolean }[] = [];
 const getCurrentTime = (simpleLogs?: boolean) => {
   const date = new Date();
   return `${simpleLogs ? "" : "\u001b[36m"}${`${date.getHours()}`.padStart(
@@ -159,29 +159,54 @@ const log = (text: string, level?: LogLevel, emoji?: string) => {
   });
 };
 
-const notifyLogsListener = (data: Record<string, unknown>) => {
-  if (!logsListeners.length) return;
-  const text = JSON.stringify(data);
+const createWebsocketBufferFrom = (
+  text: string,
+  wantsMask: boolean,
+): Buffer => {
   const mask = Array(4)
     .fill(0)
-    .map(() => Math.floor(Math.random() * (2 << 7)));
+    .map(() => (wantsMask ? Math.floor(Math.random() * (2 << 7)) : 0));
   const maskedTextBits = [...text.substring(0, 2 << 15)].map(
     (c, i) => c.charCodeAt(0) ^ mask[i & 3],
   );
   const length = Math.min((2 << 15) - 1, text.length);
   const header =
     text.length < (2 << 6) - 2
-      ? Buffer.from(Uint8Array.from([(1 << 7) + 1, (1 << 7) + length]).buffer)
+      ? Buffer.from(
+          Uint8Array.from([(1 << 7) + 1, (wantsMask ? 1 << 7 : 0) + length])
+            .buffer,
+        )
       : Buffer.concat([
-          Buffer.from(Uint8Array.from([(1 << 7) + 1, (2 << 7) - 2]).buffer),
+          Buffer.from(
+            Uint8Array.from([
+              (1 << 7) + 1,
+              ((1 << 7) - 2) | (wantsMask ? 1 << 7 : 0),
+            ]).buffer,
+          ),
           Buffer.from(Uint8Array.from([length >> 8]).buffer),
           Buffer.from(Uint8Array.from([length & ((2 << 7) - 1)]).buffer),
         ]);
   const maskingKey = Buffer.from(Int8Array.from(mask).buffer);
   const payload = Buffer.from(Int8Array.from(maskedTextBits).buffer);
-  const value = Buffer.concat([header, maskingKey, payload]);
+  return Buffer.concat(
+    wantsMask ? [header, maskingKey, payload] : [header, payload],
+  );
+};
+
+const notifyLogsListener = (data: Record<string, unknown>) => {
+  if (!logsListeners.length) return;
+  const text = JSON.stringify(data);
+  const wantsMask = new Set(
+    logsListeners.map(logsListener => logsListener.wantsMask),
+  );
+  const bufferWithoutMask =
+    wantsMask.has(false) && createWebsocketBufferFrom(text, false);
+  const bufferWithMask =
+    wantsMask.has(true) && createWebsocketBufferFrom(text, true);
   logsListeners.forEach(logsListener => {
-    logsListener.write(value, "ascii", () => {});
+    logsListener.wantsMask
+      ? logsListener.stream.write(bufferWithMask, "ascii", () => {})
+      : logsListener.stream.write(bufferWithoutMask, "ascii", () => {});
   });
 };
 
@@ -369,7 +394,8 @@ const onWatch = async () => {
     log(`restarting server`, LogLevel.INFO, EMOJIS.RESTART);
     await Promise.all(
       logsListeners.map(
-        logsListener => new Promise(resolve => logsListener.end(resolve)),
+        logsListener =>
+          new Promise(resolve => logsListener.stream.end(resolve)),
       ),
     );
     logsListeners = [];
@@ -1503,10 +1529,15 @@ const start = () => {
         );
         upstreamSocket.on("close", () => {
           logsListeners = logsListeners.filter(
-            oneLogsListener => upstreamSocket !== oneLogsListener,
+            oneLogsListener => upstreamSocket !== oneLogsListener.stream,
           );
         });
-        logsListeners.push(upstreamSocket);
+        logsListeners.push({
+          stream: upstreamSocket,
+          wantsMask: !(
+            request.headers["user-agent"]?.toString() ?? ""
+          ).includes("Chrome"),
+        });
         return;
       }
 
