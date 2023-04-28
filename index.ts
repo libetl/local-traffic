@@ -1590,9 +1590,9 @@ const start = () => {
     .listen(config.port);
 };
 
-process.on("error", function (err) {
-  if (err.code === "EPIPE") {
-    log("ignoring EPIPE error", LogLevel.WARNING, EMOJIS.ERROR_5);
+process.on("error", function (err: ErrorWithErrno) {
+  if (["EPIPE", "ECONNRESET"].includes(err.code)) {
+    log(`ignoring ${err.code} error`, LogLevel.WARNING, EMOJIS.ERROR_5);
   }
 });
 
