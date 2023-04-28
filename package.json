@@ -1,6 +1,6 @@
 {
   "name": "local-traffic",
-  "version": "0.0.60",
+  "version": "0.0.61",
   "main": "index.ts",
   "private": false,
   "keywords": [
