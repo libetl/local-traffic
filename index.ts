@@ -1689,6 +1689,11 @@ const start = () => {
           const read = readWebsocketBuffer(buffer, partialRead);
           if (partialRead === null && read.body.length < read.payloadLength) {
             partialRead = read;
+          } else if (
+            read.body.length >= read.payloadLength &&
+            read.body.length === 0
+          ) {
+            return;
           } else if (read.body.length >= read.payloadLength) {
             partialRead = null;
             let newConfig: LocalConfiguration;
