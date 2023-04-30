@@ -1689,10 +1689,7 @@ const start = () => {
           const read = readWebsocketBuffer(buffer, partialRead);
           if (partialRead === null && read.body.length < read.payloadLength) {
             partialRead = read;
-          } else if (
-            partialRead !== null &&
-            read.body.length >= read.payloadLength
-          ) {
+          } else if (read.body.length >= read.payloadLength) {
             partialRead = null;
             const newConfig = JSON.parse(read.body);
             writeFile(
