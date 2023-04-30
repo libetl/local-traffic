@@ -68,6 +68,17 @@ enum REPLACEMENT_DIRECTION {
   OUTBOUND = "OUTBOUND",
 }
 
+interface WebsocketListener {
+  stream: Duplex;
+  wantsMask: boolean;
+}
+
+interface PartialRead {
+  payloadLength: number;
+  mask: number[];
+  body: string;
+}
+
 interface LocalConfiguration {
   mapping?: {
     [subPath: string]: string | { replaceBody: string; downstreamUrl: string };
@@ -92,6 +103,7 @@ const filename = resolve(
 );
 const defaultConfig: LocalConfiguration = {
   mapping: {
+    "/config/": "config://",
     "/logs/": "logs://",
   },
   port: 8080,
@@ -106,7 +118,8 @@ const defaultConfig: LocalConfiguration = {
 
 let config: LocalConfiguration;
 let server: Server;
-let logsListeners: { stream: Duplex; wantsMask: boolean }[] = [];
+let logsListeners: WebsocketListener[] = [];
+let configListeners: WebsocketListener[] = [];
 const getCurrentTime = (simpleLogs?: boolean) => {
   const date = new Date();
   return `${simpleLogs ? "" : "\u001b[36m"}${`${date.getHours()}`.padStart(
@@ -153,7 +166,7 @@ const log = (text: string, level?: LogLevel, emoji?: string) => {
         : text
     }`,
   );
-  notifyLogsListener({
+  notifyLogsListeners({
     event: simpleLog,
     level: levelToString(level),
   });
@@ -184,7 +197,7 @@ const createWebsocketBufferFrom = (
             ]).buffer,
           ),
           Buffer.from(Uint8Array.from([length >> 8]).buffer),
-          Buffer.from(Uint8Array.from([length & ((2 << 7) - 1)]).buffer),
+          Buffer.from(Uint8Array.from([length & ((1 << 8) - 1)]).buffer),
         ]);
   const maskingKey = Buffer.from(Int8Array.from(mask).buffer);
   const payload = Buffer.from(Int8Array.from(maskedTextBits).buffer);
@@ -193,20 +206,72 @@ const createWebsocketBufferFrom = (
   );
 };
 
-const notifyLogsListener = (data: Record<string, unknown>) => {
-  if (!logsListeners.length) return;
-  const text = JSON.stringify(data);
-  const wantsMask = new Set(
-    logsListeners.map(logsListener => logsListener.wantsMask),
+const readWebsocketBuffer = (
+  buffer: Buffer,
+  partialRead: PartialRead,
+): PartialRead => {
+  if (!partialRead && (buffer.readUInt8(0) & 1) === 0)
+    return { payloadLength: 0, mask: [0, 0, 0, 0], body: "" };
+  const headerSecondByte = partialRead ? 0 : buffer.readUInt8(1);
+  const hasMask = headerSecondByte >> 7;
+  const payloadLengthFirstByte = headerSecondByte & ((1 << 7) - 1);
+  const payloadLength = partialRead
+    ? partialRead.payloadLength
+    : payloadLengthFirstByte !== (1 << 7) - 1
+    ? payloadLengthFirstByte
+    : buffer.readUInt8(2) << (8 + buffer.readUInt8(3));
+  const mask = partialRead
+    ? partialRead.mask
+    : !hasMask
+    ? [0, 0, 0, 0]
+    : Array(4)
+        .fill(0)
+        .map((_, i) => buffer.readUInt8(i + 4));
+  const payloadStart = partialRead ? 0 : hasMask ? 8 : 4;
+  const body = Array(buffer.length - payloadStart)
+    .fill(0)
+    .map((_, i) =>
+      String.fromCharCode(buffer.readUInt8(i + payloadStart) ^ mask[i & 3]),
+    )
+    .join("");
+  return { payloadLength, mask, body: (partialRead?.body ?? "").concat(body) };
+};
+
+const acknowledgeWebsocket = (socket: Duplex, key: string) => {
+  const shasum = createHash("sha1");
+  shasum.update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+  const accept = shasum.digest("base64");
+  socket.allowHalfOpen = true;
+  socket.write(
+    "HTTP/1.1 101 Switching Protocols\r\n" +
+      `date: ${new Date().toUTCString()}\r\n` +
+      "connection: upgrade\r\n" +
+      "upgrade: websocket\r\n" +
+      "server: local\r\n" +
+      `sec-websocket-accept: ${accept}\r\n` +
+      "\r\n",
   );
+};
+
+const notifyConfigListeners = (data: Record<string, unknown>) =>
+  notifyListeners(data, configListeners);
+const notifyLogsListeners = (data: Record<string, unknown>) =>
+  notifyListeners(data, logsListeners);
+const notifyListeners = (
+  data: Record<string, unknown>,
+  listeners: WebsocketListener[],
+) => {
+  if (!listeners.length) return;
+  const text = JSON.stringify(data);
+  const wantsMask = new Set(listeners.map(listener => listener.wantsMask));
   const bufferWithoutMask =
     wantsMask.has(false) && createWebsocketBufferFrom(text, false);
   const bufferWithMask =
     wantsMask.has(true) && createWebsocketBufferFrom(text, true);
-  logsListeners.forEach(logsListener => {
-    logsListener.wantsMask
-      ? logsListener.stream.write(bufferWithMask, "ascii", () => {})
-      : logsListener.stream.write(bufferWithoutMask, "ascii", () => {});
+  listeners.forEach(listener => {
+    listener.wantsMask
+      ? listener.stream.write(bufferWithMask, "ascii", () => {})
+      : listener.stream.write(bufferWithoutMask, "ascii", () => {});
   });
 };
 
@@ -232,6 +297,7 @@ const quickStatus = (thisConfig: LocalConfiguration) => {
       config.disableWebSecurity ? EMOJIS.NO : EMOJIS.SHIELD
     }⎹\u001b[0m`,
   );
+  notifyConfigListeners(thisConfig as Record<string, unknown>);
 };
 
 const load = async (firstTime: boolean = true) =>
@@ -273,12 +339,16 @@ const load = async (firstTime: boolean = true) =>
         firstTime &&
         filename === userHomeConfigFile
       ) {
-        writeFile(filename, JSON.stringify(defaultConfig), fileWriteErr => {
-          if (fileWriteErr)
-            log("config file NOT created", LogLevel.ERROR, EMOJIS.ERROR_4);
-          else log("config file created", LogLevel.INFO, EMOJIS.COLORED);
-          resolve(config);
-        });
+        writeFile(
+          filename,
+          JSON.stringify(defaultConfig, null, 2),
+          fileWriteErr => {
+            if (fileWriteErr)
+              log("config file NOT created", LogLevel.ERROR, EMOJIS.ERROR_4);
+            else log("config file created", LogLevel.INFO, EMOJIS.COLORED);
+            resolve(config);
+          },
+        );
       } else resolve(config);
     }),
   ).then(() => {
@@ -393,12 +463,12 @@ const onWatch = async () => {
   ) {
     log(`restarting server`, LogLevel.INFO, EMOJIS.RESTART);
     await Promise.all(
-      logsListeners.map(
-        logsListener =>
-          new Promise(resolve => logsListener.stream.end(resolve)),
-      ),
+      logsListeners
+        .concat(configListeners)
+        .map(listener => new Promise(resolve => listener.stream.end(resolve))),
     );
     logsListeners = [];
+    configListeners = [];
     const stopped = await Promise.race([
       new Promise(resolve =>
         !server ? resolve(void 0) : server.close(resolve),
@@ -539,13 +609,48 @@ const fileRequest = (url: URL): ClientHttp2Session => {
   } as unknown as ClientHttp2Session;
 };
 
-const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
+const staticPage = (data: string): ClientHttp2Session =>
   ({
     error: null as Error,
     data: null as string | Buffer,
     run: function () {
       return new Promise(resolve => {
-        this.data = `${header(0x1f4fa, "logs", "")}
+        this.data = data;
+        resolve(void 0);
+      });
+    },
+    events: {} as { [name: string]: (...any: any) => any },
+    on: function (name: string, action: (...any: any) => any) {
+      this.events[name] = action;
+      this.run().then(() => {
+        if (name === "response")
+          this.events["response"](
+            {
+              Server: "local",
+              "Content-Type": "text/html",
+            },
+            0,
+          );
+        if (name === "data" && this.data) {
+          this.events["data"](this.data);
+          this.events["end"]();
+        }
+        if (name === "error" && this.error) {
+          this.events["error"](this.error);
+        }
+      });
+      return this;
+    },
+    end: function () {
+      return this;
+    },
+    request: function () {
+      return this;
+    },
+  } as unknown as ClientHttp2Session);
+
+const logsPage = (proxyHostnameAndPort: string) =>
+  staticPage(`${header(0x1f4fa, "logs", "")}
 <nav class="navbar navbar-expand-lg navbar-dark bg-primary nav-fill">
   <div class="container-fluid">
     <ul class="navbar-nav">
@@ -595,8 +700,6 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
 <script type="text/javascript">
     function start() {
       document.getElementById('table-access').style.height =
-        (document.documentElement.clientHeight - 150) + 'px';
-      document.getElementById('table-proxy').style.height =
         (document.documentElement.clientHeight - 150) + 'px';
       const socket = new WebSocket("ws${
         config.ssl ? "s" : ""
@@ -696,39 +799,77 @@ const logsPage = (proxyHostnameAndPort: string): ClientHttp2Session =>
     }
     window.addEventListener("DOMContentLoaded", start);
 </script>
-</body></html>`;
-        resolve(void 0);
-      });
-    },
-    events: {} as { [name: string]: (...any: any) => any },
-    on: function (name: string, action: (...any: any) => any) {
-      this.events[name] = action;
-      this.run().then(() => {
-        if (name === "response")
-          this.events["response"](
-            {
-              Server: "local",
-              "Content-Type": "text/html",
-            },
-            0,
-          );
-        if (name === "data" && this.data) {
-          this.events["data"](this.data);
-          this.events["end"]();
-        }
-        if (name === "error" && this.error) {
-          this.events["error"](this.error);
-        }
-      });
-      return this;
-    },
-    end: function () {
-      return this;
-    },
-    request: function () {
-      return this;
-    },
-  } as unknown as ClientHttp2Session);
+</body></html>`);
+
+const configPage = (proxyHostnameAndPort: string) =>
+  staticPage(`${header(0x1f39b, "config", "")}
+    <link href="https://cdn.jsdelivr.net/npm/jsoneditor/dist/jsoneditor.min.css" rel="stylesheet" type="text/css">
+    <script src="https://cdn.jsdelivr.net/npm/jsoneditor/dist/jsoneditor.min.js"></script>
+    <div id="jsoneditor" style="width: 400px; height: 400px;"></div>
+    <script>
+    // create the editor
+    const container = document.getElementById("jsoneditor")
+    const options = {mode: "code", allowSchemaSuggestions: true, schema: {
+      type: "object",
+      properties: {
+        ${Object.entries({ ...defaultConfig, ssl: { cert: "", key: "" } })
+          .map(
+            ([property, exampleValue]) =>
+              `${property}: {type: "${
+                typeof exampleValue === "number"
+                  ? "integer"
+                  : typeof exampleValue === "string"
+                  ? "string"
+                  : typeof exampleValue === "boolean"
+                  ? "boolean"
+                  : "object"
+              }"}`,
+          )
+          .join(",\n          ")}
+      },
+      required: [],
+      additionalProperties: false
+    }}
+
+    function save() {
+      socket.send(JSON.stringify(editor.get()));
+    }
+
+    const editor = new JSONEditor(container, options);
+    let socket;
+    const initialJson = ${JSON.stringify(config)}
+    editor.set(initialJson)
+    editor.validate();
+    editor.aceEditor.commands.addCommand({
+      name: 'save',
+      bindKey: {win: 'Ctrl-S',  mac: 'Command-S'},
+      exec: save,
+    });
+
+    window.addEventListener("DOMContentLoaded", function() {
+      document.getElementById('jsoneditor').style.height =
+        (document.documentElement.clientHeight - 150) + 'px';
+      document.getElementById('jsoneditor').style.width =
+        parseInt(window.getComputedStyle(
+          document.querySelector('.container')).maxWidth) + 'px';
+      const saveButton = document.createElement('button');
+      saveButton.addEventListener("click", save);
+      saveButton.type="button";
+      saveButton.classList.add("btn");
+      saveButton.classList.add("btn-primary");
+      saveButton.innerHTML="&#x1F4BE;";
+      document.querySelector('.jsoneditor-menu')
+              .appendChild(saveButton);
+      socket = new WebSocket("ws${
+        config.ssl ? "s" : ""
+      }://${proxyHostnameAndPort}/local-traffic-config");
+      socket.onmessage = function(event) {
+        editor.set(JSON.parse(event.data))
+        editor.validate()
+      }
+    });
+    </script>
+  </body></html>`);
 
 const header = (
   icon: number,
@@ -901,6 +1042,7 @@ const replaceTextUsingMapping = (
     .reduce(
       (inProgress, [path, value]) =>
         value.startsWith("logs:") ||
+        value.startsWith("config:") ||
         (path !== "" && !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
           ? inProgress
           : direction === REPLACEMENT_DIRECTION.INBOUND
@@ -1043,7 +1185,7 @@ const start = () => {
 
         let http2IsSupported = !config.dontUseHttp2Downstream;
         const randomId = randomBytes(20).toString("hex");
-        notifyLogsListener({
+        notifyLogsListeners({
           level: "info",
           protocol: http2IsSupported ? "HTTP/2" : "HTTP1.1",
           method: inboundRequest.method,
@@ -1061,6 +1203,8 @@ const start = () => {
             ? fileRequest(targetUrl)
             : target.protocol === "logs:"
             ? logsPage(proxyHostnameAndPort)
+            : target.protocol === "config:"
+            ? configPage(proxyHostnameAndPort)
             : !http2IsSupported
             ? null
             : await Promise.race([
@@ -1228,7 +1372,7 @@ const start = () => {
         const outboundHttp1Response: IncomingMessage =
           !error &&
           !http2IsSupported &&
-          !["file:", "logs:"].includes(target.protocol) &&
+          !["file:", "logs:", "config:"].includes(target.protocol) &&
           (await new Promise(resolve => {
             const outboundHttp1Request: ClientRequest =
               target.protocol === "https:"
@@ -1330,7 +1474,7 @@ const start = () => {
                   redirectUrl.href,
                   REPLACEMENT_DIRECTION.INBOUND,
                   proxyHostnameAndPort,
-                ).replace(/^(logs:|file:)\/+/, ""),
+                ).replace(/^(config:|logs:|file:)\/+/, ""),
               );
         const translatedReplacedRedirectUrl = !redirectUrl
           ? redirectUrl
@@ -1367,6 +1511,7 @@ const start = () => {
           }).then((payloadBuffer: Buffer) => {
             if (!config.replaceResponseBodyUrls) return payloadBuffer;
             if (!payloadBuffer.length) return payloadBuffer;
+            if (target.protocol === "config:") return payloadBuffer;
 
             return replaceBody(payloadBuffer, outboundResponseHeaders, {
               proxyHostnameAndPort,
@@ -1463,7 +1608,7 @@ const start = () => {
         else inboundResponse.end();
         const endTime = hrtime.bigint();
 
-        notifyLogsListener({
+        notifyLogsListeners({
           randomId,
           statusCode,
           protocol: http2IsSupported ? "HTTP/2" : "HTTP1.1",
@@ -1511,21 +1656,9 @@ const start = () => {
       } = determineMapping(request);
 
       if (path === "/local-traffic-logs") {
-        const shasum = createHash("sha1");
-        shasum.update(
-          request.headers["sec-websocket-key"] +
-            "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
-        );
-        const accept = shasum.digest("base64");
-        upstreamSocket.allowHalfOpen = true;
-        upstreamSocket.write(
-          "HTTP/1.1 101 Switching Protocols\r\n" +
-            `date: ${new Date().toUTCString()}\r\n` +
-            "connection: upgrade\r\n" +
-            "upgrade: websocket\r\n" +
-            "server: local\r\n" +
-            `sec-websocket-accept: ${accept}\r\n` +
-            "\r\n",
+        acknowledgeWebsocket(
+          upstreamSocket,
+          request.headers["sec-websocket-key"],
         );
         upstreamSocket.on("close", () => {
           logsListeners = logsListeners.filter(
@@ -1533,6 +1666,52 @@ const start = () => {
           );
         });
         logsListeners.push({
+          stream: upstreamSocket,
+          wantsMask: !(
+            request.headers["user-agent"]?.toString() ?? ""
+          ).includes("Chrome"),
+        });
+        return;
+      }
+
+      if (path === "/local-traffic-config") {
+        acknowledgeWebsocket(
+          upstreamSocket,
+          request.headers["sec-websocket-key"],
+        );
+        upstreamSocket.on("close", () => {
+          configListeners = configListeners.filter(
+            oneConfigListener => upstreamSocket !== oneConfigListener.stream,
+          );
+        });
+        let partialRead = null;
+        upstreamSocket.on("data", buffer => {
+          const read = readWebsocketBuffer(buffer, partialRead);
+          if (partialRead === null && read.body.length < read.payloadLength) {
+            partialRead = read;
+          } else if (
+            partialRead !== null &&
+            read.body.length >= read.payloadLength
+          ) {
+            partialRead = null;
+            const newConfig = JSON.parse(read.body);
+            writeFile(
+              filename,
+              JSON.stringify(newConfig, null, 2),
+              fileWriteErr => {
+                if (fileWriteErr)
+                  log("config file NOT saved", LogLevel.ERROR, EMOJIS.ERROR_4);
+                else
+                  log(
+                    "config file saved... will reload",
+                    LogLevel.INFO,
+                    EMOJIS.COLORED,
+                  );
+              },
+            );
+          }
+        });
+        configListeners.push({
           stream: upstreamSocket,
           wantsMask: !(
             request.headers["user-agent"]?.toString() ?? ""
