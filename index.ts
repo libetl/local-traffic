@@ -1691,7 +1691,17 @@ const start = () => {
             partialRead = read;
           } else if (read.body.length >= read.payloadLength) {
             partialRead = null;
-            const newConfig = JSON.parse(read.body);
+            let newConfig: LocalConfiguration;
+            try {
+              newConfig = JSON.parse(read.body);
+            } catch (e) {
+              log(
+                "config file NOT read, try again later",
+                LogLevel.WARNING,
+                EMOJIS.ERROR_4,
+              );
+              return;
+            }
             writeFile(
               filename,
               JSON.stringify(newConfig, null, 2),
