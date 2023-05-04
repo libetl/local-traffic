@@ -1454,9 +1454,10 @@ const start = () => {
               }),
         );
 
-        const redirectUrl = !outboundResponseHeaders["location"]
-          ? null
-          : new URL(
+        let redirectUrl = null;
+        try {
+          if (outboundResponseHeaders["location"])
+            redirectUrl = new URL(
               outboundResponseHeaders["location"].startsWith("/")
                 ? `${target.href}${outboundResponseHeaders["location"].replace(
                     /^\/+/,
@@ -1466,6 +1467,16 @@ const start = () => {
                     .replace(/^file:\/+/, "file:///")
                     .replace(/^(http)(s?):\/+/, "$1$2://"),
             );
+        } catch (e) {
+          log(
+            `location replacement error ${(
+              outboundResponseHeaders["location"] ?? ""
+            ).slice(-13)}`,
+            LogLevel.WARNING,
+            EMOJIS.ERROR_4,
+          );
+        }
+
         const replacedRedirectUrl =
           !config.replaceResponseBodyUrls || !redirectUrl
             ? redirectUrl
