@@ -805,6 +805,19 @@ const configPage = (proxyHostnameAndPort: string) =>
   staticPage(`${header(0x1f39b, "config", "")}
     <link href="https://cdn.jsdelivr.net/npm/jsoneditor/dist/jsoneditor.min.css" rel="stylesheet" type="text/css">
     <script src="https://cdn.jsdelivr.net/npm/jsoneditor/dist/jsoneditor.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/node-forge/dist/forge.min.js"></script>
+    <div id="ssl-modal" class="modal" tabindex="-1" role="dialog">
+      <div class="modal-dialog" role="document">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">SSL keypair generation in progress</h5>
+          </div>
+          <div class="modal-body">
+            <p>Wait a few seconds or move your mouse to improve the entropy.</p>
+          </div>
+        </div>
+      </div>
+    </div>
     <div id="jsoneditor" style="width: 400px; height: 400px;"></div>
     <script>
     // create the editor
@@ -835,6 +848,33 @@ const configPage = (proxyHostnameAndPort: string) =>
       socket.send(JSON.stringify(editor.get()));
     }
 
+    function generateSslCertificate() {
+      const sslModal = new bootstrap.Modal(document.getElementById('ssl-modal'), {});
+      sslModal.show()
+      setTimeout(function() {
+        const keypair = forge.pki.rsa.generateKeyPair(2048);
+        const certificate = forge.pki.createCertificate();
+        const now = new Date();
+        const fiveYears = new Date(new Date(now).setFullYear(now.getFullYear() + 5));
+        Object.assign(certificate, {
+          publicKey: keypair.publicKey,
+          serialNumber: "01",
+          validity: {
+            notBefore: now,
+            notAfter: fiveYears,
+          },
+        });
+        certificate.sign(keypair.privateKey, forge.md.sha256.create());
+        const key = forge.pki.privateKeyToPem(keypair.privateKey);
+        const cert = forge.pki.certificateToPem(certificate);
+        const existingConfig = editor.get();
+        editor.set({ ...existingConfig, ssl: { key, cert },
+          port: parseInt(("" + existingConfig.port).replace(/(80|[0-9])80$/, '443'))
+        });
+        sslModal.hide();
+      }, 100);
+    }
+
     const editor = new JSONEditor(container, options);
     let socket;
     const initialJson = ${JSON.stringify(config)}
@@ -852,6 +892,14 @@ const configPage = (proxyHostnameAndPort: string) =>
       document.getElementById('jsoneditor').style.width =
         parseInt(window.getComputedStyle(
           document.querySelector('.container')).maxWidth) + 'px';
+      const sslButton = document.createElement('button');
+      sslButton.addEventListener("click", generateSslCertificate);
+      sslButton.type="button";
+      sslButton.classList.add("btn");
+      sslButton.classList.add("btn-primary");
+      sslButton.innerHTML="&#x1F512;";
+      document.querySelector('.jsoneditor-menu')
+              .appendChild(sslButton);
       const saveButton = document.createElement('button');
       saveButton.addEventListener("click", save);
       saveButton.type="button";
