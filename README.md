@@ -5,7 +5,7 @@ That is a secure http/2 (or insecure http1.1) reverse-proxy installed on your ma
 - with 0 transitive dependency
 - with 1 install step
 - with a startup time of a few milliseconds
-- with one 30kb index.js file
+- with one 36kb index.js file
 
 How simple is that ?
 
@@ -54,11 +54,19 @@ npx local-traffic
 
 ## usage
 
+### from command line
+
 ```bash
 npx local-traffic [location-of-the-local-traffic-config-file]
 ```
 
 > When not specified, the location of the config file will be `$HOME/.local-traffic.json`
+
+### from node.js application (>= 0.0.69)
+
+```bash
+ node -e 'const { start } = require("local-traffic"); start({ })'
+ ```
 
 ## how to change mappings to local / non-local
 
