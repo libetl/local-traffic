@@ -1972,7 +1972,7 @@ const update = async (
 
 const mainProgram = argv.filter(
   arg => !["ts-node", "node"].some(pattern => arg.includes(pattern)),
-)[0];
+)[0] ?? "";
 
 const runAsMainProgram =
   mainProgram.toLowerCase().replace(/[-_]/g, '').includes("localtraffic") &&
