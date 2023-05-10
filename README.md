@@ -54,7 +54,7 @@ npx local-traffic
 
 ## usage
 
-### from command line
+### from your terminal, using the command line
 
 ```bash
 npx local-traffic [location-of-the-local-traffic-config-file]
@@ -62,7 +62,7 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 
 > When not specified, the location of the config file will be `$HOME/.local-traffic.json`
 
-### from node.js application (>= 0.0.69)
+### from a node.js application (>= 0.0.69)
 
 ```bash
  node -e 'const { start } = require("local-traffic"); start({ /* configuration goes here */ })'
