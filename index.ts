@@ -1536,7 +1536,7 @@ const serve = async function (
         ? !(http2WithRequestBody ?? true)
         : !http1WithRequestBody,
     });
-  
+
   outboundExchange?.on("error", (thrown: Error) => {
     const httpVersionSupported = (thrown as ErrorWithErrno).errno === -505;
     error = Buffer.from(
@@ -1855,7 +1855,8 @@ const errorListener = (state: State, err: Error) => {
     );
 };
 
-const start = (config: LocalConfiguration): Promise<State> => update({ config }, {});
+const start = (config: LocalConfiguration): Promise<State> =>
+  update({ config: { ...defaultConfig, ...config } }, {});
 
 const update = async (
   currentState: Partial<State>,
