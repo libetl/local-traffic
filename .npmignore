@@ -1,8 +1,9 @@
 index.ts
 tsconfig.json
 yarn.lock
-!dist/localTraffic.js
+!dist/local-traffic.js
 dist/terser.js
 dist/index.js
+test
 .vscode
 .github
