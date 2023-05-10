@@ -65,7 +65,7 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 ### from node.js application (>= 0.0.69)
 
 ```bash
- node -e 'const { start } = require("local-traffic"); start({ /* configuration goes here*/ })'
+ node -e 'const { start } = require("local-traffic"); start({ /* configuration goes here */ })'
  ```
 
 ## how to change mappings to local / non-local
