@@ -1972,7 +1972,7 @@ const update = async (
 };
 
 const mainProgram = argv.filter(
-  arg => !["ts-node", "node", "npx"].some(pattern => arg.includes(pattern)),
+  arg => !["ts-node", "node", "npx", "npm", "exec"].some(pattern => arg.includes(pattern)),
 )[0] ?? "";
 
 const runAsMainProgram =

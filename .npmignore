@@ -1,6 +1,8 @@
 index.ts
 tsconfig.json
 yarn.lock
+renovate.json
+.prettierrc
 !dist/local-traffic.js
 dist/terser.js
 dist/index.js
