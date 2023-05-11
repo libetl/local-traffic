@@ -1,7 +1,7 @@
 {
   "name": "local-traffic",
   "version": "0.0.69",
-  "main": "index.ts",
+  "main": "./dist/local-traffic.js",
   "private": false,
   "keywords": [
     "reverse-proxy",

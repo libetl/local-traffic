@@ -62,7 +62,7 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 
 > When not specified, the location of the config file will be `$HOME/.local-traffic.json`
 
-### from a node.js application (>= 0.0.69)
+### from a node.js application (>= 0.0.70)
 
 ```bash
  node -e 'const { start } = require("local-traffic"); start({ /* configuration goes here */ })'
