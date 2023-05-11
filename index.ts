@@ -118,9 +118,7 @@ interface State {
 const userHomeConfigFile = resolve(env.HOME, ".local-traffic.json");
 const filename = resolve(
   cwd(),
-  argv.slice(-1)[0].endsWith(".json")
-    ? argv.slice(-1)[0]
-    : userHomeConfigFile,
+  argv.slice(-1)[0].endsWith(".json") ? argv.slice(-1)[0] : userHomeConfigFile,
 );
 const defaultConfig: LocalConfiguration = {
   mapping: {
@@ -142,16 +140,18 @@ const getCurrentTime = (simpleLogs?: boolean) => {
   return `${simpleLogs ? "" : "\u001b[36m"}${`${date.getHours()}`.padStart(
     2,
     "0",
-  )}${simpleLogs ? ":" : "\u001b[33m:\u001b[36m"
-    }${`${date.getMinutes()}`.padStart(2, "0")}${simpleLogs ? ":" : "\u001b[33m:\u001b[36m"
-    }${`${date.getSeconds()}`.padStart(2, "0")}${simpleLogs ? "" : "\u001b[0m"}`;
+  )}${
+    simpleLogs ? ":" : "\u001b[33m:\u001b[36m"
+  }${`${date.getMinutes()}`.padStart(2, "0")}${
+    simpleLogs ? ":" : "\u001b[33m:\u001b[36m"
+  }${`${date.getSeconds()}`.padStart(2, "0")}${simpleLogs ? "" : "\u001b[0m"}`;
 };
 const levelToString = (level: LogLevel) =>
   level === LogLevel.ERROR
     ? "error"
     : level === LogLevel.WARNING
-      ? "warning"
-      : "info";
+    ? "warning"
+    : "info";
 const log = function (
   state: Partial<State>,
   text: string,
@@ -161,26 +161,28 @@ const log = function (
   const simpleLog =
     state?.config?.simpleLogs || state?.logsListeners?.length
       ? text
-        .replace(/⎸/g, "|")
-        .replace(/⎹/g, "|")
-        .replace(/\u001b\[[^m]*m/g, "")
-        .replace(new RegExp(EMOJIS.INBOUND, "g"), "inbound:")
-        .replace(new RegExp(EMOJIS.PORT, "g"), "port:")
-        .replace(new RegExp(EMOJIS.OUTBOUND, "g"), "outbound:")
-        .replace(new RegExp(EMOJIS.RULES, "g"), "rules:")
-        .replace(new RegExp(EMOJIS.NO, "g"), "")
-        .replace(new RegExp(EMOJIS.REWRITE, "g"), "+rewrite")
-        .replace(new RegExp(EMOJIS.WEBSOCKET, "g"), "websocket")
-        .replace(new RegExp(EMOJIS.SHIELD, "g"), "web-security")
-        .replace(/\|+/g, "|")
+          .replace(/⎸/g, "|")
+          .replace(/⎹/g, "|")
+          .replace(/\u001b\[[^m]*m/g, "")
+          .replace(new RegExp(EMOJIS.INBOUND, "g"), "inbound:")
+          .replace(new RegExp(EMOJIS.PORT, "g"), "port:")
+          .replace(new RegExp(EMOJIS.OUTBOUND, "g"), "outbound:")
+          .replace(new RegExp(EMOJIS.RULES, "g"), "rules:")
+          .replace(new RegExp(EMOJIS.NO, "g"), "")
+          .replace(new RegExp(EMOJIS.REWRITE, "g"), "+rewrite")
+          .replace(new RegExp(EMOJIS.WEBSOCKET, "g"), "websocket")
+          .replace(new RegExp(EMOJIS.SHIELD, "g"), "web-security")
+          .replace(/\|+/g, "|")
       : text;
 
   console.log(
-    `${getCurrentTime(state?.config?.simpleLogs)} ${state?.config?.simpleLogs
-      ? simpleLog
-      : level
-        ? `\u001b[48;5;${level}m⎸    ${!stdout.isTTY ? "" : emoji || ""
-        }  ${text.padEnd(40)} ⎹\u001b[0m`
+    `${getCurrentTime(state?.config?.simpleLogs)} ${
+      state?.config?.simpleLogs
+        ? simpleLog
+        : level
+        ? `\u001b[48;5;${level}m⎸    ${
+            !stdout.isTTY ? "" : emoji || ""
+          }  ${text.padEnd(40)} ⎹\u001b[0m`
         : text
     }`,
   );
@@ -204,19 +206,19 @@ const createWebsocketBufferFrom = (
   const header =
     text.length < (2 << 6) - 2
       ? Buffer.from(
-        Uint8Array.from([(1 << 7) + 1, (wantsMask ? 1 << 7 : 0) + length])
-          .buffer,
-      )
+          Uint8Array.from([(1 << 7) + 1, (wantsMask ? 1 << 7 : 0) + length])
+            .buffer,
+        )
       : Buffer.concat([
-        Buffer.from(
-          Uint8Array.from([
-            (1 << 7) + 1,
-            ((1 << 7) - 2) | (wantsMask ? 1 << 7 : 0),
-          ]).buffer,
-        ),
-        Buffer.from(Uint8Array.from([length >> 8]).buffer),
-        Buffer.from(Uint8Array.from([length & ((1 << 8) - 1)]).buffer),
-      ]);
+          Buffer.from(
+            Uint8Array.from([
+              (1 << 7) + 1,
+              ((1 << 7) - 2) | (wantsMask ? 1 << 7 : 0),
+            ]).buffer,
+          ),
+          Buffer.from(Uint8Array.from([length >> 8]).buffer),
+          Buffer.from(Uint8Array.from([length & ((1 << 8) - 1)]).buffer),
+        ]);
   const maskingKey = Buffer.from(Int8Array.from(mask).buffer);
   const payload = Buffer.from(Int8Array.from(maskedTextBits).buffer);
   return Buffer.concat(
@@ -236,13 +238,13 @@ const readWebsocketBuffer = (
   const payloadLength = partialRead
     ? partialRead.payloadLength
     : payloadLengthFirstByte !== (1 << 7) - 1
-      ? payloadLengthFirstByte
-      : buffer.readUInt8(2) << (8 + buffer.readUInt8(3));
+    ? payloadLengthFirstByte
+    : buffer.readUInt8(2) << (8 + buffer.readUInt8(3));
   const mask = partialRead
     ? partialRead.mask
     : !hasMask
-      ? [0, 0, 0, 0]
-      : Array(4)
+    ? [0, 0, 0, 0]
+    : Array(4)
         .fill(0)
         .map((_, i) => buffer.readUInt8(i + 4));
   const payloadStart = partialRead ? 0 : hasMask ? 8 : 4;
@@ -262,12 +264,12 @@ const acknowledgeWebsocket = (socket: Duplex, key: string) => {
   socket.allowHalfOpen = true;
   socket.write(
     "HTTP/1.1 101 Switching Protocols\r\n" +
-    `date: ${new Date().toUTCString()}\r\n` +
-    "connection: upgrade\r\n" +
-    "upgrade: websocket\r\n" +
-    "server: local\r\n" +
-    `sec-websocket-accept: ${accept}\r\n` +
-    "\r\n",
+      `date: ${new Date().toUTCString()}\r\n` +
+      "connection: upgrade\r\n" +
+      "upgrade: websocket\r\n" +
+      "server: local\r\n" +
+      `sec-websocket-accept: ${accept}\r\n` +
+      "\r\n",
   );
 };
 
@@ -303,11 +305,11 @@ const notifyListeners = (
     if (listener.stream.closed || listener.stream.errored) return;
     listener.wantsMask
       ? listener.stream.write(bufferWithMask, "ascii", () =>
-        streamError(listener),
-      )
+          streamError(listener),
+        )
       : listener.stream.write(bufferWithoutMask, "ascii", () =>
-        streamError(listener),
-      );
+          streamError(listener),
+        );
   });
 };
 
@@ -315,16 +317,22 @@ const quickStatus = function (this: State) {
   this.log(
     `\u001b[48;5;52m⎸${EMOJIS.PORT} ${this.config.port
       .toString()
-      .padStart(5)} \u001b[48;5;53m⎸${EMOJIS.OUTBOUND} ${this.config.dontUseHttp2Downstream ? "H1.1" : "H/2 "
-    }${this.config.replaceRequestBodyUrls ? EMOJIS.REWRITE : "  "}⎹⎸${EMOJIS.INBOUND
-    } ${this.config.ssl ? "H/2 " : "H1.1"}${this.config.replaceResponseBodyUrls ? EMOJIS.REWRITE : "  "
+      .padStart(5)} \u001b[48;5;53m⎸${EMOJIS.OUTBOUND} ${
+      this.config.dontUseHttp2Downstream ? "H1.1" : "H/2 "
+    }${this.config.replaceRequestBodyUrls ? EMOJIS.REWRITE : "  "}⎹⎸${
+      EMOJIS.INBOUND
+    } ${this.config.ssl ? "H/2 " : "H1.1"}${
+      this.config.replaceResponseBodyUrls ? EMOJIS.REWRITE : "  "
     }⎹\u001b[48;5;54m\u001b[48;5;55m⎸${EMOJIS.RULES}${Object.keys(
       this.config.mapping,
     )
       .length.toString()
-      .padStart(3)}⎹\u001b[48;5;56m⎸${this.config.websocket ? EMOJIS.WEBSOCKET : EMOJIS.NO
-    }⎹\u001b[48;5;57m⎸${!this.config.simpleLogs ? EMOJIS.COLORED : EMOJIS.NO
-    }⎹\u001b[48;5;93m⎸${this.config.disableWebSecurity ? EMOJIS.NO : EMOJIS.SHIELD
+      .padStart(3)}⎹\u001b[48;5;56m⎸${
+      this.config.websocket ? EMOJIS.WEBSOCKET : EMOJIS.NO
+    }⎹\u001b[48;5;57m⎸${
+      !this.config.simpleLogs ? EMOJIS.COLORED : EMOJIS.NO
+    }⎹\u001b[48;5;93m⎸${
+      this.config.disableWebSecurity ? EMOJIS.NO : EMOJIS.SHIELD
     }⎹\u001b[0m`,
   );
   this.notifyConfigListeners(this.config as Record<string, unknown>);
@@ -414,7 +422,8 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
   }
   if (config.replaceRequestBodyUrls !== previousConfig.replaceRequestBodyUrls) {
     state.log(
-      `request body url ${!config.replaceRequestBodyUrls ? "NO " : ""
+      `request body url ${
+        !config.replaceRequestBodyUrls ? "NO " : ""
       }rewriting`,
       LogLevel.INFO,
       EMOJIS.REWRITE,
@@ -424,7 +433,8 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
     config.replaceResponseBodyUrls !== previousConfig.replaceResponseBodyUrls
   ) {
     state.log(
-      `response body url ${!config.replaceResponseBodyUrls ? "NO " : ""
+      `response body url ${
+        !config.replaceResponseBodyUrls ? "NO " : ""
       }rewriting`,
       LogLevel.INFO,
       EMOJIS.REWRITE,
@@ -435,7 +445,8 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
     previousConfig.dontTranslateLocationHeader
   ) {
     state.log(
-      `response location header ${config.dontTranslateLocationHeader ? "NO " : ""
+      `response location header ${
+        config.dontTranslateLocationHeader ? "NO " : ""
       }translation`,
       LogLevel.INFO,
       EMOJIS.REWRITE,
@@ -545,63 +556,65 @@ const fileRequest = (url: URL): ClientHttp2Session => {
       return this.hasRun
         ? Promise.resolve()
         : new Promise(promiseResolve =>
-          readFile(file, (error, data) => {
-            this.hasRun = true;
-            if (!error || error.code !== "EISDIR") {
-              this.error = error;
-              this.data = data;
-              promiseResolve(void 0);
-              return;
-            }
-            readdir(file, (readDirError, filelist) => {
-              this.error = readDirError;
-              this.data = filelist;
-              if (readDirError) {
+            readFile(file, (error, data) => {
+              this.hasRun = true;
+              if (!error || error.code !== "EISDIR") {
+                this.error = error;
+                this.data = data;
                 promiseResolve(void 0);
                 return;
               }
-              Promise.all(
-                filelist.map(
-                  file =>
-                    new Promise(innerResolve =>
-                      lstat(resolve(url.pathname, file), (err, stats) =>
-                        innerResolve([file, stats, err]),
+              readdir(file, (readDirError, filelist) => {
+                this.error = readDirError;
+                this.data = filelist;
+                if (readDirError) {
+                  promiseResolve(void 0);
+                  return;
+                }
+                Promise.all(
+                  filelist.map(
+                    file =>
+                      new Promise(innerResolve =>
+                        lstat(resolve(url.pathname, file), (err, stats) =>
+                          innerResolve([file, stats, err]),
+                        ),
                       ),
-                    ),
-                ),
-              ).then(filesWithTypes => {
-                const entries = filesWithTypes
-                  .filter(entry => !entry[2] && entry[1].isDirectory())
-                  .concat(
-                    filesWithTypes.filter(
-                      entry => !entry[2] && entry[1].isFile(),
-                    ),
-                  );
-                this.data = `${header(
-                  0x1f4c2,
-                  "directory",
-                  url.href,
-                )}<p>Directory content of <i>${url.href.replace(
-                  /\//g,
-                  "&#x002F;",
-                )}</i></p><ul class="list-group"><li class="list-group-item">&#x1F4C1;<a href="${url.pathname.endsWith("/") ? ".." : "."
+                  ),
+                ).then(filesWithTypes => {
+                  const entries = filesWithTypes
+                    .filter(entry => !entry[2] && entry[1].isDirectory())
+                    .concat(
+                      filesWithTypes.filter(
+                        entry => !entry[2] && entry[1].isFile(),
+                      ),
+                    );
+                  this.data = `${header(
+                    0x1f4c2,
+                    "directory",
+                    url.href,
+                  )}<p>Directory content of <i>${url.href.replace(
+                    /\//g,
+                    "&#x002F;",
+                  )}</i></p><ul class="list-group"><li class="list-group-item">&#x1F4C1;<a href="${
+                    url.pathname.endsWith("/") ? ".." : "."
                   }">&lt;parent&gt;</a></li>${entries
                     .filter(entry => !entry[2])
                     .map(entry => {
                       const type = entry[1].isDirectory() ? 0x1f4c1 : 0x1f4c4;
                       return `<li class="list-group-item">&#x${type.toString(
                         16,
-                      )};<a href="${url.pathname.endsWith("/")
-                        ? ""
-                        : `${url.pathname.split("/").slice(-1)[0]}/`
-                        }${entry[0]}">${entry[0]}</a></li>`;
+                      )};<a href="${
+                        url.pathname.endsWith("/")
+                          ? ""
+                          : `${url.pathname.split("/").slice(-1)[0]}/`
+                      }${entry[0]}">${entry[0]}</a></li>`;
                     })
                     .join("\n")}</li></ul></body></html>`;
-                promiseResolve(void 0);
+                  promiseResolve(void 0);
+                });
               });
-            });
-          }),
-        );
+            }),
+          );
     },
     events: {} as { [name: string]: (...any: any) => any },
     on: function (name: string, action: (...any: any) => any) {
@@ -611,9 +624,9 @@ const fileRequest = (url: URL): ClientHttp2Session => {
           this.events["response"](
             file.endsWith(".svg")
               ? {
-                Server: "local",
-                "Content-Type": "image/svg+xml",
-              }
+                  Server: "local",
+                  "Content-Type": "image/svg+xml",
+                }
               : { Server: "local" },
             0,
           );
@@ -637,44 +650,44 @@ const fileRequest = (url: URL): ClientHttp2Session => {
 };
 
 const staticPage = (data: string): ClientHttp2Session =>
-({
-  error: null as Error,
-  data: null as string | Buffer,
-  run: function () {
-    return new Promise(resolve => {
-      this.data = data;
-      resolve(void 0);
-    });
-  },
-  events: {} as { [name: string]: (...any: any) => any },
-  on: function (name: string, action: (...any: any) => any) {
-    this.events[name] = action;
-    this.run().then(() => {
-      if (name === "response")
-        this.events["response"](
-          {
-            Server: "local",
-            "Content-Type": "text/html",
-          },
-          0,
-        );
-      if (name === "data" && this.data) {
-        this.events["data"](this.data);
-        this.events["end"]();
-      }
-      if (name === "error" && this.error) {
-        this.events["error"](this.error);
-      }
-    });
-    return this;
-  },
-  end: function () {
-    return this;
-  },
-  request: function () {
-    return this;
-  },
-} as unknown as ClientHttp2Session);
+  ({
+    error: null as Error,
+    data: null as string | Buffer,
+    run: function () {
+      return new Promise(resolve => {
+        this.data = data;
+        resolve(void 0);
+      });
+    },
+    events: {} as { [name: string]: (...any: any) => any },
+    on: function (name: string, action: (...any: any) => any) {
+      this.events[name] = action;
+      this.run().then(() => {
+        if (name === "response")
+          this.events["response"](
+            {
+              Server: "local",
+              "Content-Type": "text/html",
+            },
+            0,
+          );
+        if (name === "data" && this.data) {
+          this.events["data"](this.data);
+          this.events["end"]();
+        }
+        if (name === "error" && this.error) {
+          this.events["error"](this.error);
+        }
+      });
+      return this;
+    },
+    end: function () {
+      return this;
+    },
+    request: function () {
+      return this;
+    },
+  } as unknown as ClientHttp2Session);
 
 const logsPage = (proxyHostnameAndPort: string, ssl: boolean) =>
   staticPage(`${header(0x1f4fa, "logs", "")}
@@ -728,8 +741,9 @@ const logsPage = (proxyHostnameAndPort: string, ssl: boolean) =>
     function start() {
       document.getElementById('table-access').style.height =
         (document.documentElement.clientHeight - 150) + 'px';
-      const socket = new WebSocket("ws${ssl ? "s" : ""
-    }://${proxyHostnameAndPort}/local-traffic-logs");
+      const socket = new WebSocket("ws${
+        ssl ? "s" : ""
+      }://${proxyHostnameAndPort}/local-traffic-logs");
       socket.onmessage = function(event) {
         let data = event.data
         let uniqueHash;
@@ -852,18 +866,19 @@ const configPage = (proxyHostnameAndPort: string, config: LocalConfiguration) =>
       type: "object",
       properties: {
         ${Object.entries({ ...defaultConfig, ssl: { cert: "", key: "" } })
-      .map(
-        ([property, exampleValue]) =>
-          `${property}: {type: "${typeof exampleValue === "number"
-            ? "integer"
-            : typeof exampleValue === "string"
-              ? "string"
-              : typeof exampleValue === "boolean"
-                ? "boolean"
-                : "object"
-          }"}`,
-      )
-      .join(",\n          ")}
+          .map(
+            ([property, exampleValue]) =>
+              `${property}: {type: "${
+                typeof exampleValue === "number"
+                  ? "integer"
+                  : typeof exampleValue === "string"
+                  ? "string"
+                  : typeof exampleValue === "boolean"
+                  ? "boolean"
+                  : "object"
+              }"}`,
+          )
+          .join(",\n          ")}
       },
       required: [],
       additionalProperties: false
@@ -933,8 +948,9 @@ const configPage = (proxyHostnameAndPort: string, config: LocalConfiguration) =>
       saveButton.innerHTML="&#x1F4BE;";
       document.querySelector('.jsoneditor-menu')
               .appendChild(saveButton);
-      socket = new WebSocket("ws${config.ssl ? "s" : ""
-    }://${proxyHostnameAndPort}/local-traffic-config");
+      socket = new WebSocket("ws${
+        config.ssl ? "s" : ""
+      }://${proxyHostnameAndPort}/local-traffic-config");
       socket.onmessage = function(event) {
         editor.set(JSON.parse(event.data))
         editor.validate()
@@ -954,10 +970,11 @@ const errorPage = (
   &#x24D8;&nbsp;This is not an error from the downstream service.
 </div>
 <div class="alert alert-danger" role="alert">
-<pre><code>${thrown.stack || `<i>${thrown.name} : ${thrown.message}</i>`}${(thrown as ErrorWithErrno).errno
+<pre><code>${thrown.stack || `<i>${thrown.name} : ${thrown.message}</i>`}${
+  (thrown as ErrorWithErrno).errno
     ? `<br/>(code : ${(thrown as ErrorWithErrno).errno})`
     : ""
-  }</code></pre>
+}</code></pre>
 </div>
 More information about the request :
 <table class="table">
@@ -1000,14 +1017,14 @@ const replaceBody = async (
         format === "gzip" || format === "x-gzip"
           ? gunzip
           : format === "deflate"
-            ? inflate
-            : format === "br"
-              ? brotliDecompress
-              : format === "identity" || format === ""
-                ? (input: Buffer, callback: (err?: Error, data?: Buffer) => void) => {
-                  callback(null, input);
-                }
-                : null;
+          ? inflate
+          : format === "br"
+          ? brotliDecompress
+          : format === "identity" || format === ""
+          ? (input: Buffer, callback: (err?: Error, data?: Buffer) => void) => {
+              callback(null, input);
+            }
+          : null;
       if (method === null) {
         throw new Error(`${format} compression not supported by the proxy`);
       }
@@ -1039,15 +1056,16 @@ const replaceBody = async (
       return !willReplace
         ? uncompressedBuffer
         : !parameters.replaceResponseBodyUrls
-          ? uncompressedBuffer.toString()
-          : replaceTextUsingMapping(uncompressedBuffer.toString(), {
+        ? uncompressedBuffer.toString()
+        : replaceTextUsingMapping(uncompressedBuffer.toString(), {
             direction: parameters.direction,
             proxyHostnameAndPort: parameters.proxyHostnameAndPort,
             ssl: parameters.ssl,
             mapping: parameters.mapping,
           }).replace(
             /\?protocol=wss?%3A&hostname=[^&]+&port=[0-9]+&pathname=/g,
-            `?protocol=ws${parameters.ssl ? "s" : ""}%3A&hostname=${parameters.proxyHostname
+            `?protocol=ws${parameters.ssl ? "s" : ""}%3A&hostname=${
+              parameters.proxyHostname
             }&port=${parameters.port}&pathname=${encodeURIComponent(
               parameters.key.replace(/\/+$/, ""),
             )}`,
@@ -1062,17 +1080,17 @@ const replaceBody = async (
             format === "gzip" || format === "x-gzip"
               ? gzip
               : format === "deflate"
-                ? deflate
-                : format === "br"
-                  ? brotliCompress
-                  : format === "identity" || format === ""
-                    ? (
-                      input: Buffer,
-                      callback: (err?: Error, data?: Buffer) => void,
-                    ) => {
-                      callback(null, input);
-                    }
-                    : null;
+              ? deflate
+              : format === "br"
+              ? brotliCompress
+              : format === "identity" || format === ""
+              ? (
+                  input: Buffer,
+                  callback: (err?: Error, data?: Buffer) => void,
+                ) => {
+                  callback(null, input);
+                }
+              : null;
           if (method === null)
             throw new Error(`${format} compression not supported by the proxy`);
 
@@ -1110,11 +1128,11 @@ const replaceTextUsingMapping = (
     .reduce(
       (inProgress, [path, value]) =>
         value.startsWith("logs:") ||
-          value.startsWith("config:") ||
-          (path !== "" && !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
+        value.startsWith("config:") ||
+        (path !== "" && !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
           ? inProgress
           : direction === REPLACEMENT_DIRECTION.INBOUND
-            ? inProgress.replace(
+          ? inProgress.replace(
               new RegExp(
                 value
                   .replace(/^(file|logs):\/\//, "")
@@ -1127,7 +1145,7 @@ const replaceTextUsingMapping = (
                 "",
               )}/`,
             )
-            : inProgress
+          : inProgress
               .split(
                 `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path.replace(
                   /\/+$/,
@@ -1178,16 +1196,18 @@ const determineMapping = (
   ).replace(/:.*/, "");
   const proxyHostnameAndPort =
     (inboundRequest.headers[":authority"] as string) ||
-    `${inboundRequest.headers.host}${inboundRequest.headers.host.match(/:[0-9]+$/)
-      ? ""
-      : parameters.port === 80 && !parameters.ssl
+    `${inboundRequest.headers.host}${
+      inboundRequest.headers.host.match(/:[0-9]+$/)
+        ? ""
+        : parameters.port === 80 && !parameters.ssl
         ? ""
         : parameters.port === 443 && parameters.ssl
-          ? ""
-          : `:${parameters.port ?? 8080}`
+        ? ""
+        : `:${parameters.port ?? 8080}`
     }`;
   const url = new URL(
-    `http${parameters.ssl ? "s" : ""}://${proxyHostnameAndPort}${inboundRequest.url
+    `http${parameters.ssl ? "s" : ""}://${proxyHostnameAndPort}${
+      inboundRequest.url
     }`,
   );
   const path = url.href.substring(url.origin.length);
@@ -1277,11 +1297,12 @@ const websocketServe = function (
   }
 
   const target = new URL(
-    `${targetWithForcedPrefix.protocol}//${targetWithForcedPrefix.host}${request.url.endsWith("/_next/webpack-hmr")
-      ? request.url
-      : request.url
-        .replace(new RegExp(`^${key}`, "g"), "")
-        .replace(/^\/*/, "/")
+    `${targetWithForcedPrefix.protocol}//${targetWithForcedPrefix.host}${
+      request.url.endsWith("/_next/webpack-hmr")
+        ? request.url
+        : request.url
+            .replace(new RegExp(`^${key}`, "g"), "")
+            .replace(/^\/*/, "/")
     }`,
   );
   const downstreamRequestOptions: RequestOptions = {
@@ -1302,25 +1323,27 @@ const websocketServe = function (
   downstreamRequest.end();
   downstreamRequest.on("error", error => {
     state.log(
-      `websocket request has errored ${(error as ErrorWithErrno).errno
-        ? `(${(error as ErrorWithErrno).errno})`
-        : ""
+      `websocket request has errored ${
+        (error as ErrorWithErrno).errno
+          ? `(${(error as ErrorWithErrno).errno})`
+          : ""
       }`,
       LogLevel.WARNING,
       EMOJIS.WEBSOCKET,
     );
   });
   downstreamRequest.on("upgrade", (response, downstreamSocket) => {
-    const upgradeResponse = `HTTP/${response.httpVersion} ${response.statusCode
-      } ${response.statusMessage}\r\n${Object.entries(response.headers)
-        .flatMap(([key, value]) =>
-          (!Array.isArray(value) ? [value] : value).map(oneValue => [
-            key,
-            oneValue,
-          ]),
-        )
-        .map(([key, value]) => `${key}: ${value}\r\n`)
-        .join("")}\r\n`;
+    const upgradeResponse = `HTTP/${response.httpVersion} ${
+      response.statusCode
+    } ${response.statusMessage}\r\n${Object.entries(response.headers)
+      .flatMap(([key, value]) =>
+        (!Array.isArray(value) ? [value] : value).map(oneValue => [
+          key,
+          oneValue,
+        ]),
+      )
+      .map(([key, value]) => `${key}: ${value}\r\n`)
+      .join("")}\r\n`;
     upstreamSocket.write(upgradeResponse);
     upstreamSocket.allowHalfOpen = true;
     downstreamSocket.allowHalfOpen = true;
@@ -1328,9 +1351,10 @@ const websocketServe = function (
     upstreamSocket.on("data", data => downstreamSocket.write(data));
     downstreamSocket.on("error", error => {
       state.log(
-        `downstream socket has errored ${(error as ErrorWithErrno).errno
-          ? `(${(error as ErrorWithErrno).errno})`
-          : ""
+        `downstream socket has errored ${
+          (error as ErrorWithErrno).errno
+            ? `(${(error as ErrorWithErrno).errno})`
+            : ""
         }`,
         LogLevel.WARNING,
         EMOJIS.WEBSOCKET,
@@ -1338,9 +1362,10 @@ const websocketServe = function (
     });
     upstreamSocket.on("error", error => {
       state.log(
-        `upstream socket has errored ${(error as ErrorWithErrno).errno
-          ? `(${(error as ErrorWithErrno).errno})`
-          : ""
+        `upstream socket has errored ${
+          (error as ErrorWithErrno).errno
+            ? `(${(error as ErrorWithErrno).errno})`
+            : ""
         }`,
         LogLevel.WARNING,
         EMOJIS.WEBSOCKET,
@@ -1364,7 +1389,8 @@ const serve = async function (
           new Error(`client must supply a 'host' header`),
           "proxy",
           new URL(
-            `http${state.config.ssl ? "s" : ""}://unknowndomain${inboundRequest.url
+            `http${state.config.ssl ? "s" : ""}://unknowndomain${
+              inboundRequest.url
             }`,
           ),
         ),
@@ -1417,38 +1443,38 @@ const serve = async function (
     target.protocol === "file:"
       ? fileRequest(targetUrl)
       : target.protocol === "logs:"
-        ? logsPage(proxyHostnameAndPort, !!state.config.ssl)
-        : target.protocol === "config:"
-          ? configPage(proxyHostnameAndPort, state.config)
-          : !http2IsSupported
-            ? null
-            : await Promise.race([
-              new Promise<ClientHttp2Session>(resolve => {
-                const result = connect(
-                  targetUrl,
-                  {
-                    rejectUnauthorized: false,
-                    protocol: target.protocol,
-                  } as SecureClientSessionOptions,
-                  (_, socketPath) => {
-                    http2IsSupported =
-                      http2IsSupported && !!(socketPath as any).alpnProtocol;
-                    resolve(!http2IsSupported ? null : result);
-                  },
-                );
-                (result as unknown as Http2Session).on("error", (thrown: Error) => {
-                  error =
-                    http2IsSupported &&
-                    Buffer.from(errorPage(thrown, "connection", url, targetUrl));
-                });
-              }),
-              new Promise<ClientHttp2Session>(resolve =>
-                setTimeout(() => {
-                  http2IsSupported = false;
-                  resolve(null);
-                }, 3000),
-              ),
-            ]);
+      ? logsPage(proxyHostnameAndPort, !!state.config.ssl)
+      : target.protocol === "config:"
+      ? configPage(proxyHostnameAndPort, state.config)
+      : !http2IsSupported
+      ? null
+      : await Promise.race([
+          new Promise<ClientHttp2Session>(resolve => {
+            const result = connect(
+              targetUrl,
+              {
+                rejectUnauthorized: false,
+                protocol: target.protocol,
+              } as SecureClientSessionOptions,
+              (_, socketPath) => {
+                http2IsSupported =
+                  http2IsSupported && !!(socketPath as any).alpnProtocol;
+                resolve(!http2IsSupported ? null : result);
+              },
+            );
+            (result as unknown as Http2Session).on("error", (thrown: Error) => {
+              error =
+                http2IsSupported &&
+                Buffer.from(errorPage(thrown, "connection", url, targetUrl));
+            });
+          }),
+          new Promise<ClientHttp2Session>(resolve =>
+            setTimeout(() => {
+              http2IsSupported = false;
+              resolve(null);
+            }, 3000),
+          ),
+        ]);
   if (!(error instanceof Buffer)) error = null;
 
   const http1WithRequestBody = (inboundRequest as IncomingMessage)
@@ -1543,10 +1569,10 @@ const serve = async function (
       errorPage(
         thrown,
         "stream" +
-        (httpVersionSupported
-          ? " (error -505 usually means that the downstream service " +
-          "does not support this http version)"
-          : ""),
+          (httpVersionSupported
+            ? " (error -505 usually means that the downstream service " +
+              "does not support this http version)"
+            : ""),
         url,
         targetUrl,
       ),
@@ -1642,15 +1668,15 @@ const serve = async function (
   }>(resolve =>
     outboundExchange
       ? outboundExchange.on("response", headers => {
-        resolve({
-          outboundResponseHeaders: headers,
-        });
-      })
+          resolve({
+            outboundResponseHeaders: headers,
+          });
+        })
       : !outboundExchange && outboundHttp1Response
-        ? resolve({
+      ? resolve({
           outboundResponseHeaders: outboundHttp1Response.headers,
         })
-        : resolve({
+      : resolve({
           outboundResponseHeaders: {},
         }),
   );
@@ -1661,12 +1687,12 @@ const serve = async function (
       redirectUrl = new URL(
         outboundResponseHeaders["location"].startsWith("/")
           ? `${target.href}${outboundResponseHeaders["location"].replace(
-            /^\/+/,
-            ``,
-          )}`
+              /^\/+/,
+              ``,
+            )}`
           : outboundResponseHeaders["location"]
-            .replace(/^file:\/+/, "file:///")
-            .replace(/^(http)(s?):\/+/, "$1$2://"),
+              .replace(/^file:\/+/, "file:///")
+              .replace(/^(http)(s?):\/+/, "$1$2://"),
       );
   } catch (e) {
     state.log(
@@ -1682,19 +1708,19 @@ const serve = async function (
     !state.config.replaceResponseBodyUrls || !redirectUrl
       ? redirectUrl
       : new URL(
-        replaceTextUsingMapping(redirectUrl.href, {
-          direction: REPLACEMENT_DIRECTION.INBOUND,
-          proxyHostnameAndPort,
-          ssl: !!state.config.ssl,
-          mapping: state.config.mapping,
-        }).replace(/^(config:|logs:|file:)\/+/, ""),
-      );
+          replaceTextUsingMapping(redirectUrl.href, {
+            direction: REPLACEMENT_DIRECTION.INBOUND,
+            proxyHostnameAndPort,
+            ssl: !!state.config.ssl,
+            mapping: state.config.mapping,
+          }).replace(/^(config:|logs:|file:)\/+/, ""),
+        );
   const translatedReplacedRedirectUrl = !redirectUrl
     ? redirectUrl
     : replacedRedirectUrl.origin !== redirectUrl.origin ||
       state.config.dontTranslateLocationHeader
-      ? replacedRedirectUrl
-      : `${url.origin}${replacedRedirectUrl.href.substring(
+    ? replacedRedirectUrl
+    : `${url.origin}${replacedRedirectUrl.href.substring(
         replacedRedirectUrl.origin.length,
       )}`;
 
@@ -1711,12 +1737,12 @@ const serve = async function (
       (payloadSource as ClientHttp2Stream | Duplex).on(
         "data",
         (chunk: Buffer | string) =>
-        (partialBody = Buffer.concat([
-          partialBody,
-          typeof chunk === "string"
-            ? Buffer.from(chunk as string)
-            : (chunk as Buffer),
-        ])),
+          (partialBody = Buffer.concat([
+            partialBody,
+            typeof chunk === "string"
+              ? Buffer.from(chunk as string)
+              : (chunk as Buffer),
+          ])),
       );
       (payloadSource as any).on("end", () => {
         resolve(partialBody);
@@ -1754,11 +1780,11 @@ const serve = async function (
         : {}),
       ...(state.config.disableWebSecurity
         ? {
-          ["content-security-policy"]: "report only",
-          ["access-control-allow-headers"]: "*",
-          ["access-control-allow-method"]: "*",
-          ["access-control-allow-origin"]: "*",
-        }
+            ["content-security-policy"]: "report only",
+            ["access-control-allow-headers"]: "*",
+            ["access-control-allow-method"]: "*",
+            ["access-control-allow-origin"]: "*",
+          }
         : {}),
     })
       .filter(
@@ -1783,9 +1809,9 @@ const serve = async function (
               oneElement => {
                 return typeof oneElement === "string"
                   ? oneElement.replace(
-                    `Domain=${subDomain}`,
-                    `Domain=${url.hostname}`,
-                  )
+                      `Domain=${subDomain}`,
+                      `Domain=${url.hostname}`,
+                    )
                   : oneElement;
               },
             ),
@@ -1948,35 +1974,42 @@ const update = async (
     server:
       newState.server === null || !state.server
         ? (
-          (config.ssl
-            ? createSecureServer.bind(null, {
-              ...config.ssl,
-              allowHTTP1: true,
-            })
-            : createServer)(
+            (config.ssl
+              ? createSecureServer.bind(null, {
+                  ...config.ssl,
+                  allowHTTP1: true,
+                })
+              : createServer)(
               (
                 request: Http2ServerRequest | IncomingMessage,
                 response: Http2ServerResponse | ServerResponse,
               ) => serve(state, request, response),
             ) as Server
-        )
-          .addListener("error", (error: Error) => errorListener(state, error))
-          .addListener("listening", () => state.quickStatus())
-          .on("upgrade", (request, socket) =>
-            update(state, websocketServe(state, request, socket)),
           )
-          .listen(config.port)
+            .addListener("error", (error: Error) => errorListener(state, error))
+            .addListener("listening", () => state.quickStatus())
+            .on("upgrade", (request, socket) =>
+              update(state, websocketServe(state, request, socket)),
+            )
+            .listen(config.port)
         : state.server,
   });
   return state;
 };
 
-const mainProgram = argv.filter(
-  arg => !["ts-node", "node", "npx", "npm", "exec"].some(pattern => arg.includes(pattern)),
-)[0] ?? "";
+const mainProgram =
+  argv.filter(
+    arg =>
+      !["ts-node", "node", "npx", "npm", "exec"].some(
+        pattern =>
+          arg.includes(pattern) &&
+          !arg.match(/npm-cache/) &&
+          !arg.match(/_npx/),
+      ),
+  )[0] ?? "";
 
 const runAsMainProgram =
-  mainProgram.toLowerCase().replace(/[-_]/g, '').includes("localtraffic") &&
+  mainProgram.toLowerCase().replace(/[-_]/g, "").includes("localtraffic") &&
   !mainProgram.match(/(.|-)?(test|spec)\.m?[jt]sx?$/);
 
 if (runAsMainProgram) {
