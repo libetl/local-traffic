@@ -4,6 +4,7 @@ yarn.lock
 renovate.json
 .prettierrc
 !dist/local-traffic.js
+dist/minified.js
 dist/terser.js
 dist/index.js
 test
