@@ -1004,7 +1004,6 @@ const replaceBody = async (
     proxyHostname: string;
     key: string;
     direction: REPLACEMENT_DIRECTION;
-    replaceResponseBodyUrls: boolean;
     ssl: boolean;
     port: number;
   },
@@ -1052,11 +1051,8 @@ const replaceBody = async (
       );
       const willReplace =
         !fileTooBig && (contentTypeCanBeProcessed || !fileHasSpecialChars());
-
       return !willReplace
         ? uncompressedBuffer
-        : !parameters.replaceResponseBodyUrls
-        ? uncompressedBuffer.toString()
         : replaceTextUsingMapping(uncompressedBuffer.toString(), {
             direction: parameters.direction,
             proxyHostnameAndPort: parameters.proxyHostnameAndPort,
@@ -1074,6 +1070,7 @@ const replaceBody = async (
     .then((updatedBody: Buffer | string) =>
       (headers["content-encoding"]?.toString() ?? "")
         .split(",")
+        .reverse()
         .reduce((buffer: Promise<Buffer>, formatNotTrimed: string) => {
           const format = formatNotTrimed.trim().toLowerCase();
           const method =
@@ -1125,36 +1122,34 @@ const replaceTextUsingMapping = (
       key,
       typeof value === "string" ? value : value.replaceBody,
     ])
-    .reduce(
-      (inProgress, [path, value]) =>
-        value.startsWith("logs:") ||
+    .reduce((inProgress, [path, value]) => {
+      return value.startsWith("logs:") ||
         value.startsWith("config:") ||
         (path !== "" && !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
-          ? inProgress
-          : direction === REPLACEMENT_DIRECTION.INBOUND
-          ? inProgress.replace(
-              new RegExp(
-                value
-                  .replace(/^(file|logs):\/\//, "")
-                  .replace(/[*+?^${}()|[\]\\]/g, "")
-                  .replace(/^https/, "https?") + "/*",
-                "ig",
-              ),
+        ? inProgress
+        : direction === REPLACEMENT_DIRECTION.INBOUND
+        ? inProgress.replace(
+            new RegExp(
+              value
+                .replace(/^(file|logs):\/\//, "")
+                .replace(/[*+?^${}()|[\]\\]/g, "")
+                .replace(/^https/, "https?") + "/*",
+              "ig",
+            ),
+            `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path.replace(
+              /\/+$/,
+              "",
+            )}/`,
+          )
+        : inProgress
+            .split(
               `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path.replace(
                 /\/+$/,
                 "",
-              )}/`,
+              )}`,
             )
-          : inProgress
-              .split(
-                `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path.replace(
-                  /\/+$/,
-                  "",
-                )}`,
-              )
-              .join(value),
-      text,
-    )
+            .join(value);
+    }, text)
     .split(`${proxyHostnameAndPort}/:`)
     .join(`${proxyHostnameAndPort}:`);
 
@@ -1485,6 +1480,12 @@ const serve = async function (
   let requestBody: Buffer | null = null;
   const bufferedRequestBody =
     state.config.replaceRequestBodyUrls || state.logsListeners.length;
+  const requestBodyExpected = !(
+    ((state.config.ssl && http2WithRequestBody === 0) ||
+      (!state.config.ssl && http1WithRequestBody === 0)) &&
+    (inboundRequest.headers["content-length"] === "0" ||
+      inboundRequest.headers["content-length"] === undefined)
+  );
   if (bufferedRequestBody) {
     // this is optional,
     // I don't want to buffer request bodies if
@@ -1494,16 +1495,13 @@ const serve = async function (
       (inboundRequest as IncomingMessage);
 
     let requestBodyBuffer: Buffer = Buffer.from([]);
-    const requestBodyExpected = !(
-      ((state.config.ssl && http2WithRequestBody === 0) ||
-        (!state.config.ssl && http1WithRequestBody === 0)) &&
-      (inboundRequest.headers["content-length"] === "0" ||
-        inboundRequest.headers["content-length"] === undefined)
-    );
     await Promise.race([
       new Promise(resolve => setTimeout(resolve, 10000)),
       new Promise(resolve => {
-        if (!requestBodyExpected) resolve(void 0);
+        if (!requestBodyExpected) {
+          resolve(void 0);
+          return;
+        }
         requestBodyReadable.on("data", chunk => {
           requestBodyBuffer = Buffer.concat([requestBodyBuffer, chunk]);
         });
@@ -1517,16 +1515,17 @@ const serve = async function (
         LogLevel.WARNING,
         EMOJIS.ERROR_4,
       );
-    requestBody = await replaceBody(requestBodyBuffer, inboundRequest.headers, {
-      proxyHostnameAndPort,
-      proxyHostname,
-      key,
-      direction: REPLACEMENT_DIRECTION.OUTBOUND,
-      mapping: state.config.mapping,
-      port: state.config.port,
-      ssl: !!state.config.ssl,
-      replaceResponseBodyUrls: state.config.replaceResponseBodyUrls,
-    });
+    requestBody = !state.config.replaceRequestBodyUrls
+      ? requestBodyBuffer
+      : await replaceBody(requestBodyBuffer, inboundRequest.headers, {
+          proxyHostnameAndPort,
+          proxyHostname,
+          key,
+          mapping: state.config.mapping,
+          port: state.config.port,
+          ssl: !!state.config.ssl,
+          direction: REPLACEMENT_DIRECTION.OUTBOUND,
+        });
   }
 
   const outboundHeaders: OutgoingHttpHeaders = {
@@ -1630,36 +1629,21 @@ const serve = async function (
   } else error = null;
 
   // phase : request body
-  if (state.config.ssl && http2WithRequestBody && outboundExchange) {
-    if (bufferedRequestBody) {
-      outboundExchange.write(requestBody);
-      outboundExchange.end();
-    }
-
-    if (!bufferedRequestBody) {
-      (inboundRequest as Http2ServerRequest).stream.on("data", chunk => {
-        outboundExchange.write(chunk);
-      });
-      (inboundRequest as Http2ServerRequest).stream.on("end", () =>
-        outboundExchange.end(),
-      );
-    }
-  }
-
-  if (!state.config.ssl && http1WithRequestBody && outboundExchange) {
-    if (bufferedRequestBody) {
-      outboundExchange.write(requestBody);
-      outboundExchange.end();
-    }
-
-    if (!bufferedRequestBody) {
-      (inboundRequest as IncomingMessage).on("data", chunk => {
-        outboundExchange.write(chunk);
-      });
-      (inboundRequest as IncomingMessage).on("end", () =>
-        outboundExchange.end(),
-      );
-    }
+  if (http2WithRequestBody && outboundExchange && !bufferedRequestBody) {
+    (inboundRequest as Http2ServerRequest).stream.on("data", chunk => {
+      outboundExchange.write(chunk);
+    });
+    (inboundRequest as Http2ServerRequest).stream.on("end", () =>
+      outboundExchange.end(),
+    );
+  } else if (http1WithRequestBody && outboundExchange && !bufferedRequestBody) {
+    (inboundRequest as IncomingMessage).on("data", chunk => {
+      outboundExchange.write(chunk);
+    });
+    (inboundRequest as IncomingMessage).on("end", () => outboundExchange.end());
+  } else if (outboundExchange && bufferedRequestBody && requestBodyExpected) {
+    outboundExchange.write(requestBody);
+    outboundExchange.end();
   }
 
   // phase : response headers
@@ -1759,7 +1743,6 @@ const serve = async function (
         direction: REPLACEMENT_DIRECTION.INBOUND,
         mapping: state.config.mapping,
         port: state.config.port,
-        replaceResponseBodyUrls: state.config.replaceResponseBodyUrls,
         ssl: !!state.config.ssl,
       }).catch((e: Error) => {
         send(
