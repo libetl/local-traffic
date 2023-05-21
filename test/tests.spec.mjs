@@ -618,13 +618,6 @@ describe("server cruise", async () => {
       /https:\/\/www\.test\.info\/test\//g,
       "http://localhost:8080/test/",
     );
-    const expectedCompressedResponseText = await new Promise(resolve =>
-      deflate(expectedResponseText, (_, result) =>
-        brotliCompress(result, (_, result2) =>
-          gzip(result2, (_, result3) => resolve(result3)),
-        ),
-      ),
-    );
     http2OutboundHeadersResponses.unshift({
       [":status"]: 200,
       ["content-length"]: compressedResponseText.byteLength,
@@ -656,7 +649,7 @@ describe("server cruise", async () => {
       ),
     );
     assert.equal(response.code, 200);
-    assert.notEqual(responseText, expectedCompressedResponseText);
+    assert.notEqual(responseText, expectedResponseText);
     assert.equal(actualText, expectedResponseText);
     responseText.replace();
   });
