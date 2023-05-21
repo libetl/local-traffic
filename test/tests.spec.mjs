@@ -406,7 +406,7 @@ describe("server cruise", async () => {
       body: Buffer.from("Hello World !"),
     });
 
-    await new Promise(resolve => setTimeout(resolve, 5));
+    await new Promise(resolve => setTimeout(resolve, 10));
 
     const response = responses.shift();
     assert.equal(response.code, 200);
