@@ -34,7 +34,7 @@ const localTraffic = await (async () => {
   ).toString();
   const javascript = typescript.transpileModule(source, {
     compilerOptions: {
-      module: "ES2020",
+      module: typescript.ModuleKind.ES2020,
     },
   }).outputText;
   const javascriptWithMocks = javascript
@@ -651,6 +651,5 @@ describe("server cruise", async () => {
     assert.equal(response.code, 200);
     assert.notEqual(responseText, expectedResponseText);
     assert.equal(actualText, expectedResponseText);
-    responseText.replace();
   });
 });
