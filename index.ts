@@ -40,7 +40,7 @@ import {
 } from "zlib";
 import { resolve, normalize } from "path";
 import { createHash, randomBytes } from "crypto";
-import { hrtime, env, cwd, argv, stdout } from "process";
+import { argv, cwd, env, exit, hrtime, stdout } from "process";
 import type { Duplex, Readable } from "stream";
 
 type ErrorWithErrno = NodeJS.ErrnoException;
@@ -134,6 +134,14 @@ const defaultConfig: LocalConfiguration = {
   websocket: true,
   disableWebSecurity: false,
 };
+
+const instantTime = (): bigint => {
+  return hrtime.bigint?.() ??
+  (() => {
+    const time = hrtime();
+    return (time[0] * 1000 + time[1] / 1000000) as unknown as bigint;
+  })()
+}
 
 const getCurrentTime = (simpleLogs?: boolean) => {
   const date = new Date();
@@ -1432,7 +1440,7 @@ const serve = async function (
   });
 
   // phase: connection
-  const startTime = hrtime.bigint();
+  const startTime = instantTime();
   let error: Buffer = null;
   const outboundRequest: ClientHttp2Session =
     target.protocol === "file:"
@@ -1830,7 +1838,7 @@ const serve = async function (
   );
   if (payload) inboundResponse.end(payload);
   else inboundResponse.end();
-  const endTime = hrtime.bigint();
+  const endTime = instantTime();
 
   state.notifyLogsListeners({
     randomId,
@@ -1955,7 +1963,8 @@ const update = async (
     notifyLogsListeners: notifyLogsListeners.bind(state),
     quickStatus: quickStatus.bind(state),
     server:
-      newState.server === null || !state.server
+      (newState.server === null || !state.server) &&
+      !((newState.config?.port ?? 0) < 0)
         ? (
             (config.ssl
               ? createSecureServer.bind(null, {
@@ -1975,6 +1984,8 @@ const update = async (
               update(state, websocketServe(state, request, socket)),
             )
             .listen(config.port)
+        : newState.server === null
+        ? null
         : state.server,
   });
   return state;
@@ -1995,7 +2006,69 @@ const runAsMainProgram =
   mainProgram.toLowerCase().replace(/[-_]/g, "").includes("localtraffic") &&
   !mainProgram.match(/(.|-)?(test|spec)\.m?[jt]sx?$/);
 
-if (runAsMainProgram) {
+const crashTest = argv.some(arg => arg === "--crash-test");
+
+if (crashTest) {
+  const port = Math.floor(40151 + Math.random() * 9000);
+  const makeRequest = (
+    state: State,
+    resolve: ({
+      state,
+      response,
+      error,
+    }: {
+      state: State;
+      response?: IncomingMessage;
+      error?: Error;
+    }) => void,
+  ) =>
+    httpRequest(
+      {
+        hostname: "localhost",
+        port,
+        path: "/config/",
+        method: "GET",
+        headers: {
+          Accept: "text/html",
+        },
+        timeout: 500,
+      },
+      response => resolve({ response, state }),
+    )
+      .on("error", error => resolve({ error, state }))
+      .end();
+
+  start({
+    ...defaultConfig,
+    port,
+  })
+    .then<{ state: State; response: IncomingMessage }>(
+      state =>
+        new Promise(resolve =>
+          setTimeout(makeRequest.bind(null, state, resolve), 1000),
+        ),
+    )
+    .then(({ state, response }) =>
+      response.statusCode !== 200
+        ? Promise.reject("Crash test has failed")
+        : update(state, { config: { port: -1 }, server: null }),
+    )
+    .then(
+      state =>
+        new Promise<{ state: State; error: ErrorWithErrno }>(resolve =>
+          setTimeout(makeRequest.bind(null, state, resolve), 1000),
+        ),
+    )
+    .then(({ state, error }) =>
+      error.code !== "ECONNREFUSED"
+        ? Promise.reject("Server should have stopped")
+        : log(state, "Crash test successful", LogLevel.INFO, EMOJIS.COLORED),
+    )
+    .then(() => exit(0))
+    .catch(() => exit(1));
+}
+
+if (!crashTest && runAsMainProgram) {
   load().then(start);
 }
 

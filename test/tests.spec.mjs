@@ -636,7 +636,7 @@ describe("server cruise", async () => {
       })}`,
     );
 
-    await new Promise(resolve => setTimeout(resolve, 8));
+    await new Promise(resolve => setTimeout(resolve, 30));
 
     const response = responses.shift();
     const actualText = await new Promise(resolve =>

@@ -1,6 +1,6 @@
 {
   "name": "local-traffic",
-  "version": "0.0.74",
+  "version": "0.0.75",
   "main": "./dist/local-traffic.js",
   "private": false,
   "keywords": [
@@ -23,6 +23,7 @@
     "chmod": "chmod a+x ./dist/local-traffic.js",
     "clean": "rm -rf dist",
     "build": "npm run clean && npm run typescript && npm run terser && npm run remove-useless-whitespaces && npm run shebang && npm run chmod",
+    "crash-test": "node ./dist/local-traffic.js --crash-test",
     "test": "node ./test/tests.spec.mjs"
   },
   "devDependencies": {
@@ -32,5 +33,8 @@
   },
   "bin": {
     "local-traffic": "./dist/local-traffic.js"
+  },
+  "engines": {
+    "node": ">=8"
   }
 }
