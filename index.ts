@@ -136,12 +136,14 @@ const defaultConfig: LocalConfiguration = {
 };
 
 const instantTime = (): bigint => {
-  return hrtime.bigint?.() ??
-  (() => {
-    const time = hrtime();
-    return (time[0] * 1000 + time[1] / 1000000) as unknown as bigint;
-  })()
-}
+  return (
+    hrtime.bigint?.() ??
+    (() => {
+      const time = hrtime();
+      return (time[0] * 1000 + time[1] / 1000000) as unknown as bigint;
+    })()
+  );
+};
 
 const getCurrentTime = (simpleLogs?: boolean) => {
   const date = new Date();
@@ -411,7 +413,6 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
 
 const onWatch = async function (state: State): Promise<Partial<State>> {
   const previousConfig = state.config;
-  console.log(new Error().stack)
   const config = await load(false);
   if (isNaN(config.port) || config.port > 65535 || config.port < 0) {
     state.log(
@@ -1957,8 +1958,9 @@ const update = async (
     logsListeners,
     configListeners,
     configFileWatcher:
-      state.configFileWatcher ??
-      watchFile(filename, async () => update(state, await onWatch(state))),
+      state.configFileWatcher === undefined
+        ? watchFile(filename, async () => update(state, await onWatch(state)))
+        : state.configFileWatcher,
     log: log.bind(state, state),
     notifyConfigListeners: notifyConfigListeners.bind(state),
     notifyLogsListeners: notifyLogsListeners.bind(state),
@@ -2039,10 +2041,7 @@ if (crashTest) {
       .on("error", error => resolve({ error, state }))
       .end();
 
-  start({
-    ...defaultConfig,
-    port,
-  })
+  update({ config: { ...defaultConfig, port }, configFileWatcher: null }, {})
     .then<{ state: State; response: IncomingMessage }>(
       state =>
         new Promise(resolve =>
