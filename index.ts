@@ -2007,7 +2007,7 @@ const runAsMainProgram =
   !mainProgram.match(/(.|-)?(test|spec)\.m?[jt]sx?$/);
 
 const crashTest = argv.some(arg => arg === "--crash-test");
-console.log({runAsMainProgram, crashTest})
+
 if (crashTest) {
   const port = Math.floor(40151 + Math.random() * 9000);
   const makeRequest = (
@@ -2068,7 +2068,7 @@ if (crashTest) {
     .catch(() => exit(1));
 }
 
-if (!crashTest && runAsMainProgram) {
+if (!crashTest && runAsMainProgram) {console.log({runAsMainProgram, crashTest})
   load().then(start);
 }
 
