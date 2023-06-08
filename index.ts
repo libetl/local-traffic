@@ -346,9 +346,8 @@ const quickStatus = function (this: State) {
   this.notifyConfigListeners(this.config as Record<string, unknown>);
 };
 
-const load = async (firstTime: boolean = true): Promise<LocalConfiguration> => {
-  console.log(new Error().stack)
-  return new Promise<LocalConfiguration>(resolve =>
+const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
+  new Promise<LocalConfiguration>(resolve =>
     readFile(filename, (error, data) => {
       if (error && !firstTime) {
         log(
@@ -409,10 +408,10 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> => {
       } else resolve(config);
     }),
   );
-}
 
 const onWatch = async function (state: State): Promise<Partial<State>> {
   const previousConfig = state.config;
+  console.log(new Error().stack)
   const config = await load(false);
   if (isNaN(config.port) || config.port > 65535 || config.port < 0) {
     state.log(
