@@ -531,6 +531,15 @@ const unixNorm = (path: string) =>
   path == "" ? "" : normalize(path).replace(/\\/g, "/");
 
 const cdn = "https://cdn.jsdelivr.net/npm/";
+const disallowedHttp2HeaderNames = [
+  "host",
+  "connection",
+  "keep-alive",
+  "upgrade",
+  "transfer-encoding",
+  "upgrade-insecure-requests",
+  "proxy-connection",
+];
 
 const header = (
   icon: number,
@@ -1542,8 +1551,7 @@ const serve = async function (
     ...[...Object.entries(inboundRequest.headers)]
       // host, connection and keep-alive are forbidden in http/2
       .filter(
-        ([key]) =>
-          !["host", "connection", "keep-alive"].includes(key.toLowerCase()),
+        ([key]) => !disallowedHttp2HeaderNames.includes(key.toLowerCase()),
       )
       .reduce((acc: any, [key, value]) => {
         acc[key] =
@@ -1562,7 +1570,6 @@ const serve = async function (
     ":path": fullPath,
     ":scheme": target.protocol.replace(":", ""),
   };
-
   const outboundExchange =
     outboundRequest &&
     !error &&
@@ -1680,9 +1687,9 @@ const serve = async function (
     if (outboundResponseHeaders["location"])
       redirectUrl = new URL(
         outboundResponseHeaders["location"].startsWith("/")
-          ? `${target.href}${outboundResponseHeaders["location"].replace(
+          ? `${target.origin}${outboundResponseHeaders["location"].replace(
               /^\/+/,
-              ``,
+              `/`,
             )}`
           : outboundResponseHeaders["location"]
               .replace(/^file:\/+/, "file:///")
@@ -1783,9 +1790,7 @@ const serve = async function (
       .filter(
         ([h]) =>
           !h.startsWith(":") &&
-          h.toLowerCase() !== "transfer-encoding" &&
-          h.toLowerCase() !== "connection" &&
-          h.toLowerCase() !== "keep-alive",
+          !disallowedHttp2HeaderNames.includes(h.toLowerCase()),
       )
       .reduce((acc: any, [key, value]: [string, string | string[]]) => {
         const allSubdomains = targetHost
