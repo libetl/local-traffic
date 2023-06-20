@@ -40,7 +40,8 @@ import {
 } from "zlib";
 import { resolve, normalize } from "path";
 import { createHash, randomBytes } from "crypto";
-import { argv, cwd, env, exit, hrtime, stdout } from "process";
+import { argv, cwd, exit, hrtime, stdout } from "process";
+import { homedir } from "os";
 import type { Duplex, Readable } from "stream";
 
 type ErrorWithErrno = NodeJS.ErrnoException;
@@ -115,7 +116,7 @@ interface State {
   quickStatus: () => void;
 }
 
-const userHomeConfigFile = resolve(env.HOME, ".local-traffic.json");
+const userHomeConfigFile = resolve(homedir(), ".local-traffic.json");
 const filename = resolve(
   cwd(),
   argv.slice(-1)[0].endsWith(".json") ? argv.slice(-1)[0] : userHomeConfigFile,
@@ -1467,6 +1468,8 @@ const serve = async function (
             const result = connect(
               targetUrl,
               {
+                timeout: 3000,
+                sessionTimeout: 3000,
                 rejectUnauthorized: false,
                 protocol: target.protocol,
               } as SecureClientSessionOptions,
