@@ -2003,8 +2003,8 @@ const update = async (
 };
 
 const mainProgram =
-  argv.filter(
-    arg =>
+  argv.map(arg => arg.trim()).filter(
+    arg => arg &&
       !["ts-node", "node", "npx", "npm", "exec"].some(
         pattern =>
           arg.includes(pattern) &&
