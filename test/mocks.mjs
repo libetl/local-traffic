@@ -22,6 +22,7 @@ const Server = class {
 export const argv = ["test-runner", "local-traffic"];
 export const cwd = mock.fn(() => "/home/user/fake-dir");
 export const exit = mock.fn(() => {})
+export const homedir = mock.fn(() => "/home/user")
 export const createServer = mock.fn(
   requestListener => new Server(requestListener),
 );

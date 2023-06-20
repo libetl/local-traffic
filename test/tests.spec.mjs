@@ -39,10 +39,10 @@ const localTraffic = await (async () => {
   }).outputText;
   const javascriptWithMocks = javascript
     .replace(
-      /from "(http|http2|https|fs|process)"/g,
+      /from "(http|http2|https|fs|os|process)"/g,
       `from "${dirname(import.meta.url)}/mocks.mjs"`,
     )
-    .replace("3000", "3");
+    .replace(/3000/g, "3");
   const base64Module = `data:text/javascript;base64,${Buffer.from(
     javascriptWithMocks,
   ).toString("base64url")}`;
