@@ -110,6 +110,8 @@ type Mapping = {
   [subPath: string]: string | { replaceBody: string; downstreamUrl: string };
 };
 
+type Mocks = Map<string, string> 
+
 enum ServerMode {
   PROXY,
   MOCK,
@@ -122,6 +124,7 @@ interface State {
   configListeners: WebsocketLogsListener[];
   configFileWatcher: StatWatcher;
   mode: ServerMode;
+  mocks: Mocks;
   log: (text: string, level?: LogLevel, emoji?: string) => void;
   notifyConfigListeners: (data: Record<string, unknown>) => void;
   notifyLogsListeners: (data: Record<string, unknown>) => void;
@@ -452,8 +455,11 @@ const logsView = (
           data = data1;
           uniqueHash = uniqueHash1;
         } catch(e) { }
+        if (${options.captureResponseBody === true} && 
+          data?.downstreamPath?.startsWith('recorder://'))
+          return;
         const time = new Date().toISOString().split('T')[1].replace('Z', '');
-        const remove = uniqueHash && ${ options.captureResponseBody === true } 
+        const remove = ${options.captureResponseBody === true} && uniqueHash
         ? '<button onclick="javascript:remove(event)" type="button" ' +
           'class="btn btn-primary">&#x274C;</button>'
         : ''
@@ -549,7 +555,7 @@ const logsView = (
     window.addEventListener("DOMContentLoaded", start);
 </script>`;
 
-const logsPage = (proxyHostnameAndPort: string, config: LocalConfiguration) =>
+const logsPage = (proxyHostnameAndPort: string, state: State) =>
   staticPage(`${header(0x1f4fa, "logs", "")}
 <nav class="navbar navbar-expand-lg navbar-dark bg-primary nav-fill">
   <div class="container-fluid">
@@ -569,10 +575,10 @@ const logsPage = (proxyHostnameAndPort: string, config: LocalConfiguration) =>
     </span>
   </div>
 </nav>
-${logsView(proxyHostnameAndPort, config, { captureResponseBody: false })}
+${logsView(proxyHostnameAndPort, state.config, { captureResponseBody: false })}
 </body></html>`);
 
-const configPage = (proxyHostnameAndPort: string, config: LocalConfiguration) =>
+const configPage = (proxyHostnameAndPort: string, state: State) =>
   staticPage(`${header(0x1f39b, "config", "")}
     <link href="${cdn}jsoneditor/dist/jsoneditor.min.css" rel="stylesheet" type="text/css">
     <script src="${cdn}jsoneditor/dist/jsoneditor.min.js"></script>
@@ -584,7 +590,7 @@ const configPage = (proxyHostnameAndPort: string, config: LocalConfiguration) =>
             <h5 class="modal-title">SSL keypair generation in progress</h5>
           </div>
           <div class="modal-body">
-            <p>Wait a few seconds or move your mouse to improve the entropy.</p>
+            <p>Wait a few seconds or move your mouse to increase the entropy.</p>
           </div>
         </div>
       </div>
@@ -648,7 +654,7 @@ const configPage = (proxyHostnameAndPort: string, config: LocalConfiguration) =>
 
     const editor = new JSONEditor(container, options);
     let socket;
-    const initialJson = ${JSON.stringify(config)}
+    const initialJson = ${JSON.stringify(state.config)}
     editor.set(initialJson)
     editor.validate();
     editor.aceEditor.commands.addCommand({
@@ -680,7 +686,7 @@ const configPage = (proxyHostnameAndPort: string, config: LocalConfiguration) =>
       document.querySelector('.jsoneditor-menu')
               .appendChild(saveButton);
       socket = new WebSocket("ws${
-        config.ssl ? "s" : ""
+        state.config.ssl ? "s" : ""
       }://${proxyHostnameAndPort}/local-traffic-config");
       socket.onmessage = function(event) {
         editor.set(JSON.parse(event.data))
@@ -692,16 +698,20 @@ const configPage = (proxyHostnameAndPort: string, config: LocalConfiguration) =>
 
 const recorderPage = (
   proxyHostnameAndPort: string,
-  config: LocalConfiguration,
-) =>
-  staticPage(`${header(0x23fa, "recorder", "")}
+  state: State,
+  request: Http2ServerRequest | IncomingMessage
+) => {
+  if (request.method === 'POST') {
+    return staticPage(`ok`);
+  }
+  return staticPage(`${header(0x23fa, "recorder", "")}
   <div class="btn-group" role="group" aria-label="Server Mode">
     <input type="radio" class="btn-check" name="server-mode" id="proxy-mode" autocomplete="off" checked>
-    <label class="btn btn-primary" for="proxy-mode">&#128391; Proxy</label>
+    <label class="btn btn-outline-primary" for="proxy-mode">&#128391; Proxy</label>
     <input type="radio" class="btn-check" name="server-mode" id="record-mode" autocomplete="off">
-    <label class="btn btn-danger" for="record-mode">&#9210; Record</label>
+    <label class="btn btn-outline-primary" for="record-mode">&#9210; Record</label>
     <input type="radio" class="btn-check" name="server-mode" id="mock-mode" autocomplete="off">
-    <label class="btn btn-info" for="mock-mode">&#128376; Mock</label>
+    <label class="btn btn-outline-primary" for="mock-mode">&#128376; Mock</label>
   </div>
   <input type="hidden" id="limit" value="-1"/>
   <script>
@@ -713,14 +723,32 @@ const recorderPage = (
       document.getElementById('limit').value = 0;
       cleanup();
     })
+    document.getElementById('mock-mode').addEventListener('change', () => {
+      fetch("http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
+    Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
+      value?.toString()?.startsWith("recorder:"),
+    )?.[0] ?? "/recorder/mocks"
+  }", {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify(
+        [...document.querySelectorAll('button[data-uniqueHash]')].map(button => ({
+          response: button.attributes['data-response']?.value,
+          uniqueHash: button.attributes['data-uniqueHash']?.value}))
+       )
+     })
+    })
   </script>
-  ${logsView(proxyHostnameAndPort, config, { captureResponseBody: true })}
+  ${logsView(proxyHostnameAndPort, state.config, { captureResponseBody: true })}
   </body></html>`);
+}
+
 const specialPageMapping: Record<
   string,
   (
     proxyHostnameAndPort: string,
-    config: LocalConfiguration,
+    state: State,
+    request: Http2ServerRequest | IncomingMessage
   ) => ClientHttp2Session
 > = {
   logs: logsPage,
@@ -1096,6 +1124,9 @@ const staticPage = (data: string): ClientHttp2Session =>
           this.events["error"](this.error);
         }
       });
+      return this;
+    },
+    write: function () {
       return this;
     },
     end: function () {
@@ -1557,7 +1588,8 @@ const serve = async function (
       : specialProtocols.some(protocol => target.protocol === protocol)
       ? specialPageMapping[target.protocol.replace(/:$/, "")](
           proxyHostnameAndPort,
-          state.config,
+          state,
+          inboundRequest,
         )
       : !http2IsSupported
       ? null
@@ -2061,7 +2093,8 @@ const update = async (
     .forEach(l => l.stream.destroy());
 
   const config = newState.config ?? currentState.config;
-  const mode = newState.mode ?? currentState.mode;
+  const mode = newState.mode ?? currentState.mode ?? ServerMode.PROXY;
+  const mocks = newState.mocks ?? currentState.mocks ?? [];
   const configListeners = (
     newState.configListeners === null
       ? []
@@ -2079,6 +2112,7 @@ const update = async (
     logsListeners,
     configListeners,
     mode,
+    mocks,
     configFileWatcher:
       state.configFileWatcher === undefined
         ? watchFile(filename, async () => update(state, await onWatch(state)))
