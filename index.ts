@@ -81,6 +81,10 @@ interface WebsocketListener {
   wantsMask: boolean;
 }
 
+type WebsocketLogsListener = WebsocketListener & {
+  wantsResponseMessage?: boolean;
+};
+
 interface PartialRead {
   payloadLength: number;
   mask: number[];
@@ -98,18 +102,26 @@ interface LocalConfiguration {
   simpleLogs?: boolean;
   websocket?: boolean;
   disableWebSecurity?: boolean;
+  connectTimeout?: number;
+  socketTimeout?: number;
 }
 
 type Mapping = {
   [subPath: string]: string | { replaceBody: string; downstreamUrl: string };
 };
 
+enum ServerMode {
+  PROXY,
+  MOCK,
+}
+
 interface State {
   config: LocalConfiguration;
   server: Server;
-  logsListeners: WebsocketListener[];
-  configListeners: WebsocketListener[];
+  logsListeners: WebsocketLogsListener[];
+  configListeners: WebsocketLogsListener[];
   configFileWatcher: StatWatcher;
+  mode: ServerMode;
   log: (text: string, level?: LogLevel, emoji?: string) => void;
   notifyConfigListeners: (data: Record<string, unknown>) => void;
   notifyLogsListeners: (data: Record<string, unknown>) => void;
@@ -121,20 +133,6 @@ const filename = resolve(
   cwd(),
   argv.slice(-1)[0].endsWith(".json") ? argv.slice(-1)[0] : userHomeConfigFile,
 );
-const defaultConfig: LocalConfiguration = {
-  mapping: {
-    "/config/": "config://",
-    "/logs/": "logs://",
-  },
-  port: 8080,
-  replaceRequestBodyUrls: false,
-  replaceResponseBodyUrls: false,
-  dontUseHttp2Downstream: false,
-  dontTranslateLocationHeader: false,
-  simpleLogs: false,
-  websocket: true,
-  disableWebSecurity: false,
-};
 
 const instantTime = (): bigint => {
   return (
@@ -210,25 +208,35 @@ const createWebsocketBufferFrom = (
   const mask = Array(4)
     .fill(0)
     .map(() => (wantsMask ? Math.floor(Math.random() * (2 << 7)) : 0));
-  const maskedTextBits = [...text.substring(0, 2 << 15)].map(
-    (c, i) => c.charCodeAt(0) ^ mask[i & 3],
-  );
-  const length = Math.min((2 << 15) - 1, text.length);
+  const maskedTextBits = text
+    .split("")
+    .map((c, i) => c.charCodeAt(0) ^ mask[i & 3]);
+  const length = text.length;
+  const magicHeader = (1 << 7) + 1;
+  const maskHeader = wantsMask ? 1 << 7 : 0;
   const header =
     text.length < (2 << 6) - 2
-      ? Buffer.from(
-          Uint8Array.from([(1 << 7) + 1, (wantsMask ? 1 << 7 : 0) + length])
-            .buffer,
-        )
-      : Buffer.concat([
+      ? Buffer.from(Uint8Array.from([magicHeader, maskHeader + length]).buffer)
+      : text.length < (2 << 15) - 1
+      ? Buffer.concat([
           Buffer.from(
-            Uint8Array.from([
-              (1 << 7) + 1,
-              ((1 << 7) - 2) | (wantsMask ? 1 << 7 : 0),
-            ]).buffer,
+            Uint8Array.from([magicHeader, ((1 << 7) - 2) | maskHeader]).buffer,
           ),
           Buffer.from(Uint8Array.from([length >> 8]).buffer),
           Buffer.from(Uint8Array.from([length & ((1 << 8) - 1)]).buffer),
+        ])
+      : Buffer.concat([
+          Buffer.from(
+            Uint8Array.from([magicHeader, ((1 << 7) - 1) | maskHeader]).buffer,
+          ),
+          Buffer.concat(
+            Number(length)
+              .toString(16)
+              .padStart(16, "0")
+              .match(/.{2}/g)
+              .map(e => parseInt(e, 16))
+              .map(number => Buffer.from(Uint8Array.from([number]).buffer)),
+          ),
         ]);
   const maskingKey = Buffer.from(Int8Array.from(mask).buffer);
   const payload = Buffer.from(Int8Array.from(maskedTextBits).buffer);
@@ -288,16 +296,25 @@ const notifyConfigListeners = function (
   this: State,
   data: Record<string, unknown>,
 ) {
-  return notifyListeners(this, data, this.configListeners);
+  return notifyListeners(data, this.configListeners);
 };
 const notifyLogsListeners = function (
   this: State,
   data: Record<string, unknown>,
 ) {
-  return notifyListeners(this, data, this.logsListeners);
+  const { response, ...dataWithoutResponseBody } = data;
+  return Promise.all([
+    notifyListeners(
+      data,
+      this.logsListeners.filter(l => l.wantsResponseMessage),
+    ),
+    notifyListeners(
+      dataWithoutResponseBody,
+      this.logsListeners.filter(l => !l.wantsResponseMessage),
+    ),
+  ]);
 };
 const notifyListeners = (
-  state: State,
   data: Record<string, unknown>,
   listeners: WebsocketListener[],
 ) => {
@@ -349,6 +366,386 @@ const quickStatus = function (this: State) {
   this.notifyConfigListeners(this.config as Record<string, unknown>);
 };
 
+const errorPage = (
+  thrown: Error,
+  phase: string,
+  requestedURL: URL,
+  downstreamURL?: URL,
+) => `${header(0x1f4a3, "error", thrown.message)}
+<p>An error happened while trying to proxy a remote exchange</p>
+<div class="alert alert-warning" role="alert">
+  &#x24D8;&nbsp;This is not an error from the downstream service.
+</div>
+<div class="alert alert-danger" role="alert">
+<pre><code>${thrown.stack || `<i>${thrown.name} : ${thrown.message}</i>`}${
+  (thrown as ErrorWithErrno).errno
+    ? `<br/>(code : ${(thrown as ErrorWithErrno).errno})`
+    : ""
+}</code></pre>
+</div>
+More information about the request :
+<table class="table">
+  <tbody>
+    <tr>
+      <td>phase</td>
+      <td>${phase}</td>
+    </tr>
+    <tr>
+      <td>requested URL</td>
+      <td>${requestedURL}</td>
+    </tr>
+    <tr>
+      <td>downstream URL</td>
+      <td>${downstreamURL || "&lt;no-target-url&gt;"}</td>
+    </tr>
+  </tbody>
+</table>
+</div></body></html>`;
+
+const logsView = (
+  proxyHostnameAndPort: string,
+  config: LocalConfiguration,
+  options: { captureResponseBody: boolean },
+) =>
+  `<table id="table-access" class="table table-striped" style="display: block; width: 100%; overflow-y: auto">
+  <thead>
+    <tr>
+      <th scope="col">...</th>
+      <th scope="col">Date</th>
+      <th scope="col">Level</th>
+      <th scope="col">Protocol</th>
+      <th scope="col">Method</th>
+      <th scope="col">Status</th>
+      <th scope="col">Duration</th>
+      <th scope="col">Upstream Path</th>
+      <th scope="col">Downstream Path</th>
+    </tr>
+  </thead>
+  <tbody id="access">
+  </tbody>
+</table>
+<table id="table-proxy" class="table table-striped" style="display: none; width: 100%; overflow-y: auto">
+  <thead>
+    <tr>
+      <th scope="col">Date</th>
+      <th scope="col">Level</th>
+      <th scope="col">Message</th>
+    </tr>
+  </thead>
+  <tbody id="proxy">
+  </tbody>
+</table>
+<script type="text/javascript">
+    function start() {
+      document.getElementById('table-access').style.height =
+        (document.documentElement.clientHeight - 150) + 'px';
+      const socket = new WebSocket("ws${
+        config.ssl ? "s" : ""
+      }://${proxyHostnameAndPort}/local-traffic-logs${
+    options.captureResponseBody ? "?wantsResponseMessage=true" : ""
+  }");
+      socket.onmessage = function(event) {
+        let data = event.data
+        let uniqueHash;
+        try {
+          const { uniqueHash: uniqueHash1, ...data1 } = JSON.parse(event.data);
+          data = data1;
+          uniqueHash = uniqueHash1;
+        } catch(e) { }
+        const time = new Date().toISOString().split('T')[1].replace('Z', '');
+        const remove = uniqueHash && ${ options.captureResponseBody === true } 
+        ? '<button onclick="javascript:remove(event)" type="button" ' +
+          'class="btn btn-primary">&#x274C;</button>'
+        : ''
+        const replay = uniqueHash ? '<button data-response="' + 
+          btoa(JSON.stringify(data.response ?? {})) +
+          '" data-uniquehash="' + uniqueHash + '" onclick="javascript:replay(event)" ' +
+          'type="button" class="btn btn-primary"' +
+          (uniqueHash === 'N/A' ? ' disabled="disabled"' : '') + '>&#x1F501;</button>' : '';
+        if(data.statusCode && uniqueHash) {
+          const color = Math.floor(data.statusCode / 100) === 1 ? "info" :
+            Math.floor(data.statusCode / 100) === 2 ? "success" :
+            Math.floor(data.statusCode / 100) === 3 ? "dark" :
+            Math.floor(data.statusCode / 100) === 4 ? "warning" :
+            Math.floor(data.statusCode / 100) === 5 ? "danger" :
+            "secondary";
+          const statusCodeColumn = document.querySelector("#event-" + data.randomId + " .statusCode");
+          if (statusCodeColumn)
+            statusCodeColumn.innerHTML = '<span class="badge bg-' + color + '">' + data.statusCode + '</span>';
+
+          const durationColumn = document.querySelector("#event-" + data.randomId + " .duration");
+          if (durationColumn) {
+            const duration = data.duration > 10000 ? Math.floor(data.duration / 1000) + 's' :
+              data.duration + 'ms';
+            durationColumn.innerHTML = duration;
+          }
+
+          const protocolColumn = document.querySelector("#event-" + data.randomId + " .protocol");
+          if (protocolColumn) {
+            protocolColumn.innerHTML = data.protocol;
+          }
+
+          const replayColumn = document.querySelector("#event-" + data.randomId + " .replay");
+          if (replayColumn) {
+            replayColumn.innerHTML = replay + remove;
+          }
+        } else if (uniqueHash) {
+            document.getElementById("access")
+              .insertAdjacentHTML('afterbegin', '<tr id="event-' + data.randomId + '">' +
+                  '<td scope="col" class="replay">' + replay + remove + '</td>' +
+                  '<td scope="col">' + time + '</td>' +
+                  '<td scope="col">' + (data.level || 'info')+ '</td>' + 
+                  '<td scope="col" class="protocol">' + data.protocol + '</td>' + 
+                  '<td scope="col">' + data.method + '</td>' + 
+                  '<td scope="col" class="statusCode"><span class="badge bg-secondary">...</span></td>' +
+                  '<td scope="col" class="duration">&#x23F1;</td>' +
+                  '<td scope="col">' + data.upstreamPath + '</td>' + 
+                  '<td scope="col">' + data.downstreamPath + '</td>' + 
+                  '</tr>');
+          } else if(data.event) {
+          document.getElementById("proxy")
+            .insertAdjacentHTML('afterbegin', '<tr><td scope="col">' + time + '</td>' +
+                '<td scope="col">' + (data.level || 'info')+ '</td>' + 
+                '<td scope="col">' + data.event + '</td></tr>');
+        }
+        cleanup();
+      };
+      socket.onerror = function(error) {
+        console.log(\`[error] \${JSON.stringify(error)}\`);
+        setTimeout(start, 5000);
+      };
+    };
+    function show(id) {
+      [...document.querySelectorAll('table')].forEach((table, index) => {
+        table.style.display = index === id ? 'block': 'none'
+      });
+      [...document.querySelectorAll('.navbar-nav .nav-item .nav-link')].forEach((link, index) => {
+        if (index === id) { link.classList.add('active') } else link.classList.remove('active');
+      });
+    }
+    function remove(event) {
+      event.target.closest('tr').remove()
+    }
+    function cleanup() {
+      const currentLimit = parseInt(document.getElementById('limit').value)
+      for (let table of ['access', 'proxy']) {
+        while (currentLimit && document.getElementById(table).childNodes.length && 
+        document.getElementById(table).childNodes.length > currentLimit) {
+          [...document.getElementById(table).childNodes].slice(-1)[0].remove();
+        }
+      }
+    }
+    function replay(event) {
+      const uniqueHash = event.target.dataset.uniquehash;
+      const { method, url, headers, body } = JSON.parse(atob(uniqueHash));
+      fetch(url, {
+        method,
+        headers,
+        body: !body.data || !body.data.length 
+          ? undefined
+          : new TextDecoder().decode(new Int8Array(body.data))
+      });
+    }
+    window.addEventListener("DOMContentLoaded", start);
+</script>`;
+
+const logsPage = (proxyHostnameAndPort: string, config: LocalConfiguration) =>
+  staticPage(`${header(0x1f4fa, "logs", "")}
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary nav-fill">
+  <div class="container-fluid">
+    <ul class="navbar-nav">
+      <li class="nav-item">
+        <a class="nav-link active" aria-current="page" href="javascript:show(0)">Access</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" href="javascript:show(1)">Proxy</a>
+      </li>
+    </ul>
+    <span class="navbar-text">
+      Limit : <select id="limit" onchange="javascript:cleanup()"><option value="-1">0 (clear)</option><option value="10">10</option>
+        <option value="50">50</option><option value="100">100</option><option value="200">200</option>
+        <option selected="selected" value="500">500</option><option value="0">Infinity (discouraged)</option>
+      </select> rows
+    </span>
+  </div>
+</nav>
+${logsView(proxyHostnameAndPort, config, { captureResponseBody: false })}
+</body></html>`);
+
+const configPage = (proxyHostnameAndPort: string, config: LocalConfiguration) =>
+  staticPage(`${header(0x1f39b, "config", "")}
+    <link href="${cdn}jsoneditor/dist/jsoneditor.min.css" rel="stylesheet" type="text/css">
+    <script src="${cdn}jsoneditor/dist/jsoneditor.min.js"></script>
+    <script src="${cdn}node-forge/dist/forge.min.js"></script>
+    <div id="ssl-modal" class="modal" tabindex="-1" role="dialog">
+      <div class="modal-dialog" role="document">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">SSL keypair generation in progress</h5>
+          </div>
+          <div class="modal-body">
+            <p>Wait a few seconds or move your mouse to improve the entropy.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="jsoneditor" style="width: 400px; height: 400px;"></div>
+    <script>
+    // create the editor
+    const container = document.getElementById("jsoneditor")
+    const options = {mode: "code", allowSchemaSuggestions: true, schema: {
+      type: "object",
+      properties: {
+        ${Object.entries({ ...defaultConfig, ssl: { cert: "", key: "" } })
+          .map(
+            ([property, exampleValue]) =>
+              `${property}: {type: "${
+                typeof exampleValue === "number"
+                  ? "integer"
+                  : typeof exampleValue === "string"
+                  ? "string"
+                  : typeof exampleValue === "boolean"
+                  ? "boolean"
+                  : "object"
+              }"}`,
+          )
+          .join(",\n          ")}
+      },
+      required: [],
+      additionalProperties: false
+    }}
+
+    function save() {
+      socket.send(JSON.stringify(editor.get()));
+    }
+
+    function generateSslCertificate() {
+      const sslModal = new bootstrap.Modal(document.getElementById('ssl-modal'), {});
+      sslModal.show()
+      setTimeout(function() {
+        const keypair = forge.pki.rsa.generateKeyPair(2048);
+        const certificate = forge.pki.createCertificate();
+        const now = new Date();
+        const fiveYears = new Date(new Date(now).setFullYear(now.getFullYear() + 5));
+        Object.assign(certificate, {
+          publicKey: keypair.publicKey,
+          serialNumber: "01",
+          validity: {
+            notBefore: now,
+            notAfter: fiveYears,
+          },
+        });
+        certificate.sign(keypair.privateKey, forge.md.sha256.create());
+        const key = forge.pki.privateKeyToPem(keypair.privateKey);
+        const cert = forge.pki.certificateToPem(certificate);
+        const existingConfig = editor.get();
+        editor.set({ ...existingConfig, ssl: { key, cert },
+          port: parseInt(("" + existingConfig.port).replace(/(80|[0-9])80$/, '443'))
+        });
+        sslModal.hide();
+      }, 100);
+    }
+
+    const editor = new JSONEditor(container, options);
+    let socket;
+    const initialJson = ${JSON.stringify(config)}
+    editor.set(initialJson)
+    editor.validate();
+    editor.aceEditor.commands.addCommand({
+      name: 'save',
+      bindKey: {win: 'Ctrl-S',  mac: 'Command-S'},
+      exec: save,
+    });
+
+    window.addEventListener("DOMContentLoaded", function() {
+      document.getElementById('jsoneditor').style.height =
+        (document.documentElement.clientHeight - 150) + 'px';
+      document.getElementById('jsoneditor').style.width =
+        parseInt(window.getComputedStyle(
+          document.querySelector('.container')).maxWidth) + 'px';
+      const sslButton = document.createElement('button');
+      sslButton.addEventListener("click", generateSslCertificate);
+      sslButton.type="button";
+      sslButton.classList.add("btn");
+      sslButton.classList.add("btn-primary");
+      sslButton.innerHTML="&#x1F512;";
+      document.querySelector('.jsoneditor-menu')
+              .appendChild(sslButton);
+      const saveButton = document.createElement('button');
+      saveButton.addEventListener("click", save);
+      saveButton.type="button";
+      saveButton.classList.add("btn");
+      saveButton.classList.add("btn-primary");
+      saveButton.innerHTML="&#x1F4BE;";
+      document.querySelector('.jsoneditor-menu')
+              .appendChild(saveButton);
+      socket = new WebSocket("ws${
+        config.ssl ? "s" : ""
+      }://${proxyHostnameAndPort}/local-traffic-config");
+      socket.onmessage = function(event) {
+        editor.set(JSON.parse(event.data))
+        editor.validate()
+      }
+    });
+    </script>
+  </body></html>`);
+
+const recorderPage = (
+  proxyHostnameAndPort: string,
+  config: LocalConfiguration,
+) =>
+  staticPage(`${header(0x23fa, "recorder", "")}
+  <div class="btn-group" role="group" aria-label="Server Mode">
+    <input type="radio" class="btn-check" name="server-mode" id="proxy-mode" autocomplete="off" checked>
+    <label class="btn btn-primary" for="proxy-mode">&#128391; Proxy</label>
+    <input type="radio" class="btn-check" name="server-mode" id="record-mode" autocomplete="off">
+    <label class="btn btn-danger" for="record-mode">&#9210; Record</label>
+    <input type="radio" class="btn-check" name="server-mode" id="mock-mode" autocomplete="off">
+    <label class="btn btn-info" for="mock-mode">&#128376; Mock</label>
+  </div>
+  <input type="hidden" id="limit" value="-1"/>
+  <script>
+    document.getElementById('proxy-mode').addEventListener('change', () => {
+      document.getElementById('limit').value = -1;
+      cleanup();
+    })
+    document.getElementById('record-mode').addEventListener('change', () => {
+      document.getElementById('limit').value = 0;
+      cleanup();
+    })
+  </script>
+  ${logsView(proxyHostnameAndPort, config, { captureResponseBody: true })}
+  </body></html>`);
+const specialPageMapping: Record<
+  string,
+  (
+    proxyHostnameAndPort: string,
+    config: LocalConfiguration,
+  ) => ClientHttp2Session
+> = {
+  logs: logsPage,
+  config: configPage,
+  recorder: recorderPage,
+};
+const specialPages = Object.keys(specialPageMapping);
+const specialProtocols = specialPages.map(page => `${page}:`);
+const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
+  Pick<LocalConfiguration, "ssl"> = {
+  mapping: Object.assign(
+    {},
+    ...specialPages.map(page => ({ [`/${page}/`]: `${page}://` })),
+  ),
+  port: 8080,
+  replaceRequestBodyUrls: false,
+  replaceResponseBodyUrls: false,
+  dontUseHttp2Downstream: false,
+  dontTranslateLocationHeader: false,
+  simpleLogs: false,
+  websocket: true,
+  disableWebSecurity: false,
+  connectTimeout: 3000,
+  socketTimeout: 3000,
+};
 const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
   new Promise<LocalConfiguration>(resolve =>
     readFile(filename, (error, data) => {
@@ -709,312 +1106,6 @@ const staticPage = (data: string): ClientHttp2Session =>
     },
   } as unknown as ClientHttp2Session);
 
-const logsPage = (proxyHostnameAndPort: string, ssl: boolean) =>
-  staticPage(`${header(0x1f4fa, "logs", "")}
-<nav class="navbar navbar-expand-lg navbar-dark bg-primary nav-fill">
-  <div class="container-fluid">
-    <ul class="navbar-nav">
-      <li class="nav-item">
-        <a class="nav-link active" aria-current="page" href="javascript:show(0)">Access</a>
-      </li>
-      <li class="nav-item">
-        <a class="nav-link" href="javascript:show(1)">Proxy</a>
-      </li>
-    </ul>
-    <span class="navbar-text">
-      Limit : <select id="limit" onchange="javascript:cleanup()"><option value="-1">0 (clear)</option><option value="10">10</option>
-        <option value="50">50</option><option value="100">100</option><option value="200">200</option>
-        <option selected="selected" value="500">500</option><option value="0">Infinity (discouraged)</option>
-      </select> rows
-    </span>
-  </div>
-</nav>
-<table id="table-access" class="table table-striped" style="display: block; width: 100%; overflow-y: auto">
-  <thead>
-    <tr>
-      <th scope="col">...</th>
-      <th scope="col">Date</th>
-      <th scope="col">Level</th>
-      <th scope="col">Protocol</th>
-      <th scope="col">Method</th>
-      <th scope="col">Status</th>
-      <th scope="col">Duration</th>
-      <th scope="col">Upstream Path</th>
-      <th scope="col">Downstream Path</th>
-    </tr>
-  </thead>
-  <tbody id="access">
-  </tbody>
-</table>
-<table id="table-proxy" class="table table-striped" style="display: none; width: 100%; overflow-y: auto">
-  <thead>
-    <tr>
-      <th scope="col">Date</th>
-      <th scope="col">Level</th>
-      <th scope="col">Message</th>
-    </tr>
-  </thead>
-  <tbody id="proxy">
-  </tbody>
-</table>
-<script type="text/javascript">
-    function start() {
-      document.getElementById('table-access').style.height =
-        (document.documentElement.clientHeight - 150) + 'px';
-      const socket = new WebSocket("ws${
-        ssl ? "s" : ""
-      }://${proxyHostnameAndPort}/local-traffic-logs");
-      socket.onmessage = function(event) {
-        let data = event.data
-        let uniqueHash;
-        try {
-          const { uniqueHash: uniqueHash1, ...data1 } = JSON.parse(event.data);
-          data = data1;
-          uniqueHash = uniqueHash1;
-        } catch(e) { }
-        const time = new Date().toISOString().split('T')[1].replace('Z', '');
-        const replay = uniqueHash ? '<button data-uniquehash="' + uniqueHash + '" onclick="javascript:replay(event)" ' +
-          'type="button" class="btn btn-primary"' +
-          (uniqueHash === 'N/A' ? ' disabled="disabled"' : '') + '>&#x1F501;</button>' : '';
-        if(data.statusCode && uniqueHash) {
-          const color = Math.floor(data.statusCode / 100) === 1 ? "info" :
-            Math.floor(data.statusCode / 100) === 2 ? "success" :
-            Math.floor(data.statusCode / 100) === 3 ? "dark" :
-            Math.floor(data.statusCode / 100) === 4 ? "warning" :
-            Math.floor(data.statusCode / 100) === 5 ? "danger" :
-            "secondary";
-          const statusCodeColumn = document.querySelector("#event-" + data.randomId + " .statusCode");
-          if (statusCodeColumn)
-            statusCodeColumn.innerHTML = '<span class="badge bg-' + color + '">' + data.statusCode + '</span>';
-
-          const durationColumn = document.querySelector("#event-" + data.randomId + " .duration");
-          if (durationColumn) {
-            const duration = data.duration > 10000 ? Math.floor(data.duration / 1000) + 's' :
-              data.duration + 'ms';
-            durationColumn.innerHTML = duration;
-          }
-
-          const protocolColumn = document.querySelector("#event-" + data.randomId + " .protocol");
-          if (protocolColumn) {
-            protocolColumn.innerHTML = data.protocol;
-          }
-
-          const replayColumn = document.querySelector("#event-" + data.randomId + " .replay");
-          if (replayColumn) {
-            replayColumn.innerHTML = replay;
-          }
-        } else if (uniqueHash) {
-            document.getElementById("access")
-              .insertAdjacentHTML('afterbegin', '<tr id="event-' + data.randomId + '">' +
-                  '<td scope="col" class="replay">' + replay + '</td>' +
-                  '<td scope="col">' + time + '</td>' +
-                  '<td scope="col">' + (data.level || 'info')+ '</td>' + 
-                  '<td scope="col" class="protocol">' + data.protocol + '</td>' + 
-                  '<td scope="col">' + data.method + '</td>' + 
-                  '<td scope="col" class="statusCode"><span class="badge bg-secondary">...</span></td>' +
-                  '<td scope="col" class="duration">&#x23F1;</td>' +
-                  '<td scope="col">' + data.upstreamPath + '</td>' + 
-                  '<td scope="col">' + data.downstreamPath + '</td>' + 
-                  '</tr>');
-          } else if(data.event) {
-          document.getElementById("proxy")
-            .insertAdjacentHTML('afterbegin', '<tr><td scope="col">' + time + '</td>' +
-                '<td scope="col">' + (data.level || 'info')+ '</td>' + 
-                '<td scope="col">' + data.event + '</td></tr>');
-        }
-        cleanup();
-      };
-      socket.onerror = function(error) {
-        console.log(\`[error] \${error}\`);
-        setTimeout(start, 5000);
-      };
-    };
-    function show(id) {
-      [...document.querySelectorAll('table')].forEach((table, index) => {
-        table.style.display = index === id ? 'block': 'none'
-      });
-      [...document.querySelectorAll('.navbar-nav .nav-item .nav-link')].forEach((link, index) => {
-        if (index === id) { link.classList.add('active') } else link.classList.remove('active');
-      });
-    }
-    function cleanup() {
-      const currentLimit = parseInt(document.getElementById('limit').value)
-      for (let table of ['access', 'proxy']) {
-        while (currentLimit && document.getElementById(table).childNodes.length && 
-        document.getElementById(table).childNodes.length > currentLimit) {
-          [...document.getElementById(table).childNodes].slice(-1)[0].remove();
-        }
-      }
-    }
-    function replay(event) {
-      const uniqueHash = event.target.dataset.uniquehash;
-      const { method, url, headers, body } = JSON.parse(atob(uniqueHash));
-      fetch(url, {
-        method,
-        headers,
-        body: !body.data || !body.data.length 
-          ? undefined
-          : new TextDecoder().decode(new Int8Array(body.data))
-      });
-    }
-    window.addEventListener("DOMContentLoaded", start);
-</script>
-</body></html>`);
-
-const configPage = (proxyHostnameAndPort: string, config: LocalConfiguration) =>
-  staticPage(`${header(0x1f39b, "config", "")}
-    <link href="${cdn}jsoneditor/dist/jsoneditor.min.css" rel="stylesheet" type="text/css">
-    <script src="${cdn}jsoneditor/dist/jsoneditor.min.js"></script>
-    <script src="${cdn}node-forge/dist/forge.min.js"></script>
-    <div id="ssl-modal" class="modal" tabindex="-1" role="dialog">
-      <div class="modal-dialog" role="document">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h5 class="modal-title">SSL keypair generation in progress</h5>
-          </div>
-          <div class="modal-body">
-            <p>Wait a few seconds or move your mouse to improve the entropy.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div id="jsoneditor" style="width: 400px; height: 400px;"></div>
-    <script>
-    // create the editor
-    const container = document.getElementById("jsoneditor")
-    const options = {mode: "code", allowSchemaSuggestions: true, schema: {
-      type: "object",
-      properties: {
-        ${Object.entries({ ...defaultConfig, ssl: { cert: "", key: "" } })
-          .map(
-            ([property, exampleValue]) =>
-              `${property}: {type: "${
-                typeof exampleValue === "number"
-                  ? "integer"
-                  : typeof exampleValue === "string"
-                  ? "string"
-                  : typeof exampleValue === "boolean"
-                  ? "boolean"
-                  : "object"
-              }"}`,
-          )
-          .join(",\n          ")}
-      },
-      required: [],
-      additionalProperties: false
-    }}
-
-    function save() {
-      socket.send(JSON.stringify(editor.get()));
-    }
-
-    function generateSslCertificate() {
-      const sslModal = new bootstrap.Modal(document.getElementById('ssl-modal'), {});
-      sslModal.show()
-      setTimeout(function() {
-        const keypair = forge.pki.rsa.generateKeyPair(2048);
-        const certificate = forge.pki.createCertificate();
-        const now = new Date();
-        const fiveYears = new Date(new Date(now).setFullYear(now.getFullYear() + 5));
-        Object.assign(certificate, {
-          publicKey: keypair.publicKey,
-          serialNumber: "01",
-          validity: {
-            notBefore: now,
-            notAfter: fiveYears,
-          },
-        });
-        certificate.sign(keypair.privateKey, forge.md.sha256.create());
-        const key = forge.pki.privateKeyToPem(keypair.privateKey);
-        const cert = forge.pki.certificateToPem(certificate);
-        const existingConfig = editor.get();
-        editor.set({ ...existingConfig, ssl: { key, cert },
-          port: parseInt(("" + existingConfig.port).replace(/(80|[0-9])80$/, '443'))
-        });
-        sslModal.hide();
-      }, 100);
-    }
-
-    const editor = new JSONEditor(container, options);
-    let socket;
-    const initialJson = ${JSON.stringify(config)}
-    editor.set(initialJson)
-    editor.validate();
-    editor.aceEditor.commands.addCommand({
-      name: 'save',
-      bindKey: {win: 'Ctrl-S',  mac: 'Command-S'},
-      exec: save,
-    });
-
-    window.addEventListener("DOMContentLoaded", function() {
-      document.getElementById('jsoneditor').style.height =
-        (document.documentElement.clientHeight - 150) + 'px';
-      document.getElementById('jsoneditor').style.width =
-        parseInt(window.getComputedStyle(
-          document.querySelector('.container')).maxWidth) + 'px';
-      const sslButton = document.createElement('button');
-      sslButton.addEventListener("click", generateSslCertificate);
-      sslButton.type="button";
-      sslButton.classList.add("btn");
-      sslButton.classList.add("btn-primary");
-      sslButton.innerHTML="&#x1F512;";
-      document.querySelector('.jsoneditor-menu')
-              .appendChild(sslButton);
-      const saveButton = document.createElement('button');
-      saveButton.addEventListener("click", save);
-      saveButton.type="button";
-      saveButton.classList.add("btn");
-      saveButton.classList.add("btn-primary");
-      saveButton.innerHTML="&#x1F4BE;";
-      document.querySelector('.jsoneditor-menu')
-              .appendChild(saveButton);
-      socket = new WebSocket("ws${
-        config.ssl ? "s" : ""
-      }://${proxyHostnameAndPort}/local-traffic-config");
-      socket.onmessage = function(event) {
-        editor.set(JSON.parse(event.data))
-        editor.validate()
-      }
-    });
-    </script>
-  </body></html>`);
-
-const errorPage = (
-  thrown: Error,
-  phase: string,
-  requestedURL: URL,
-  downstreamURL?: URL,
-) => `${header(0x1f4a3, "error", thrown.message)}
-<p>An error happened while trying to proxy a remote exchange</p>
-<div class="alert alert-warning" role="alert">
-  &#x24D8;&nbsp;This is not an error from the downstream service.
-</div>
-<div class="alert alert-danger" role="alert">
-<pre><code>${thrown.stack || `<i>${thrown.name} : ${thrown.message}</i>`}${
-  (thrown as ErrorWithErrno).errno
-    ? `<br/>(code : ${(thrown as ErrorWithErrno).errno})`
-    : ""
-}</code></pre>
-</div>
-More information about the request :
-<table class="table">
-  <tbody>
-    <tr>
-      <td>phase</td>
-      <td>${phase}</td>
-    </tr>
-    <tr>
-      <td>requested URL</td>
-      <td>${requestedURL}</td>
-    </tr>
-    <tr>
-      <td>downstream URL</td>
-      <td>${downstreamURL || "&lt;no-target-url&gt;"}</td>
-    </tr>
-  </tbody>
-</table>
-</div></body></html>`;
-
 const replaceBody = async (
   payloadBuffer: Buffer,
   headers: Record<string, number | string | string[]>,
@@ -1143,15 +1234,17 @@ const replaceTextUsingMapping = (
       typeof value === "string" ? value : value.replaceBody,
     ])
     .reduce((inProgress, [path, value]) => {
-      return value.startsWith("logs:") ||
-        value.startsWith("config:") ||
+      return specialProtocols.some(protocol => value.startsWith(protocol)) ||
         (path !== "" && !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
         ? inProgress
         : direction === REPLACEMENT_DIRECTION.INBOUND
         ? inProgress.replace(
             new RegExp(
               value
-                .replace(/^(file|logs):\/\//, "")
+                .replace(
+                  new RegExp(`^(file|${specialPages.join("|")}):\/\/`),
+                  "",
+                )
                 .replace(/[*+?^${}()|[\]\\]/g, "")
                 .replace(/^https/, "https?") + "/*",
               "ig",
@@ -1259,15 +1352,19 @@ const websocketServe = function (
     key,
     target: targetWithForcedPrefix,
     path,
+    url,
   } = determineMapping(request, state.config);
 
-  if (path === "/local-traffic-logs") {
+  if (path.startsWith("/local-traffic-logs")) {
     acknowledgeWebsocket(upstreamSocket, request.headers["sec-websocket-key"]);
     return {
       logsListeners: state.logsListeners.concat({
         stream: upstreamSocket,
         wantsMask: !(request.headers["user-agent"]?.toString() ?? "").includes(
           "Chrome",
+        ),
+        wantsResponseMessage: [...url.searchParams.entries()].some(
+          ([key, value]) => key === "wantsResponseMessage" && value === "true",
         ),
       }),
     };
@@ -1457,10 +1554,11 @@ const serve = async function (
   const outboundRequest: ClientHttp2Session =
     target.protocol === "file:"
       ? fileRequest(targetUrl)
-      : target.protocol === "logs:"
-      ? logsPage(proxyHostnameAndPort, !!state.config.ssl)
-      : target.protocol === "config:"
-      ? configPage(proxyHostnameAndPort, state.config)
+      : specialProtocols.some(protocol => target.protocol === protocol)
+      ? specialPageMapping[target.protocol.replace(/:$/, "")](
+          proxyHostnameAndPort,
+          state.config,
+        )
       : !http2IsSupported
       ? null
       : await Promise.race([
@@ -1468,8 +1566,8 @@ const serve = async function (
             const result = connect(
               targetUrl,
               {
-                timeout: 3000,
-                sessionTimeout: 3000,
+                timeout: state.config.connectTimeout,
+                sessionTimeout: state.config.socketTimeout,
                 rejectUnauthorized: false,
                 protocol: target.protocol,
               } as SecureClientSessionOptions,
@@ -1489,7 +1587,7 @@ const serve = async function (
             setTimeout(() => {
               http2IsSupported = false;
               resolve(null);
-            }, 3000),
+            }, state.config.connectTimeout),
           ),
         ]);
   if (!(error instanceof Buffer)) error = null;
@@ -1518,7 +1616,7 @@ const serve = async function (
 
     let requestBodyBuffer: Buffer = Buffer.from([]);
     await Promise.race([
-      new Promise(resolve => setTimeout(resolve, 10000)),
+      new Promise(resolve => setTimeout(resolve, state.config.connectTimeout)),
       new Promise(resolve => {
         if (!requestBodyExpected) {
           resolve(void 0);
@@ -1621,7 +1719,7 @@ const serve = async function (
   const outboundHttp1Response: IncomingMessage =
     !error &&
     !http2IsSupported &&
-    !["file:", "logs:", "config:"].includes(target.protocol) &&
+    !["file:", ...specialProtocols].includes(target.protocol) &&
     (await new Promise(resolve => {
       const outboundHttp1Request: ClientRequest =
         target.protocol === "https:"
@@ -1717,7 +1815,10 @@ const serve = async function (
             proxyHostnameAndPort,
             ssl: !!state.config.ssl,
             mapping: state.config.mapping,
-          }).replace(/^(config:|logs:|file:)\/+/, ""),
+          }).replace(
+            new RegExp(`^(${specialProtocols.join("|")}|file:)\/+`),
+            "",
+          ),
         );
   const translatedReplacedRedirectUrl = !redirectUrl
     ? redirectUrl
@@ -1754,7 +1855,8 @@ const serve = async function (
     }).then((payloadBuffer: Buffer) => {
       if (!state.config.replaceResponseBodyUrls) return payloadBuffer;
       if (!payloadBuffer.length) return payloadBuffer;
-      if (target.protocol === "config:") return payloadBuffer;
+      if (specialProtocols.some(protocol => target.protocol === protocol))
+        return payloadBuffer;
 
       return replaceBody(payloadBuffer, outboundResponseHeaders, {
         proxyHostnameAndPort,
@@ -1868,6 +1970,16 @@ const serve = async function (
         body: requestBody?.toJSON(),
       }),
     ).toString("base64"),
+    response: state.logsListeners.some(
+      listener => listener.wantsResponseMessage,
+    ) // let's make sure it is worth doing .toString("base64")
+      ? // ... it might be very expensive
+        {
+          body: payload.toString("base64"),
+          headers: outboundResponseHeaders,
+          status: statusCode,
+        }
+      : {},
   });
 };
 
@@ -1949,6 +2061,7 @@ const update = async (
     .forEach(l => l.stream.destroy());
 
   const config = newState.config ?? currentState.config;
+  const mode = newState.mode ?? currentState.mode;
   const configListeners = (
     newState.configListeners === null
       ? []
@@ -1965,6 +2078,7 @@ const update = async (
     config,
     logsListeners,
     configListeners,
+    mode,
     configFileWatcher:
       state.configFileWatcher === undefined
         ? watchFile(filename, async () => update(state, await onWatch(state)))
@@ -2003,15 +2117,18 @@ const update = async (
 };
 
 const mainProgram =
-  argv.map(arg => arg.trim()).filter(
-    arg => arg &&
-      !["ts-node", "node", "npx", "npm", "exec"].some(
-        pattern =>
-          arg.includes(pattern) &&
-          !arg.match(/npm-cache/) &&
-          !arg.match(/_npx/),
-      ),
-  )[0] ?? "";
+  argv
+    .map(arg => arg.trim())
+    .filter(
+      arg =>
+        arg &&
+        !["ts-node", "node", "npx", "npm", "exec"].some(
+          pattern =>
+            arg.includes(pattern) &&
+            !arg.match(/npm-cache/) &&
+            !arg.match(/_npx/),
+        ),
+    )[0] ?? "";
 
 const runAsMainProgram =
   mainProgram.toLowerCase().replace(/[-_]/g, "").includes("localtraffic") &&
