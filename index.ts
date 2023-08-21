@@ -112,6 +112,11 @@ type Mapping = {
 };
 
 type Mocks = Map<string, string>;
+type MockResponseObject = {
+  body: string;
+  headers: IncomingHttpHeaders & IncomingHttpStatusHeader;
+  status: number;
+};
 
 enum ServerMode {
   PROXY,
@@ -1033,6 +1038,58 @@ const header = (
 )}; local-traffic ${category}</h1>
 <br/>`;
 
+const mockRequest = ({
+  uniqueHash,
+  response,
+}: {
+  uniqueHash: string;
+  response: string;
+}): ClientHttp2Session => {
+  return {
+    error: null as Error,
+    data: null as MockResponseObject,
+    hasRun: false,
+    run: function () {
+      return this.hasRun
+        ? Promise.resolve()
+        : new Promise(promiseResolve => {
+            this.data = JSON.parse(
+              Buffer.from(response, "base64").toString("utf-8"),
+            );
+            promiseResolve(void 0);
+          });
+    },
+    events: {} as { [name: string]: (...any: any) => any },
+    on: function (name: string, action: (...any: any) => any) {
+      this.events[name] = action;
+      this.run().then(() => {
+        if (name === "response")
+          this.events["response"](
+            {
+              ...this.data.headers,
+              "X-LocalTraffic-UniqueHash": uniqueHash.substring(0, 256),
+            },
+            this.data.status,
+          );
+        if (name === "data" && this.data) {
+          this.events["data"](this.data.body);
+          this.events["end"]();
+        }
+        if (name === "error" && this.error) {
+          this.events["error"](this.error);
+        }
+      });
+      return this;
+    },
+    end: function () {
+      return this;
+    },
+    request: function () {
+      return this;
+    },
+  } as unknown as ClientHttp2Session;
+};
+
 const fileRequest = (url: URL): ClientHttp2Session => {
   const file = resolve(
     "/",
@@ -1708,46 +1765,47 @@ const serve = async function (
   // phase: connection
   const startTime = instantTime();
   let error: Buffer = null;
-  const outboundRequest: ClientHttp2Session =
-    target.protocol === "file:"
-      ? fileRequest(targetUrl)
-      : specialProtocols.some(protocol => target.protocol === protocol)
-      ? specialPageMapping[target.protocol.replace(/:$/, "")](
-          proxyHostnameAndPort,
-          state,
-          inboundRequest,
-        )
-      : !http2IsSupported
-      ? null
-      : await Promise.race([
-          new Promise<ClientHttp2Session>(resolve => {
-            const result = connect(
-              targetUrl,
-              {
-                timeout: state.config.connectTimeout,
-                sessionTimeout: state.config.socketTimeout,
-                rejectUnauthorized: false,
-                protocol: target.protocol,
-              } as SecureClientSessionOptions,
-              (_, socketPath) => {
-                http2IsSupported =
-                  http2IsSupported && !!(socketPath as any).alpnProtocol;
-                resolve(!http2IsSupported ? null : result);
-              },
-            );
-            (result as unknown as Http2Session).on("error", (thrown: Error) => {
-              error =
-                http2IsSupported &&
-                Buffer.from(errorPage(thrown, "connection", url, targetUrl));
-            });
-          }),
-          new Promise<ClientHttp2Session>(resolve =>
-            setTimeout(() => {
-              http2IsSupported = false;
-              resolve(null);
-            }, state.config.connectTimeout),
-          ),
-        ]);
+  const outboundRequest: ClientHttp2Session = state.mocks.has(uniqueHash)
+    ? mockRequest({ uniqueHash, response: state.mocks.get(uniqueHash) })
+    : target.protocol === "file:"
+    ? fileRequest(targetUrl)
+    : specialProtocols.some(protocol => target.protocol === protocol)
+    ? specialPageMapping[target.protocol.replace(/:$/, "")](
+        proxyHostnameAndPort,
+        state,
+        inboundRequest,
+      )
+    : !http2IsSupported
+    ? null
+    : await Promise.race([
+        new Promise<ClientHttp2Session>(resolve => {
+          const result = connect(
+            targetUrl,
+            {
+              timeout: state.config.connectTimeout,
+              sessionTimeout: state.config.socketTimeout,
+              rejectUnauthorized: false,
+              protocol: target.protocol,
+            } as SecureClientSessionOptions,
+            (_, socketPath) => {
+              http2IsSupported =
+                http2IsSupported && !!(socketPath as any).alpnProtocol;
+              resolve(!http2IsSupported ? null : result);
+            },
+          );
+          (result as unknown as Http2Session).on("error", (thrown: Error) => {
+            error =
+              http2IsSupported &&
+              Buffer.from(errorPage(thrown, "connection", url, targetUrl));
+          });
+        }),
+        new Promise<ClientHttp2Session>(resolve =>
+          setTimeout(() => {
+            http2IsSupported = false;
+            resolve(null);
+          }, state.config.connectTimeout),
+        ),
+      ]);
   if (!(error instanceof Buffer)) error = null;
 
   const outboundHeaders: OutgoingHttpHeaders = {
@@ -2043,13 +2101,15 @@ const serve = async function (
     outboundResponseHeaders[":status"] ||
     outboundHttp1Response.statusCode ||
     200;
-  inboundResponse.writeHead(
-    statusCode,
-    state.config.ssl
-      ? undefined // statusMessage is discarded in http/2
-      : outboundHttp1Response.statusMessage || "Status read from http/2",
-    responseHeaders,
-  );
+  try {
+    inboundResponse.writeHead(
+      statusCode,
+      state.config.ssl
+        ? undefined // statusMessage is discarded in http/2
+        : outboundHttp1Response.statusMessage || "Status read from http/2",
+      responseHeaders,
+    );
+  } catch (e) {}
   if (payload) inboundResponse.end(payload);
   else inboundResponse.end();
   const endTime = instantTime();
@@ -2152,7 +2212,8 @@ const update = async (
 
   const config = newState.config ?? currentState.config;
   const mode = newState.mode ?? currentState.mode ?? ServerMode.PROXY;
-  const mocks = newState.mocks ?? currentState.mocks ?? [];
+  const mocks =
+    newState.mocks ?? currentState.mocks ?? new Map<string, string>();
   const configListeners = (
     newState.configListeners === null
       ? []
