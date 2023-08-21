@@ -702,7 +702,7 @@ const recorderPage = (
   request: Http2ServerRequest | IncomingMessage
 ) => {
   if (request.method === 'POST') {
-    return staticPage(`ok`);
+    return staticPage(`{"status": "pushed"}`, 'application/json; charset=utf-8');
   }
   return staticPage(`${header(0x23fa, "recorder", "")}
   <div class="btn-group" role="group" aria-label="Server Mode">
@@ -1094,7 +1094,7 @@ const fileRequest = (url: URL): ClientHttp2Session => {
   } as unknown as ClientHttp2Session;
 };
 
-const staticPage = (data: string): ClientHttp2Session =>
+const staticPage = (data: string, contentType?: string): ClientHttp2Session =>
   ({
     error: null as Error,
     data: null as string | Buffer,
@@ -1112,7 +1112,7 @@ const staticPage = (data: string): ClientHttp2Session =>
           this.events["response"](
             {
               Server: "local",
-              "Content-Type": "text/html",
+              "Content-Type": contentType ?? "text/html",
             },
             0,
           );
