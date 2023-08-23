@@ -1072,7 +1072,9 @@ const mockRequest = ({
             this.data.status,
           );
         if (name === "data" && this.data) {
-          this.events["data"](this.data.body);
+          this.events["data"](
+            Buffer.from(this.data.body, "base64").toString("utf-8"),
+          );
           this.events["end"]();
         }
         if (name === "error" && this.error) {
@@ -1751,6 +1753,10 @@ const serve = async function (
       body: requestBody?.toJSON(),
     }),
   ).toString("base64");
+  const targetUsesSpecialProtocol = specialProtocols.some(
+    protocol => target.protocol === protocol,
+  );
+  const targetIsFile = target.protocol === "file:";
 
   state.notifyLogsListeners({
     level: "info",
@@ -1762,50 +1768,72 @@ const serve = async function (
     uniqueHash,
   });
 
+  if (
+    state.mode === ServerMode.MOCK &&
+    (!targetUsesSpecialProtocol || targetIsFile) &&
+    !state.mocks.get(uniqueHash)
+  ) {
+    send(
+      502,
+      inboundResponse,
+      Buffer.from(
+        errorPage(
+          new Error(`No corresponding mock found in the server. 
+          Try switching back to the proxy mode`),
+          "mock",
+          url,
+        ),
+      ),
+    );
+    return;
+  }
+
   // phase: connection
   const startTime = instantTime();
   let error: Buffer = null;
-  const outboundRequest: ClientHttp2Session = state.mocks.has(uniqueHash)
-    ? mockRequest({ uniqueHash, response: state.mocks.get(uniqueHash) })
-    : target.protocol === "file:"
-    ? fileRequest(targetUrl)
-    : specialProtocols.some(protocol => target.protocol === protocol)
-    ? specialPageMapping[target.protocol.replace(/:$/, "")](
-        proxyHostnameAndPort,
-        state,
-        inboundRequest,
-      )
-    : !http2IsSupported
-    ? null
-    : await Promise.race([
-        new Promise<ClientHttp2Session>(resolve => {
-          const result = connect(
-            targetUrl,
-            {
-              timeout: state.config.connectTimeout,
-              sessionTimeout: state.config.socketTimeout,
-              rejectUnauthorized: false,
-              protocol: target.protocol,
-            } as SecureClientSessionOptions,
-            (_, socketPath) => {
-              http2IsSupported =
-                http2IsSupported && !!(socketPath as any).alpnProtocol;
-              resolve(!http2IsSupported ? null : result);
-            },
-          );
-          (result as unknown as Http2Session).on("error", (thrown: Error) => {
-            error =
-              http2IsSupported &&
-              Buffer.from(errorPage(thrown, "connection", url, targetUrl));
-          });
-        }),
-        new Promise<ClientHttp2Session>(resolve =>
-          setTimeout(() => {
-            http2IsSupported = false;
-            resolve(null);
-          }, state.config.connectTimeout),
-        ),
-      ]);
+  const outboundRequest: ClientHttp2Session =
+    state.mode === ServerMode.MOCK &&
+    (!targetUsesSpecialProtocol || targetIsFile)
+      ? mockRequest({ uniqueHash, response: state.mocks.get(uniqueHash) })
+      : targetIsFile
+      ? fileRequest(targetUrl)
+      : targetUsesSpecialProtocol
+      ? specialPageMapping[target.protocol.replace(/:$/, "")](
+          proxyHostnameAndPort,
+          state,
+          inboundRequest,
+        )
+      : !http2IsSupported
+      ? null
+      : await Promise.race([
+          new Promise<ClientHttp2Session>(resolve => {
+            const result = connect(
+              targetUrl,
+              {
+                timeout: state.config.connectTimeout,
+                sessionTimeout: state.config.socketTimeout,
+                rejectUnauthorized: false,
+                protocol: target.protocol,
+              } as SecureClientSessionOptions,
+              (_, socketPath) => {
+                http2IsSupported =
+                  http2IsSupported && !!(socketPath as any).alpnProtocol;
+                resolve(!http2IsSupported ? null : result);
+              },
+            );
+            (result as unknown as Http2Session).on("error", (thrown: Error) => {
+              error =
+                http2IsSupported &&
+                Buffer.from(errorPage(thrown, "connection", url, targetUrl));
+            });
+          }),
+          new Promise<ClientHttp2Session>(resolve =>
+            setTimeout(() => {
+              http2IsSupported = false;
+              resolve(null);
+            }, state.config.connectTimeout),
+          ),
+        ]);
   if (!(error instanceof Buffer)) error = null;
 
   const outboundHeaders: OutgoingHttpHeaders = {
