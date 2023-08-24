@@ -1684,7 +1684,42 @@ const serve = async function (
   )}`.replace(/^\/*/, "/");
   const targetUrl = new URL(`${target.protocol}//${targetHost}${fullPath}`);
 
+  const targetUsesSpecialProtocol = specialProtocols.some(
+    protocol => target.protocol === protocol,
+  );
   let http2IsSupported = !state.config.dontUseHttp2Downstream;
+  const http2Connection =
+    http2IsSupported &&
+    !targetUsesSpecialProtocol &&
+    (await Promise.race([
+      new Promise<ClientHttp2Session>(resolve => {
+        const result = connect(
+          targetUrl,
+          {
+            timeout: state.config.connectTimeout,
+            sessionTimeout: state.config.socketTimeout,
+            rejectUnauthorized: false,
+            protocol: target.protocol,
+          } as SecureClientSessionOptions,
+          (_, socketPath) => {
+            http2IsSupported =
+              http2IsSupported && !!(socketPath as any).alpnProtocol;
+            resolve(!http2IsSupported ? null : result);
+          },
+        );
+        (result as unknown as Http2Session).on("error", (thrown: Error) => {
+          error =
+            http2IsSupported &&
+            Buffer.from(errorPage(thrown, "connection", url, targetUrl));
+        });
+      }),
+      new Promise<ClientHttp2Session>(resolve =>
+        setTimeout(() => {
+          http2IsSupported = false;
+          resolve(null);
+        }, state.config.connectTimeout),
+      ),
+    ]));
   const randomId = randomBytes(20).toString("hex");
   let requestBody: Buffer | null = null;
   const bufferedRequestBody =
@@ -1753,9 +1788,6 @@ const serve = async function (
       body: requestBody?.toJSON(),
     }),
   ).toString("base64");
-  const targetUsesSpecialProtocol = specialProtocols.some(
-    protocol => target.protocol === protocol,
-  );
   const targetIsFile = target.protocol === "file:";
 
   state.notifyLogsListeners({
@@ -1803,37 +1835,9 @@ const serve = async function (
           state,
           inboundRequest,
         )
-      : !http2IsSupported
-      ? null
-      : await Promise.race([
-          new Promise<ClientHttp2Session>(resolve => {
-            const result = connect(
-              targetUrl,
-              {
-                timeout: state.config.connectTimeout,
-                sessionTimeout: state.config.socketTimeout,
-                rejectUnauthorized: false,
-                protocol: target.protocol,
-              } as SecureClientSessionOptions,
-              (_, socketPath) => {
-                http2IsSupported =
-                  http2IsSupported && !!(socketPath as any).alpnProtocol;
-                resolve(!http2IsSupported ? null : result);
-              },
-            );
-            (result as unknown as Http2Session).on("error", (thrown: Error) => {
-              error =
-                http2IsSupported &&
-                Buffer.from(errorPage(thrown, "connection", url, targetUrl));
-            });
-          }),
-          new Promise<ClientHttp2Session>(resolve =>
-            setTimeout(() => {
-              http2IsSupported = false;
-              resolve(null);
-            }, state.config.connectTimeout),
-          ),
-        ]);
+      : http2IsSupported
+      ? http2Connection
+      : null;
   if (!(error instanceof Buffer)) error = null;
 
   const outboundHeaders: OutgoingHttpHeaders = {
