@@ -1691,6 +1691,7 @@ const serve = async function (
   const http2Connection =
     http2IsSupported &&
     !targetUsesSpecialProtocol &&
+    target.protocol !== "file:" &&
     (await Promise.race([
       new Promise<ClientHttp2Session>(resolve => {
         const result = connect(
