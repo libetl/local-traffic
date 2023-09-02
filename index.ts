@@ -1687,6 +1687,7 @@ const serve = async function (
   const targetUsesSpecialProtocol = specialProtocols.some(
     protocol => target.protocol === protocol,
   );
+  let error: Buffer = null;
   let http2IsSupported = !state.config.dontUseHttp2Downstream;
   const http2Connection =
     http2IsSupported &&
@@ -1823,7 +1824,6 @@ const serve = async function (
 
   // phase: connection
   const startTime = instantTime();
-  let error: Buffer = null;
   const outboundRequest: ClientHttp2Session =
     state.mode === ServerMode.MOCK &&
     (!targetUsesSpecialProtocol || targetIsFile)
