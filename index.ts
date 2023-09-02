@@ -1089,6 +1089,9 @@ const mockRequest = ({
     request: function () {
       return this;
     },
+    write: function () {
+      return this;
+    },
   } as unknown as ClientHttp2Session;
 };
 
@@ -1953,6 +1956,7 @@ const serve = async function (
     });
     (inboundRequest as IncomingMessage).on("end", () => outboundExchange.end());
   } else if (outboundExchange && bufferedRequestBody && requestBodyExpected) {
+    console.log(outboundExchange);
     outboundExchange.write(requestBody);
     outboundExchange.end();
   }
