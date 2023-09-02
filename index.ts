@@ -119,8 +119,8 @@ type MockResponseObject = {
 };
 
 enum ServerMode {
-  PROXY,
-  MOCK,
+  PROXY = "proxy",
+  MOCK = "mock",
 }
 
 interface State {
@@ -379,6 +379,7 @@ const quickStatus = function (this: State) {
 
 const errorPage = (
   thrown: Error,
+  serverMode: ServerMode,
   phase: string,
   requestedURL: URL,
   downstreamURL?: URL,
@@ -397,6 +398,10 @@ const errorPage = (
 More information about the request :
 <table class="table">
   <tbody>
+    <tr>
+      <td>server mode</td>
+      <td>${serverMode}</td>
+    </tr>
     <tr>
       <td>phase</td>
       <td>${phase}</td>
@@ -1650,6 +1655,7 @@ const serve = async function (
       Buffer.from(
         errorPage(
           new Error(`client must supply a 'host' header`),
+          state.mode,
           "proxy",
           new URL(
             `http${state.config.ssl ? "s" : ""}://unknowndomain${
@@ -1671,6 +1677,7 @@ const serve = async function (
       Buffer.from(
         errorPage(
           new Error(`No mapping found in config file ${filename}`),
+          state.mode,
           "proxy",
           url,
         ),
@@ -1715,7 +1722,9 @@ const serve = async function (
         (result as unknown as Http2Session).on("error", (thrown: Error) => {
           error =
             http2IsSupported &&
-            Buffer.from(errorPage(thrown, "connection", url, targetUrl));
+            Buffer.from(
+              errorPage(thrown, state.mode, "connection", url, targetUrl),
+            );
         });
       }),
       new Promise<ClientHttp2Session>(resolve =>
@@ -1817,6 +1826,7 @@ const serve = async function (
         errorPage(
           new Error(`No corresponding mock found in the server. 
           Try switching back to the proxy mode`),
+          state.mode,
           "mock",
           url,
         ),
@@ -1881,6 +1891,7 @@ const serve = async function (
     error = Buffer.from(
       errorPage(
         thrown,
+        state.mode,
         "stream" +
           (httpVersionSupported
             ? " (error -505 usually means that the downstream service " +
@@ -1923,7 +1934,9 @@ const serve = async function (
           : httpRequest(http1RequestOptions, resolve);
 
       outboundHttp1Request.on("error", thrown => {
-        error = Buffer.from(errorPage(thrown, "request", url, targetUrl));
+        error = Buffer.from(
+          errorPage(thrown, state.mode, "request", url, targetUrl),
+        );
         resolve(null as IncomingMessage);
       });
       if (bufferedRequestBody) {
@@ -2066,7 +2079,7 @@ const serve = async function (
         send(
           502,
           inboundResponse,
-          Buffer.from(errorPage(e, "stream", url, targetUrl)),
+          Buffer.from(errorPage(e, state.mode, "stream", url, targetUrl)),
         );
         return Buffer.from("");
       });
