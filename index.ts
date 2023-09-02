@@ -1078,7 +1078,7 @@ const mockRequest = ({
           );
         if (name === "data" && this.data) {
           this.events["data"](
-            Buffer.from(this.data.body, "base64").toString("utf-8"),
+            Buffer.from(this.data.body ?? "", "base64").toString("utf-8"),
           );
           this.events["end"]();
         }
@@ -1886,22 +1886,23 @@ const serve = async function (
         : !http1WithRequestBody,
     });
 
-  outboundExchange?.on("error", (thrown: Error) => {
-    const httpVersionSupported = (thrown as ErrorWithErrno).errno === -505;
-    error = Buffer.from(
-      errorPage(
-        thrown,
-        state.mode,
-        "stream" +
-          (httpVersionSupported
-            ? " (error -505 usually means that the downstream service " +
-              "does not support this http version)"
-            : ""),
-        url,
-        targetUrl,
-      ),
-    );
-  });
+  typeof outboundExchange === "object" &&
+    outboundExchange?.on("error", (thrown: Error) => {
+      const httpVersionSupported = (thrown as ErrorWithErrno).errno === -505;
+      error = Buffer.from(
+        errorPage(
+          thrown,
+          state.mode,
+          "stream" +
+            (httpVersionSupported
+              ? " (error -505 usually means that the downstream service " +
+                "does not support this http version)"
+              : ""),
+          url,
+          targetUrl,
+        ),
+      );
+    });
 
   const http1RequestOptions: RequestOptions = {
     hostname: target.hostname,
