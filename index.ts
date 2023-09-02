@@ -1078,7 +1078,7 @@ const mockRequest = ({
           );
         if (name === "data" && this.data) {
           this.events["data"](
-            Buffer.from(this.data.body ?? "", "base64").toString("utf-8"),
+            Buffer.from(this.data.body ?? "", "base64"),
           );
           this.events["end"]();
         }
