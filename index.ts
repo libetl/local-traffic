@@ -426,7 +426,9 @@ const logsView = (
   `<table id="table-access" class="table table-striped" style="display: block; width: 100%; overflow-y: auto">
   <thead>
     <tr>
-      <th scope="col">...</th>
+      <th scope="col"${
+        options.captureResponseBody === true ? ' style="min-width: 105px"' : ""
+      }>...</th>
       <th scope="col">Date</th>
       <th scope="col">Level</th>
       <th scope="col">Protocol</th>
