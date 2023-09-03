@@ -131,6 +131,7 @@ interface State {
   configFileWatcher: StatWatcher;
   mode: ServerMode;
   mocks: Mocks;
+  strictMock: boolean;
   log: (text: string, level?: LogLevel, emoji?: string) => void;
   notifyConfigListeners: (data: Record<string, unknown>) => void;
   notifyLogsListeners: (data: Record<string, unknown>) => void;
@@ -427,7 +428,7 @@ const logsView = (
   <thead>
     <tr>
       <th scope="col"${
-        options.captureResponseBody === true ? ' style="min-width: 105px"' : ""
+        options.captureResponseBody === true ? ' style="min-width: 110px"' : ""
       }>...</th>
       <th scope="col">Date</th>
       <th scope="col">Level</th>
@@ -484,12 +485,7 @@ const logsView = (
           '" data-uniquehash="' + uniqueHash + '" onclick="javascript:replay(event)" ' +
           'type="button" class="btn btn-primary">&#x1F501;</button>' : '';
         if(data.statusCode && uniqueHash) {
-          const color = Math.floor(data.statusCode / 100) === 1 ? "info" :
-            Math.floor(data.statusCode / 100) === 2 ? "success" :
-            Math.floor(data.statusCode / 100) === 3 ? "dark" :
-            Math.floor(data.statusCode / 100) === 4 ? "warning" :
-            Math.floor(data.statusCode / 100) === 5 ? "danger" :
-            "secondary";
+          const color = getColorFromStatusCode(data.statusCode);
           const statusCodeColumn = document.querySelector("#event-" + data.randomId + " .statusCode");
           if (statusCodeColumn)
             statusCodeColumn.innerHTML = '<span class="badge bg-' + color + '">' + data.statusCode + '</span>';
@@ -566,6 +562,14 @@ const logsView = (
           ? undefined
           : new TextDecoder().decode(new Int8Array(body.data))
       });
+    }
+    function getColorFromStatusCode(statusCode) {
+      return Math.floor(statusCode / 100) === 1 ? "info" :
+        Math.floor(statusCode / 100) === 2 ? "success" :
+        Math.floor(statusCode / 100) === 3 ? "dark" :
+        Math.floor(statusCode / 100) === 4 ? "warning" :
+        Math.floor(statusCode / 100) === 5 ? "danger" :
+        "secondary";
     }
     window.addEventListener("DOMContentLoaded", start);
 </script>`;
@@ -742,7 +746,7 @@ const recorderPage = (
           if (!Array.isArray(mocksArray)) return;
           const mocks: Mocks = new Map<string, string>(
             mocksArray.map(({ response, uniqueHash }) => [
-              uniqueHash,
+              cleanEntropy(uniqueHash),
               response,
             ]),
           );
@@ -760,8 +764,29 @@ const recorderPage = (
       },
     });
   }
+  if (request.method === "PUT" && request.url?.endsWith("strict-mock")) {
+    return staticResponse(`{"status": "acknowledged"}`, {
+      contentType: "application/json; charset=utf-8",
+      onOutboundWrite: buffer => {
+        try {
+          const strictMockPayload = JSON.parse(buffer.toString("ascii"));
+          const strictMock =
+            typeof strictMockPayload?.active === "boolean"
+              ? strictMockPayload.active
+              : false;
+          update(state, { strictMock });
+          state.log(
+            `mock strict mode : ${strictMock}`,
+            LogLevel.INFO,
+            EMOJIS.MOCKS,
+          );
+          state.quickStatus();
+        } catch (e) {}
+      },
+    });
+  }
   return staticResponse(`${header(0x23fa, "recorder", "")}
-  <button type="button" class="btn btn-light" id="delete-mocks">&#x1F5D1; Delete mocks</button>
+  <span>Mode : </span>
   <div class="btn-group" role="group" aria-label="Server Mode">
     <input type="radio" class="btn-check" name="server-mode" id="record-mode" autocomplete="off"${
       state.mode === ServerMode.PROXY ? " checked" : ""
@@ -772,8 +797,86 @@ const recorderPage = (
     }>
     <label class="btn btn-outline-primary" for="mock-mode">&#x1F310; Mock</label>
   </div>
+  <span>Actions : </span>
+  <button type="button" class="btn btn-light" id="upload-mocks">&#x1F4E5; Upload mocks</button>
+  <button type="button" class="btn btn-light" id="download-mocks">&#x1F4E6; Download mocks</button>
+  <button type="button" class="btn btn-light" id="delete-mocks">&#x1F5D1; Delete mocks</button>
+  <div class="form-check form-switch">
+    <input class="form-check-input" type="checkbox" id="strict-mock-mode"${
+      state.strictMock ? " checked" : ""
+    }>
+    <label class="form-check-label" for="strict-mock-mode">Strict mock mode</label>
+  </div>
   <input type="hidden" id="limit" value="0"/>
   <script>
+    function getMocksData () {
+      return JSON.stringify(
+        [...document.querySelectorAll('button[data-uniqueHash]')].map(button => ({
+          response: button.attributes['data-response']?.value,
+          uniqueHash: button.attributes['data-uniqueHash']?.value}))
+       )
+    }
+    function loadMocks(mocksHashes) {
+      const time = new Date().toISOString().split('T')[1].replace('Z', '');
+      let mocks = [];
+      try {
+        mocks = mocksHashes.map(mock => ({...mock, 
+          request: JSON.parse(atob(mock.uniqueHash)),
+          response: JSON.parse(atob(mock.response))
+        }));
+      } catch(e) { }
+      mocks.forEach(mock => {
+        const randomId = window.crypto.randomUUID();
+        const remove = '<button onclick="javascript:remove(event)" type="button" ' +
+        'class="btn btn-primary">&#x274C;</button>';
+        const replay = mock.uniqueHash ? '<button data-response="' + 
+          btoa(JSON.stringify(mock.response ?? {})) +
+          '" data-uniquehash="' + mock.uniqueHash + '" onclick="javascript:replay(event)" ' +
+          'type="button" class="btn btn-primary">&#x1F501;</button>' : '';
+        document.getElementById("access")
+        .insertAdjacentHTML('afterbegin', '<tr id="event-' + randomId + '">' +
+            '<td scope="col" class="replay">' + replay + remove + '</td>' +
+            '<td scope="col">' + time + '</td>' +
+            '<td scope="col">info</td>' + 
+            '<td scope="col" class="protocol">HTTP/2</td>' + 
+            '<td scope="col">' + mock.request.method + '</td>' + 
+            '<td scope="col" class="statusCode"><span class="badge bg-' + 
+            getColorFromStatusCode(mock.response.status) + '">' + mock.response.status + '</span></td>' +
+            '<td scope="col" class="duration">0ms</td>' +
+            '<td scope="col">' + mock.request.url + '</td>' + 
+            '<td scope="col">N/A</td>' + 
+            '</tr>');
+      });
+    }
+    document.getElementById('upload-mocks').addEventListener('click', () => {
+      const time = new Date().toISOString().split('T')[1].replace('Z', '');
+      const fileInput = document.createElement('input');
+      fileInput.type = "file";
+      fileInput.multiple = "multiple";
+      fileInput.onchange = function() {
+        const fileReader = new FileReader();
+        [...fileInput.files].reduce((promise, file) =>
+          promise.then(result => new Promise(resolve => {
+            fileReader.readAsText(file);
+            fileReader.onload = function(){
+              resolve(result.concat(fileReader.result));
+            };
+          })), Promise.resolve([]))
+        .then(files => files.flatMap(file => JSON.parse(file)))
+        .catch(e => [])
+        .then(mocks => loadMocks(mocks));
+      }
+      fileInput.click();
+    });
+    document.getElementById('download-mocks').addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(new Blob([getMocksData()], {
+        type: "application/json",
+      }));
+      link.download = "mocks-" + new Date().toISOString() + ".json";
+      link.click();
+      URL.revokeObjectURL(link.href);
+    })
     document.getElementById('delete-mocks').addEventListener('click', () => {
       document.getElementById('limit').value = -1;
       cleanup();
@@ -786,23 +889,38 @@ const recorderPage = (
     Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
       value?.toString()?.startsWith("recorder:"),
     )?.[0] ?? "/recorder/mocks"
-  }", { method: 'DELETE' });
+  }mocks", { method: 'DELETE' });
     })
     document.getElementById('mock-mode').addEventListener('change', () => {
       fetch("http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
     Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
       value?.toString()?.startsWith("recorder:"),
     )?.[0] ?? "/recorder/mocks"
-  }", {
+  }mocks", {
        method: 'POST',
        headers: { 'Content-Type': 'application/json' },
-       body: JSON.stringify(
-        [...document.querySelectorAll('button[data-uniqueHash]')].map(button => ({
-          response: button.attributes['data-response']?.value,
-          uniqueHash: button.attributes['data-uniqueHash']?.value}))
-       )
+       body: getMocksData()
      })
     })
+    document.getElementById('strict-mock-mode').addEventListener('change', (e) => {
+      fetch("http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
+    Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
+      value?.toString()?.startsWith("recorder:"),
+    )?.[0] ?? "/recorder/strict-mock"
+  }strict-mock", {
+       method: 'PUT',
+       headers: { 'Content-Type': 'application/json' },
+       body: '{"active":' + e.target.checked + '}'
+     })
+    })
+    setTimeout(() => {
+      loadMocks(${JSON.stringify(
+        [...state.mocks.entries()].map(([uniqueHash, response]) => ({
+          uniqueHash,
+          response,
+        })),
+      )});
+    }, 10)
   </script>
   ${logsView(proxyHostnameAndPort, state.config, { captureResponseBody: true })}
   </body></html>`);
@@ -1050,10 +1168,8 @@ const header = (
 <br/>`;
 
 const mockRequest = ({
-  uniqueHash,
   response,
 }: {
-  uniqueHash: string;
   response: string;
 }): ClientHttp2Session => {
   return {
@@ -1082,7 +1198,7 @@ const mockRequest = ({
           this.events["response"](
             {
               ...this.data.headers,
-              "X-LocalTraffic-UniqueHash": uniqueHash.substring(0, 256),
+              "X-LocalTraffic-Mock": "1",
             },
             this.data.status,
           );
@@ -1432,6 +1548,51 @@ const replaceTextUsingMapping = (
     }, text)
     .split(`${proxyHostnameAndPort}/:`)
     .join(`${proxyHostnameAndPort}:`);
+
+const cleanEntropy = (uniqueHash: string) => {
+  try {
+    const request = JSON.parse(
+      Buffer.from(uniqueHash, "base64").toString("utf-8"),
+    );
+    [
+      "authorization",
+      "cache-control",
+      "date",
+      "proxy-authenticate",
+      "proxy-authorization",
+      "expires",
+      "last-modified",
+      "if-modified-since",
+      "if-unmodified-since",
+      "keep-alive",
+      "cookie",
+      "access-control-max-age",
+      "retry-after",
+      "signed-headers",
+      "server-timing",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile",
+      "sec-ch-ua-platform",
+      "user-agent",
+      // no user agent comparison
+      "sec-fetch-site",
+      // disable check on same-origin domain
+      "referer",
+      // referer is more of a nuisance than a true discriminant
+    ].forEach(header => {
+      delete request?.headers?.[header];
+    });
+    request.headers = Object.keys(request.headers)
+      .sort()
+      .reduce((obj, key) => {
+        obj[key] = request.headers[key];
+        return obj;
+      }, {});
+    return Buffer.from(JSON.stringify(request), "utf-8").toString("base64");
+  } catch (e) {
+    return uniqueHash;
+  }
+};
 
 const send = (
   code: number,
@@ -1825,11 +1986,16 @@ const serve = async function (
     uniqueHash,
   });
 
-  if (
+  const cleanedUniqueHash =
+    state.mode === ServerMode.MOCK ? cleanEntropy(uniqueHash) : "";
+
+  const shouldMock =
     state.mode === ServerMode.MOCK &&
-    (!targetUsesSpecialProtocol || targetIsFile) &&
-    !state.mocks.get(uniqueHash)
-  ) {
+    (!targetUsesSpecialProtocol || targetIsFile);
+
+  const foundMock = state.mocks.get(cleanedUniqueHash);
+
+  if (shouldMock && !foundMock && state.strictMock) {
     send(
       502,
       inboundResponse,
@@ -1849,9 +2015,8 @@ const serve = async function (
   // phase: connection
   const startTime = instantTime();
   const outboundRequest: ClientHttp2Session =
-    state.mode === ServerMode.MOCK &&
-    (!targetUsesSpecialProtocol || targetIsFile)
-      ? mockRequest({ uniqueHash, response: state.mocks.get(uniqueHash) })
+    shouldMock && foundMock
+      ? mockRequest({ response: foundMock })
       : targetIsFile
       ? fileRequest(targetUrl)
       : targetUsesSpecialProtocol
@@ -2273,6 +2438,7 @@ const update = async (
 
   const config = newState.config ?? currentState.config;
   const mode = newState.mode ?? currentState.mode ?? ServerMode.PROXY;
+  const strictMock = newState.strictMock ?? currentState.strictMock ?? false;
   const mocks =
     newState.mocks ?? currentState.mocks ?? new Map<string, string>();
   const configListeners = (
@@ -2293,6 +2459,7 @@ const update = async (
     configListeners,
     mode,
     mocks,
+    strictMock,
     configFileWatcher:
       state.configFileWatcher === undefined
         ? watchFile(filename, async () => update(state, await onWatch(state)))
@@ -2422,6 +2589,7 @@ export {
   acknowledgeWebsocket,
   replaceBody,
   replaceTextUsingMapping,
+  cleanEntropy,
   send,
   determineMapping,
   serve,
