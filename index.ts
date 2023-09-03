@@ -1058,9 +1058,13 @@ const mockRequest = ({
       return this.hasRun
         ? Promise.resolve()
         : new Promise(promiseResolve => {
-            this.data = JSON.parse(
-              Buffer.from(response, "base64").toString("utf-8"),
-            );
+            try {
+              this.data = JSON.parse(
+                Buffer.from(response, "base64").toString("utf-8"),
+              );
+            } catch (e) {
+              this.data = {};
+            }
             promiseResolve(void 0);
           });
     },
@@ -1077,9 +1081,7 @@ const mockRequest = ({
             this.data.status,
           );
         if (name === "data" && this.data) {
-          this.events["data"](
-            Buffer.from(this.data.body ?? "", "base64"),
-          );
+          this.events["data"](Buffer.from(this.data.body ?? "", "base64"));
           this.events["end"]();
         }
         if (name === "error" && this.error) {
