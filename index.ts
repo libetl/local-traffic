@@ -759,19 +759,23 @@ const recorderPage = (
     });
   }
   return staticResponse(`${header(0x23fa, "recorder", "")}
+  <button type="button" class="btn btn-light" id="delete-mocks">&#x1F5D1; Delete mocks</button>
   <div class="btn-group" role="group" aria-label="Server Mode">
-    <input type="radio" class="btn-check" name="server-mode" id="proxy-mode" autocomplete="off" checked>
-    <label class="btn btn-outline-primary" for="proxy-mode">&#128391; Proxy</label>
-    <input type="radio" class="btn-check" name="server-mode" id="record-mode" autocomplete="off">
+    <input type="radio" class="btn-check" name="server-mode" id="record-mode" autocomplete="off"${
+      state.mode === ServerMode.PROXY ? " checked" : ""
+    }>
     <label class="btn btn-outline-primary" for="record-mode">&#9210; Record</label>
-    <input type="radio" class="btn-check" name="server-mode" id="mock-mode" autocomplete="off">
+    <input type="radio" class="btn-check" name="server-mode" id="mock-mode" autocomplete="off"${
+      state.mode === ServerMode.MOCK ? " checked" : ""
+    }>
     <label class="btn btn-outline-primary" for="mock-mode">&#x1F310; Mock</label>
   </div>
-  <input type="hidden" id="limit" value="-1"/>
+  <input type="hidden" id="limit" value="0"/>
   <script>
-    document.getElementById('proxy-mode').addEventListener('change', () => {
+    document.getElementById('delete-mocks').addEventListener('click', () => {
       document.getElementById('limit').value = -1;
       cleanup();
+      document.getElementById('limit').value = 0;
     })
     document.getElementById('record-mode').addEventListener('change', () => {
       document.getElementById('limit').value = 0;
