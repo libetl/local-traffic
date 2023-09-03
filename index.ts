@@ -1671,6 +1671,10 @@ const websocketServe = function (
   request: IncomingMessage,
   upstreamSocket: Duplex,
 ): Partial<State> {
+  upstreamSocket.on("error", () => {
+    state.log(`websocket connection reset`, LogLevel.WARNING, EMOJIS.WEBSOCKET);
+  });
+
   if (!state.config.websocket) {
     upstreamSocket.end(`HTTP/1.1 503 Service Unavailable\r\n\r\n`);
     return {};
