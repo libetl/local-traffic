@@ -1209,6 +1209,9 @@ const fileRequest = (url: URL): ClientHttp2Session => {
     request: function () {
       return this;
     },
+    write: function () {
+      return this;
+    },
   } as unknown as ClientHttp2Session;
 };
 
