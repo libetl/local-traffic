@@ -1,34 +1,34 @@
 import {
-  ClientHttp2Session,
+  type ClientHttp2Session,
+  type Http2Session,
+  type Http2ServerRequest,
+  type Http2ServerResponse,
+  type OutgoingHttpHeaders,
+  type SecureClientSessionOptions,
+  type SecureServerOptions,
+  type ClientHttp2Stream,
+  type IncomingHttpStatusHeader,
   createSecureServer,
   connect,
-  Http2Session,
-  Http2ServerRequest,
-  Http2ServerResponse,
-  OutgoingHttpHeaders,
-  SecureClientSessionOptions,
-  SecureServerOptions,
-  ClientHttp2Stream,
-  IncomingHttpStatusHeader,
 } from "http2";
 import {
+  type IncomingMessage,
+  type ClientRequest,
+  type IncomingHttpHeaders,
+  type ServerResponse,
+  type Server,
   request as httpRequest,
-  IncomingMessage,
-  ClientRequest,
-  IncomingHttpHeaders,
   createServer,
-  ServerResponse,
-  Server,
 } from "http";
-import { request as httpsRequest, RequestOptions } from "https";
+import { type RequestOptions, request as httpsRequest } from "https";
 import { URL } from "url";
 import {
+  type StatWatcher,
   watchFile,
   readdir,
   readFile,
   writeFile,
   lstat,
-  StatWatcher,
 } from "fs";
 import {
   gzip,
