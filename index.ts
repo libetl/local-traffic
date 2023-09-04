@@ -1452,7 +1452,7 @@ const replaceBody = async (
     .then((uncompressedBuffer: Buffer) => {
       const fileTooBig = uncompressedBuffer.length > 1e7;
       const fileHasSpecialChars = () =>
-        /[^\x00-\x7F]/.test(uncompressedBuffer.toString());
+        /[^\x00-\xFF]/.test(uncompressedBuffer.toString());
       const contentTypeCanBeProcessed = [
         "text/html",
         "application/javascript",
