@@ -736,7 +736,7 @@ const recorderPage = (
         if (
           typeof mocksUpdate !== "object" ||
           Object.keys(mocksUpdate).filter(
-            key => !["strictMode", "mode", "mocks"].includes(key),
+            key => !["strictMock", "mode", "mocks"].includes(key),
           ).length ||
           (!Array.isArray(mocksUpdate.mocks) && mocksUpdate.mocks !== undefined)
         ) {
@@ -844,7 +844,7 @@ const recorderPage = (
   }", {
        method: 'PUT',
        headers: { 'Content-Type': 'application/json' },
-       body: '{"strictMode":' + document.getElementById('strict-mock-mode').checked + 
+       body: '{"strictMock":' + document.getElementById('strict-mock-mode').checked +
              ',"mode":"' + 
              (document.getElementById('mock-mode').checked ? "mock" : "proxy") + '"' +
             ',"mocks":' + getMocksData() + '}'
