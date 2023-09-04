@@ -541,7 +541,8 @@ const logsView = (
       });
     }
     function remove(event) {
-      event.target.closest('tr').remove()
+      event.target.closest('tr').remove();
+      if (window.updateState) window.updateState();
     }
     function cleanup() {
       const currentLimit = parseInt(document.getElementById('limit').value)
@@ -720,68 +721,87 @@ const recorderPage = (
   state: State,
   request: Http2ServerRequest | IncomingMessage,
 ) => {
-  if (request.method === "DELETE") {
-    update(state, {
-      mode: ServerMode.PROXY,
-    });
-    state.log(
-      `${Object.keys(state.config.mapping)
-        .length.toString()
-        .padStart(5)} loaded mapping rules`,
-      LogLevel.INFO,
-      EMOJIS.RULES,
-    );
-
-    state.quickStatus();
-    return staticResponse(`{"status": "deactivated"}`, {
-      contentType: "application/json; charset=utf-8",
-    });
-  }
-  if (request.method === "POST") {
-    return staticResponse(`{"status": "pushed"}`, {
-      contentType: "application/json; charset=utf-8",
-      onOutboundWrite: buffer => {
-        try {
-          const mocksArray = JSON.parse(buffer.toString("ascii"));
-          if (!Array.isArray(mocksArray)) return;
-          const mocks: Mocks = new Map<string, string>(
-            mocksArray.map(({ response, uniqueHash }) => [
-              cleanEntropy(uniqueHash),
-              response,
-            ]),
-          );
-          update(state, {
-            mocks,
-            mode: ServerMode.MOCK,
-          });
-          state.log(
-            `${mocks.size.toString().padStart(5)} loaded mocks`,
-            LogLevel.INFO,
-            EMOJIS.MOCKS,
-          );
-          state.quickStatus();
-        } catch (e) {}
-      },
-    });
-  }
-  if (request.method === "PUT" && request.url?.endsWith("strict-mock")) {
+  if (["PUT", "POST", "DELETE"].includes(request.method)) {
     return staticResponse(`{"status": "acknowledged"}`, {
       contentType: "application/json; charset=utf-8",
       onOutboundWrite: buffer => {
+        let mocksUpdate: Partial<{
+          mocks: { uniqueHash: string; response: string }[];
+          mode: ServerMode;
+          strictMock: boolean;
+        }> = {};
         try {
-          const strictMockPayload = JSON.parse(buffer.toString("ascii"));
-          const strictMock =
-            typeof strictMockPayload?.active === "boolean"
-              ? strictMockPayload.active
-              : false;
-          update(state, { strictMock });
+          mocksUpdate = JSON.parse(buffer.toString("ascii"));
+        } catch (e) {}
+        if (
+          typeof mocksUpdate !== "object" ||
+          Object.keys(mocksUpdate).filter(
+            key => !["strictMode", "mode", "mocks"].includes(key),
+          ).length ||
+          (!Array.isArray(mocksUpdate.mocks) && mocksUpdate.mocks !== undefined)
+        ) {
           state.log(
-            `mock strict mode : ${strictMock}`,
+            `invalid mocks update received`,
+            LogLevel.WARNING,
+            EMOJIS.MOCKS,
+          );
+          return;
+        }
+        const { mocks: mocksArray, mode, strictMock } = mocksUpdate;
+        const mocks: Mocks = new Map<string, string>(
+          mocksArray.map(({ response, uniqueHash }) => [
+            cleanEntropy(uniqueHash),
+            response,
+          ]),
+        );
+        const modeHasBeenChangedToProxy =
+          mode !== state.mode && mode === ServerMode.PROXY;
+        const mocksConfigHasBeenChanged =
+          (mode !== state.mode && mode === ServerMode.MOCK) ||
+          state.mocks.size !== mocks.size;
+        const strictMockModeHasBeenChanged =
+          !!strictMock !== !!state.strictMock;
+        const mocksHaveBeenPurged = request.method === "DELETE";
+        if (modeHasBeenChangedToProxy) {
+          state.log(
+            `${Object.keys(state.config.mapping)
+              .length.toString()
+              .padStart(5)} loaded mapping rules`,
+            LogLevel.INFO,
+            EMOJIS.RULES,
+          );
+        }
+
+        if (mocksConfigHasBeenChanged) {
+          state.log(
+            `${(mocks ?? state.mocks).size
+              .toString()
+              .padStart(5)} loaded mocks`,
             LogLevel.INFO,
             EMOJIS.MOCKS,
           );
+        }
+        if (strictMockModeHasBeenChanged) {
+          state.log(
+            `mocks strict mode : ${strictMock ?? state.strictMock}`,
+            LogLevel.INFO,
+            EMOJIS.MOCKS,
+          );
+        }
+        if (mocksHaveBeenPurged)
+          update(state, {
+            strictMock,
+            mode,
+            mocks: new Map<string, string>(),
+          });
+        else update(state, { strictMock, mode, mocks: mocks ?? state.mocks });
+        if (
+          modeHasBeenChangedToProxy ||
+          mocksConfigHasBeenChanged ||
+          strictMockModeHasBeenChanged ||
+          mocksHaveBeenPurged
+        )
           state.quickStatus();
-        } catch (e) {}
       },
     });
   }
@@ -809,118 +829,115 @@ const recorderPage = (
   </div>
   <input type="hidden" id="limit" value="0"/>
   <script>
-    function getMocksData () {
-      return JSON.stringify(
-        [...document.querySelectorAll('button[data-uniqueHash]')].map(button => ({
-          response: button.attributes['data-response']?.value,
-          uniqueHash: button.attributes['data-uniqueHash']?.value}))
-       )
-    }
-    function loadMocks(mocksHashes) {
-      const time = new Date().toISOString().split('T')[1].replace('Z', '');
-      let mocks = [];
-      try {
-        mocks = mocksHashes.map(mock => ({...mock, 
-          request: JSON.parse(atob(mock.uniqueHash)),
-          response: JSON.parse(atob(mock.response))
-        }));
-      } catch(e) { }
-      mocks.forEach(mock => {
-        const randomId = window.crypto.randomUUID();
-        const remove = '<button onclick="javascript:remove(event)" type="button" ' +
-        'class="btn btn-primary">&#x274C;</button>';
-        const replay = mock.uniqueHash ? '<button data-response="' + 
-          btoa(JSON.stringify(mock.response ?? {})) +
-          '" data-uniquehash="' + mock.uniqueHash + '" onclick="javascript:replay(event)" ' +
-          'type="button" class="btn btn-primary">&#x1F501;</button>' : '';
-        document.getElementById("access")
-        .insertAdjacentHTML('afterbegin', '<tr id="event-' + randomId + '">' +
-            '<td scope="col" class="replay">' + replay + remove + '</td>' +
-            '<td scope="col">' + time + '</td>' +
-            '<td scope="col">info</td>' + 
-            '<td scope="col" class="protocol">HTTP/2</td>' + 
-            '<td scope="col">' + mock.request.method + '</td>' + 
-            '<td scope="col" class="statusCode"><span class="badge bg-' + 
-            getColorFromStatusCode(mock.response.status) + '">' + mock.response.status + '</span></td>' +
-            '<td scope="col" class="duration">0ms</td>' +
-            '<td scope="col">' + mock.request.url + '</td>' + 
-            '<td scope="col">N/A</td>' + 
-            '</tr>');
-      });
-    }
-    document.getElementById('upload-mocks').addEventListener('click', () => {
-      const time = new Date().toISOString().split('T')[1].replace('Z', '');
-      const fileInput = document.createElement('input');
-      fileInput.type = "file";
-      fileInput.multiple = "multiple";
-      fileInput.onchange = function() {
-        const fileReader = new FileReader();
-        [...fileInput.files].reduce((promise, file) =>
-          promise.then(result => new Promise(resolve => {
-            fileReader.readAsText(file);
-            fileReader.onload = function(){
-              resolve(result.concat(fileReader.result));
-            };
-          })), Promise.resolve([]))
-        .then(files => files.flatMap(file => JSON.parse(file)))
-        .catch(e => [])
-        .then(mocks => loadMocks(mocks));
-      }
-      fileInput.click();
-    });
-    document.getElementById('download-mocks').addEventListener('click', () => {
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(new Blob([getMocksData()], {
-        type: "application/json",
-      }));
-      link.download = "mocks-" + new Date().toISOString() + ".json";
-      link.click();
-      URL.revokeObjectURL(link.href);
-    })
-    document.getElementById('delete-mocks').addEventListener('click', () => {
-      document.getElementById('limit').value = -1;
-      cleanup();
-      document.getElementById('limit').value = 0;
-    })
-    document.getElementById('record-mode').addEventListener('change', () => {
-      document.getElementById('limit').value = 0;
-      cleanup();
-      fetch("http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
+  function getMocksData () {
+    return JSON.stringify(
+      [...document.querySelectorAll('button[data-uniqueHash]')].map(button => ({
+        response: button.attributes['data-response']?.value,
+        uniqueHash: button.attributes['data-uniqueHash']?.value}))
+     )
+  }
+  function updateState () {
+    fetch("http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
     Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
       value?.toString()?.startsWith("recorder:"),
-    )?.[0] ?? "/recorder/mocks"
-  }mocks", { method: 'DELETE' });
-    })
-    document.getElementById('mock-mode').addEventListener('change', () => {
-      fetch("http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
-    Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
-      value?.toString()?.startsWith("recorder:"),
-    )?.[0] ?? "/recorder/mocks"
-  }mocks", {
-       method: 'POST',
-       headers: { 'Content-Type': 'application/json' },
-       body: getMocksData()
-     })
-    })
-    document.getElementById('strict-mock-mode').addEventListener('change', (e) => {
-      fetch("http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
-    Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
-      value?.toString()?.startsWith("recorder:"),
-    )?.[0] ?? "/recorder/strict-mock"
-  }strict-mock", {
+    )?.[0] ?? "/recorder/"
+  }", {
        method: 'PUT',
        headers: { 'Content-Type': 'application/json' },
-       body: '{"active":' + e.target.checked + '}'
+       body: '{"strictMode":' + document.getElementById('strict-mock-mode').checked + 
+             ',"mode":"' + 
+             (document.getElementById('mock-mode').checked ? "mock" : "proxy") + '"' +
+            ',"mocks":' + getMocksData() + '}'
      })
-    })
-    setTimeout(() => {
-      loadMocks(${JSON.stringify(
-        [...state.mocks.entries()].map(([uniqueHash, response]) => ({
-          uniqueHash,
-          response,
-        })),
-      )});
-    }, 10)
+  }
+  function loadMocks(mocksHashes) {
+    const time = new Date().toISOString().split('T')[1].replace('Z', '');
+    let mocks = [];
+    try {
+      mocks = mocksHashes.map(mock => ({...mock, 
+        request: JSON.parse(atob(mock.uniqueHash)),
+        response: JSON.parse(atob(mock.response))
+      }));
+    } catch(e) { }
+    mocks.forEach(mock => {
+      const randomId = window.crypto.randomUUID();
+      const remove = '<button onclick="javascript:remove(event)" type="button" ' +
+      'class="btn btn-primary">&#x274C;</button>';
+      const replay = mock.uniqueHash ? '<button data-response="' + 
+        btoa(JSON.stringify(mock.response ?? {})) +
+        '" data-uniquehash="' + mock.uniqueHash + '" onclick="javascript:replay(event)" ' +
+        'type="button" class="btn btn-primary">&#x1F501;</button>' : '';
+      document.getElementById("access")
+      .insertAdjacentHTML('afterbegin', '<tr id="event-' + randomId + '">' +
+          '<td scope="col" class="replay">' + replay + remove + '</td>' +
+          '<td scope="col">' + time + '</td>' +
+          '<td scope="col">info</td>' + 
+          '<td scope="col" class="protocol">HTTP/2</td>' + 
+          '<td scope="col">' + mock.request.method + '</td>' + 
+          '<td scope="col" class="statusCode"><span class="badge bg-' + 
+          getColorFromStatusCode(mock.response.status) + '">' + mock.response.status + '</span></td>' +
+          '<td scope="col" class="duration">0ms</td>' +
+          '<td scope="col">' + mock.request.url + '</td>' + 
+          '<td scope="col">N/A</td>' + 
+          '</tr>');
+    });
+}
+document.getElementById('upload-mocks').addEventListener('click', () => {
+  const time = new Date().toISOString().split('T')[1].replace('Z', '');
+  const fileInput = document.createElement('input');
+  fileInput.type = "file";
+  fileInput.multiple = "multiple";
+  fileInput.onchange = function() {
+    const fileReader = new FileReader();
+    [...fileInput.files].reduce((promise, file) =>
+      promise.then(result => new Promise(resolve => {
+        fileReader.readAsText(file);
+        fileReader.onload = function(){
+          resolve(result.concat(fileReader.result));
+        };
+      })), Promise.resolve([]))
+    .then(files => files.flatMap(file => JSON.parse(file)))
+    .catch(e => [])
+    .then(mocks => loadMocks(mocks))
+    .then(() => updateState());
+  }
+  fileInput.click();
+});
+document.getElementById('download-mocks').addEventListener('click', () => {
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([getMocksData()], {
+    type: "application/json",
+  }));
+  link.download = "mocks-" + new Date().toISOString() + ".json";
+  link.click();
+  URL.revokeObjectURL(link.href);
+})
+document.getElementById('delete-mocks').addEventListener('click', () => {
+  document.getElementById('limit').value = -1;
+  cleanup();
+  updateState();
+  document.getElementById('limit').value = 0;
+})
+document.getElementById('record-mode').addEventListener('change', () => {
+  document.getElementById('limit').value = 0;
+  cleanup();
+  updateState();
+})
+document.getElementById('mock-mode').addEventListener('change', () => {
+  updateState();
+})
+document.getElementById('strict-mock-mode').addEventListener('change', (e) => { 
+  updateState();
+})
+setTimeout(() => {
+  loadMocks(${JSON.stringify(
+    [...state.mocks.entries()].map(([uniqueHash, response]) => ({
+      uniqueHash,
+      response,
+    })),
+  )});
+  updateState();
+}, 10)
   </script>
   ${logsView(proxyHostnameAndPort, state.config, { captureResponseBody: true })}
   </body></html>`);
