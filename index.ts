@@ -428,7 +428,7 @@ const logsView = (
   <thead>
     <tr>
       <th scope="col"${
-        options.captureResponseBody === true ? ' style="min-width: 110px"' : ""
+        options.captureResponseBody === true ? ' style="min-width: 120px"' : ""
       }>...</th>
       <th scope="col">Date</th>
       <th scope="col">Level</th>
@@ -476,14 +476,7 @@ const logsView = (
           data?.downstreamPath?.startsWith('recorder://'))
           return;
         const time = new Date().toISOString().split('T')[1].replace('Z', '');
-        const remove = ${options.captureResponseBody === true} && uniqueHash
-        ? '<button onclick="javascript:remove(event)" type="button" ' +
-          'class="btn btn-primary">&#x274C;</button>'
-        : ''
-        const replay = uniqueHash ? '<button data-response="' + 
-          btoa(JSON.stringify(data.response ?? {})) +
-          '" data-uniquehash="' + uniqueHash + '" onclick="javascript:replay(event)" ' +
-          'type="button" class="btn btn-primary">&#x1F501;</button>' : '';
+        const actions = getActionsHtmlText(uniqueHash, data.response);
         if(data.statusCode && uniqueHash) {
           const color = getColorFromStatusCode(data.statusCode);
           const statusCodeColumn = document.querySelector("#event-" + data.randomId + " .statusCode");
@@ -504,22 +497,13 @@ const logsView = (
 
           const replayColumn = document.querySelector("#event-" + data.randomId + " .replay");
           if (replayColumn) {
-            replayColumn.innerHTML = replay + remove;
+            replayColumn.innerHTML = actions;
           }
         } else if (uniqueHash) {
-            document.getElementById("access")
-              .insertAdjacentHTML('afterbegin', '<tr id="event-' + data.randomId + '">' +
-                  '<td scope="col" class="replay">' + replay + remove + '</td>' +
-                  '<td scope="col">' + time + '</td>' +
-                  '<td scope="col">' + (data.level || 'info')+ '</td>' + 
-                  '<td scope="col" class="protocol">' + data.protocol + '</td>' + 
-                  '<td scope="col">' + data.method + '</td>' + 
-                  '<td scope="col" class="statusCode"><span class="badge bg-secondary">...</span></td>' +
-                  '<td scope="col" class="duration">&#x23F1;</td>' +
-                  '<td scope="col">' + data.upstreamPath + '</td>' + 
-                  '<td scope="col">' + data.downstreamPath + '</td>' + 
-                  '</tr>');
-          } else if(data.event) {
+          addNewRequest(data.randomId, actions, time, data.level, data.protocol, data.method, 
+            '<span class="badge bg-secondary">...</span>', '&#x23F1;',
+            data.upstreamPath, data.downstreamPath);
+        } else if(data.event) {
           document.getElementById("proxy")
             .insertAdjacentHTML('afterbegin', '<tr><td scope="col">' + time + '</td>' +
                 '<td scope="col">' + (data.level || 'info')+ '</td>' + 
@@ -559,10 +543,27 @@ const logsView = (
       fetch(url, {
         method,
         headers,
-        body: !body.data || !body.data.length 
-          ? undefined
-          : new TextDecoder().decode(new Int8Array(body.data))
+        body: !body || !body.length ? undefined : atob(body)
       });
+    }
+    function getActionsHtmlText(uniqueHash, response) {
+      const edit = ${options.captureResponseBody === true} && uniqueHash
+      ? '<button data-response="' + btoa(JSON.stringify(response ?? {})) +
+      '" data-uniquehash="' + uniqueHash + 
+      '" data-bs-toggle="modal" data-bs-target="#edit-request" type="button" ' +
+        'class="btn btn-primary">&#x1F4DD;</button>'
+      : ''
+      const remove = ${options.captureResponseBody === true} && uniqueHash
+      ? '<button onclick="javascript:remove(event)" type="button" ' +
+        'class="btn btn-primary">&#x274C;</button>'
+      : ''
+      const replay = ${
+        options.captureResponseBody === false
+      } && uniqueHash ? '<button data-response="' + 
+        btoa(JSON.stringify(response ?? {})) +
+        '" data-uniquehash="' + uniqueHash + '" onclick="javascript:replay(event)" ' +
+        'type="button" class="btn btn-primary">&#x1F501;</button>' : '';
+      return edit + replay + remove
     }
     function getColorFromStatusCode(statusCode) {
       return Math.floor(statusCode / 100) === 1 ? "info" :
@@ -571,6 +572,23 @@ const logsView = (
         Math.floor(statusCode / 100) === 4 ? "warning" :
         Math.floor(statusCode / 100) === 5 ? "danger" :
         "secondary";
+    }
+    function addNewRequest(
+      randomId, actions, time, level, protocol, method, 
+      statusCode, duration, upstreamPath, downstreamPath
+    ) {
+      document.getElementById("access")
+      .insertAdjacentHTML('afterbegin', '<tr id="event-' + randomId + '">' +
+      '<td scope="col" class="replay">' + actions + '</td>' +
+      '<td scope="col">' + time + '</td>' +
+      '<td scope="col">' + (level || 'info')+ '</td>' + 
+      '<td scope="col" class="protocol">' + protocol + '</td>' + 
+      '<td scope="col" class="method">' + method + '</td>' + 
+      '<td scope="col" class="statusCode">' + statusCode + '</td>' +
+      '<td scope="col" class="duration text-end">' + duration + '</td>' +
+      '<td scope="col" class="upstream-path">' + upstreamPath + '</td>' + 
+      '<td scope="col">' + downstreamPath + '</td>' + 
+      '</tr>');
     }
     window.addEventListener("DOMContentLoaded", start);
 </script>`;
@@ -748,17 +766,19 @@ const recorderPage = (
           return;
         }
         const { mocks: mocksArray, mode, strictMock } = mocksUpdate;
-        const mocks: Mocks = new Map<string, string>(
-          mocksArray.map(({ response, uniqueHash }) => [
-            cleanEntropy(uniqueHash),
-            response,
-          ]),
-        );
+        const mocks: Mocks | null = !mocksArray
+          ? null
+          : new Map<string, string>(
+              mocksArray.map(({ response, uniqueHash }) => [
+                cleanEntropy(uniqueHash),
+                response,
+              ]),
+            );
         const modeHasBeenChangedToProxy =
           mode !== state.mode && mode === ServerMode.PROXY;
         const mocksConfigHasBeenChanged =
           (mode !== state.mode && mode === ServerMode.MOCK) ||
-          state.mocks.size !== mocks.size;
+          (mocks !== null && state.mocks.size !== mocks.size);
         const strictMockModeHasBeenChanged =
           !!strictMock !== !!state.strictMock;
         const mocksHaveBeenPurged = request.method === "DELETE";
@@ -806,81 +826,105 @@ const recorderPage = (
     });
   }
   return staticResponse(`${header(0x23fa, "recorder", "")}
-  <span>Mode : </span>
-  <div class="btn-group" role="group" aria-label="Server Mode">
-    <input type="radio" class="btn-check" name="server-mode" id="record-mode" autocomplete="off"${
-      state.mode === ServerMode.PROXY ? " checked" : ""
-    }>
-    <label class="btn btn-outline-primary" for="record-mode">&#9210; Record</label>
-    <input type="radio" class="btn-check" name="server-mode" id="mock-mode" autocomplete="off"${
-      state.mode === ServerMode.MOCK ? " checked" : ""
-    }>
-    <label class="btn btn-outline-primary" for="mock-mode">&#x1F310; Mock</label>
+<link href="${cdn}jsoneditor/dist/jsoneditor.min.css" rel="stylesheet" type="text/css">
+<script src="${cdn}jsoneditor/dist/jsoneditor.min.js"></script>
+<script src="${cdn}pako/dist/pako.min.js"></script>
+<span>Mode : </span>
+<div class="btn-group" role="group" aria-label="Server Mode">
+  <input type="radio" class="btn-check" name="server-mode" id="record-mode" autocomplete="off"${
+    state.mode === ServerMode.PROXY ? " checked" : ""
+  }>
+  <label class="btn btn-outline-primary" for="record-mode">&#9210; Record</label>
+  <input type="radio" class="btn-check" name="server-mode" id="mock-mode" autocomplete="off"${
+    state.mode === ServerMode.MOCK ? " checked" : ""
+  }>
+  <label class="btn btn-outline-primary" for="mock-mode">&#x1F310; Mock</label>
+</div>
+<span>Actions : </span>
+<button type="button" class="btn btn-light" id="upload-mocks">&#x1F4E5; Upload mocks</button>
+<button type="button" class="btn btn-light" id="download-mocks">&#x1F4E6; Download mocks</button>
+<button type="button" class="btn btn-light" id="delete-mocks">&#x1F5D1; Delete mocks</button>
+<div class="form-check form-switch">
+  <input class="form-check-input" type="checkbox" id="strict-mock-mode"${
+    state.strictMock ? " checked" : ""
+  }>
+  <label class="form-check-label" for="strict-mock-mode">Strict mock mode</label>
+</div>
+<input type="hidden" id="limit" value="0"/>
+<div class="modal fade" id="edit-request" tabindex="-1" 
+ aria-labelledby="edit-request-label" aria-hidden="true">
+  <div class="modal-dialog" style="max-width: 900px">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h1 class="modal-title fs-5" id="edit-request-label">Edit request to /</h1>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="container">
+          <div class="row">
+            <div class="col-lg">
+              <h2>Request :</h2>
+              <div id="uniqueHash-editor" style="width: 400px; height: 400px;"></div>
+            </div>
+            <div class="col-lg">
+              <h2>Response : </h2>
+              <div id="response-editor" style="width: 400px; height: 400px;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-primary" onclick="javascript:saveRequest()">Save changes</button>
+      </div>
+    </div>
   </div>
-  <span>Actions : </span>
-  <button type="button" class="btn btn-light" id="upload-mocks">&#x1F4E5; Upload mocks</button>
-  <button type="button" class="btn btn-light" id="download-mocks">&#x1F4E6; Download mocks</button>
-  <button type="button" class="btn btn-light" id="delete-mocks">&#x1F5D1; Delete mocks</button>
-  <div class="form-check form-switch">
-    <input class="form-check-input" type="checkbox" id="strict-mock-mode"${
-      state.strictMock ? " checked" : ""
-    }>
-    <label class="form-check-label" for="strict-mock-mode">Strict mock mode</label>
-  </div>
-  <input type="hidden" id="limit" value="0"/>
-  <script>
-  function getMocksData () {
-    return JSON.stringify(
-      [...document.querySelectorAll('button[data-uniqueHash]')].map(button => ({
-        response: button.attributes['data-response']?.value,
-        uniqueHash: button.attributes['data-uniqueHash']?.value}))
-     )
-  }
-  function updateState () {
-    fetch("http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
+</div>
+<script>
+const xmlOrJsonPrologsInBase64 = [
+  "eyJ","PD94bWw=","PCFET0NUWVBF","PGh0bWw","PEhUTUw","H4sIAAAAAAAAA", "W3tc"
+];
+function getMocksData () {
+  return JSON.stringify(
+    [...document.querySelectorAll('button[data-uniqueHash]')].map(button => ({
+      response: button.attributes['data-response']?.value,
+      uniqueHash: button.attributes['data-uniqueHash']?.value}))
+   )
+}
+function updateState () {
+  fetch("http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
     Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
       value?.toString()?.startsWith("recorder:"),
     )?.[0] ?? "/recorder/"
   }", {
-       method: 'PUT',
-       headers: { 'Content-Type': 'application/json' },
-       body: '{"strictMock":' + document.getElementById('strict-mock-mode').checked +
-             ',"mode":"' + 
-             (document.getElementById('mock-mode').checked ? "mock" : "proxy") + '"' +
-            ',"mocks":' + getMocksData() + '}'
-     })
-  }
-  function loadMocks(mocksHashes) {
-    const time = new Date().toISOString().split('T')[1].replace('Z', '');
-    let mocks = [];
-    try {
-      mocks = mocksHashes.map(mock => ({...mock, 
-        request: JSON.parse(atob(mock.uniqueHash)),
-        response: JSON.parse(atob(mock.response))
-      }));
-    } catch(e) { }
-    mocks.forEach(mock => {
-      const randomId = window.crypto.randomUUID();
-      const remove = '<button onclick="javascript:remove(event)" type="button" ' +
-      'class="btn btn-primary">&#x274C;</button>';
-      const replay = mock.uniqueHash ? '<button data-response="' + 
-        btoa(JSON.stringify(mock.response ?? {})) +
-        '" data-uniquehash="' + mock.uniqueHash + '" onclick="javascript:replay(event)" ' +
-        'type="button" class="btn btn-primary">&#x1F501;</button>' : '';
-      document.getElementById("access")
-      .insertAdjacentHTML('afterbegin', '<tr id="event-' + randomId + '">' +
-          '<td scope="col" class="replay">' + replay + remove + '</td>' +
-          '<td scope="col">' + time + '</td>' +
-          '<td scope="col">info</td>' + 
-          '<td scope="col" class="protocol">HTTP/2</td>' + 
-          '<td scope="col">' + mock.request.method + '</td>' + 
-          '<td scope="col" class="statusCode"><span class="badge bg-' + 
-          getColorFromStatusCode(mock.response.status) + '">' + mock.response.status + '</span></td>' +
-          '<td scope="col" class="duration">0ms</td>' +
-          '<td scope="col">' + mock.request.url + '</td>' + 
-          '<td scope="col">N/A</td>' + 
-          '</tr>');
-    });
+     method: 'PUT',
+     headers: { 'Content-Type': 'application/json' },
+     body: '{"strictMock":' + document.getElementById('strict-mock-mode').checked +
+           ',"mode":"' + 
+           (document.getElementById('mock-mode').checked ? "mock" : "proxy") + '"' +
+          ',"mocks":' + getMocksData() + '}'
+   })
+}
+function loadMocks(mocksHashes) {
+  const time = new Date().toISOString().split('T')[1].replace('Z', '');
+  let mocks = [];
+  try {
+    mocks = mocksHashes.map(mock => ({...mock, 
+      request: JSON.parse(atob(mock.uniqueHash)),
+      response: JSON.parse(atob(mock.response))
+    }));
+  } catch(e) { }
+  mocks.forEach(mock => {
+    const randomId = window.crypto.randomUUID();
+    const actions = getActionsHtmlText(mock.uniqueHash, mock.response);
+    addNewRequest(randomId, actions, time, 'info', 'HTTP/2', mock.request.method, 
+    '<span class="badge bg-' + 
+        getColorFromStatusCode(mock.response.status) + '">' + 
+        mock.response.status + 
+        '</span>', 
+        '0ms', mock.request.url, 
+        'N/A');
+  });
 }
 document.getElementById('upload-mocks').addEventListener('click', () => {
   const time = new Date().toISOString().split('T')[1].replace('Z', '');
@@ -929,6 +973,63 @@ document.getElementById('mock-mode').addEventListener('change', () => {
 document.getElementById('strict-mock-mode').addEventListener('change', (e) => { 
   updateState();
 })
+function saveRequest () {
+  $('#edit-request').modal("hide");
+  
+  const requestBeingEdited = window.requestBeingEdited;
+  let request = uniqueHashEditor.get();
+  let response = responseEditor.get();
+  if (typeof request.body === "object") {
+    request.body = JSON.stringify("object");
+  }
+  if (typeof response.body === "object") {
+    response.body = JSON.stringify("object");
+  }
+  if (requestBeingEdited.attributes['data-requestProlog']?.value === "H4sIAAAAAAAAA") {
+    request.body =
+      btoa([...pako.gzip(request.body)].map(e => String.fromCharCode(e)).join(""));
+  }
+  if (requestBeingEdited.attributes['data-responseProlog']?.value === "H4sIAAAAAAAAA") {
+    response.body =
+      btoa([...pako.gzip(response.body)].map(e => String.fromCharCode(e)).join(""));
+  }
+  request = btoa(JSON.stringify(request));
+  response = btoa(JSON.stringify(response));
+  requestBeingEdited.setAttribute('data-uniqueHash', request);
+  requestBeingEdited.setAttribute('data-response', response);
+  const row = requestBeingEdited.closest('tr');
+  row.querySelector("td.method").innerHTML = uniqueHashEditor.get().method;
+  row.querySelector("td.upstream-path").innerHTML = uniqueHashEditor.get().url;
+  window.requestBeingEdited = undefined;
+  updateState();
+}
+document.getElementById('edit-request').addEventListener('show.bs.modal', event => {
+  const request = JSON.parse(atob(event.relatedTarget.attributes['data-uniqueHash'].value));
+  const response = JSON.parse(atob(event.relatedTarget.attributes['data-response'].value));
+  const requestProlog = xmlOrJsonPrologsInBase64.find(prolog => request.body?.startsWith(prolog));
+  const responseProlog = xmlOrJsonPrologsInBase64.find(prolog => response.body?.startsWith(prolog));
+  if (requestProlog) {
+    event.relatedTarget.setAttribute('data-requestProlog', requestProlog);
+    request.body = request.body.startsWith("H4sIAAAAAAAAA") 
+    ? pako.ungzip(new Uint8Array(atob(request.body).split("").map(e => e.charCodeAt(0))), {to: "string"})
+    : atob(request.body);
+    request.body = request.body.startsWith("{\\"") || request.body.startsWith("[{\\"")
+      ? JSON.parse(request.body) : request.body;
+  }
+  if (responseProlog) {
+    event.relatedTarget.setAttribute('data-responseProlog', responseProlog);
+    response.body = response.body.startsWith("H4sIAAAAAAAAA") 
+    ? pako.ungzip(new Uint8Array(atob(response.body).split("").map(e => e.charCodeAt(0))), {to: "string"})
+    : atob(response.body);
+    response.body = response.body.startsWith("{\\"") || response.body.startsWith("[{\\"")
+      ? JSON.parse(response.body) : response.body;
+  }
+  window.requestBeingEdited = event.relatedTarget;
+  window.uniqueHashEditor.set(request);
+  window.responseEditor.set(response);
+  document.getElementById('edit-request-label').innerText = "Edit request to " + request.url;
+})
+
 setTimeout(() => {
   loadMocks(${JSON.stringify(
     [...state.mocks.entries()].map(([uniqueHash, response]) => ({
@@ -936,11 +1037,35 @@ setTimeout(() => {
       response,
     })),
   )});
+  window.uniqueHashEditor = new JSONEditor(document.getElementById("uniqueHash-editor"), {
+    mode: "code", allowSchemaSuggestions: true, schema: {
+      type: "object",
+      properties: {
+        method: {type: "string"},
+        url: {type: "string"},
+        body: {oneOf: [{type:"string"},{type:"object"}]},
+        headers: {type: "object"},
+      },
+    required: [],
+    additionalProperties: false
+  }});
+  window.responseEditor = new JSONEditor(document.getElementById("response-editor"), {
+    mode: "code", allowSchemaSuggestions: true, schema: {
+      type: "object",
+      properties: {
+        body: {oneOf: [{type:"string"},{type:"object"}]},
+        headers: {type: "object"},
+        status: {type: "integer"}
+    },
+    required: [],
+    additionalProperties: false
+  }});
   updateState();
 }, 10)
   </script>
   ${logsView(proxyHostnameAndPort, state.config, { captureResponseBody: true })}
-  </body></html>`);
+  </body>
+</html>`);
 };
 
 const specialPageMapping: Record<
@@ -1566,11 +1691,16 @@ const replaceTextUsingMapping = (
     .split(`${proxyHostnameAndPort}/:`)
     .join(`${proxyHostnameAndPort}:`);
 
-const cleanEntropy = (uniqueHash: string) => {
+const cleanEntropy = (
+  requestObject:
+    | string
+    | { method: string; url: string; headers: any; body: string },
+) => {
   try {
-    const request = JSON.parse(
-      Buffer.from(uniqueHash, "base64").toString("utf-8"),
-    );
+    const request =
+      typeof requestObject === "object"
+        ? requestObject
+        : JSON.parse(Buffer.from(requestObject, "base64").toString("utf-8"));
     [
       "authorization",
       "cache-control",
@@ -1607,7 +1737,8 @@ const cleanEntropy = (uniqueHash: string) => {
       }, {});
     return Buffer.from(JSON.stringify(request), "utf-8").toString("base64");
   } catch (e) {
-    return uniqueHash;
+    // this cannot fail when a request object is passed as parameter
+    return requestObject as string;
   }
 };
 
@@ -1982,19 +2113,17 @@ const serve = async function (
           direction: REPLACEMENT_DIRECTION.OUTBOUND,
         });
   }
-  const uniqueHash = Buffer.from(
-    JSON.stringify({
-      method: inboundRequest.method,
-      url: inboundRequest.url,
-      headers: Object.assign(
-        {},
-        ...Object.entries(inboundRequest.headers)
-          .filter(([headerName]) => !headerName.startsWith(":"))
-          .map(([key, value]) => ({ [key]: value })),
-      ),
-      body: requestBody?.toJSON(),
-    }),
-  ).toString("base64");
+  const uniqueHash = cleanEntropy({
+    method: inboundRequest.method,
+    url: inboundRequest.url,
+    headers: Object.assign(
+      {},
+      ...Object.entries(inboundRequest.headers)
+        .filter(([headerName]) => !headerName.startsWith(":"))
+        .map(([key, value]) => ({ [key]: value })),
+    ),
+    body: requestBody?.toString("base64"),
+  });
   const targetIsFile = target.protocol === "file:";
 
   state.notifyLogsListeners({
