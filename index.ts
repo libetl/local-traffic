@@ -473,7 +473,8 @@ const logsView = (
         } catch(e) { }
         if (document.getElementById('mock-mode')?.checked) return;
         if (${options.captureResponseBody === true} && 
-          data?.downstreamPath?.startsWith('recorder://'))
+          data?.downstreamPath?.startsWith('recorder://') &&
+          !data?.upstreamPath?.endsWith('?forceLogInRecorderPage=true'))
           return;
         const time = new Date().toISOString().split('T')[1].replace('Z', '');
         const actions = getActionsHtmlText(uniqueHash, data.response);
@@ -565,14 +566,6 @@ const logsView = (
         'type="button" class="btn btn-primary">&#x1F501;</button>' : '';
       return edit + replay + remove
     }
-    function getColorFromStatusCode(statusCode) {
-      return Math.floor(statusCode / 100) === 1 ? "info" :
-        Math.floor(statusCode / 100) === 2 ? "success" :
-        Math.floor(statusCode / 100) === 3 ? "dark" :
-        Math.floor(statusCode / 100) === 4 ? "warning" :
-        Math.floor(statusCode / 100) === 5 ? "danger" :
-        "secondary";
-    }
     function addNewRequest(
       randomId, actions, time, level, protocol, method, 
       statusCode, duration, upstreamPath, downstreamPath
@@ -589,6 +582,14 @@ const logsView = (
       '<td scope="col" class="upstream-path">' + upstreamPath + '</td>' + 
       '<td scope="col">' + downstreamPath + '</td>' + 
       '</tr>');
+    }
+    function getColorFromStatusCode(statusCode) {
+      return Math.floor(statusCode / 100) === 1 ? "info" :
+        Math.floor(statusCode / 100) === 2 ? "success" :
+        Math.floor(statusCode / 100) === 3 ? "dark" :
+        Math.floor(statusCode / 100) === 4 ? "warning" :
+        Math.floor(statusCode / 100) === 5 ? "danger" :
+        "secondary";
     }
     window.addEventListener("DOMContentLoaded", start);
 </script>`;
@@ -841,6 +842,7 @@ const recorderPage = (
   <label class="btn btn-outline-primary" for="mock-mode">&#x1F310; Mock</label>
 </div>
 <span>Actions : </span>
+<button type="button" class="btn btn-light" id="add-mock">&#x2795; Mock from dummy request</button>
 <button type="button" class="btn btn-light" id="upload-mocks">&#x1F4E5; Upload mocks</button>
 <button type="button" class="btn btn-light" id="download-mocks">&#x1F4E6; Download mocks</button>
 <button type="button" class="btn btn-light" id="delete-mocks">&#x1F5D1; Delete mocks</button>
@@ -882,7 +884,7 @@ const recorderPage = (
 </div>
 <script>
 const xmlOrJsonPrologsInBase64 = [
-  "eyJ","PD94bWw=","PCFET0NUWVBF","PGh0bWw","PEhUTUw","H4sIAAAAAAAAA", "W3tc"
+  "eyJ","PD94bWw=","PCFET0NUWVBF","PCFkb2N0eXBl","PGh0bWw","PEhUTUw","H4sIAAAAAAAAA", "W3tc"
 ];
 function getMocksData () {
   return JSON.stringify(
@@ -926,6 +928,18 @@ function loadMocks(mocksHashes) {
         'N/A');
   });
 }
+document.getElementById('add-mock').addEventListener('click', () => {
+  fetch("http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
+    Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
+      value?.toString()?.startsWith("recorder:"),
+    )?.[0] ?? "/recorder/"
+  }?forceLogInRecorderPage=true", {
+     method: 'GET',
+     headers: { 
+       accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+     }
+   })
+});
 document.getElementById('upload-mocks').addEventListener('click', () => {
   const time = new Date().toISOString().split('T')[1].replace('Z', '');
   const fileInput = document.createElement('input');
@@ -980,18 +994,30 @@ function saveRequest () {
   let request = uniqueHashEditor.get();
   let response = responseEditor.get();
   if (typeof request.body === "object") {
-    request.body = JSON.stringify("object");
+    request.body = JSON.stringify(request.body);
   }
   if (typeof response.body === "object") {
-    response.body = JSON.stringify("object");
+    response.body = JSON.stringify(response.body);
   }
-  if (requestBeingEdited.attributes['data-requestProlog']?.value === "H4sIAAAAAAAAA") {
+  const oldRequest = JSON.parse(atob(requestBeingEdited.attributes['data-uniqueHash'].value));
+  const oldResponse = JSON.parse(atob(requestBeingEdited.attributes['data-response'].value));
+  const requestProlog = requestBeingEdited.attributes['data-requestProlog']?.value;
+  const responseProlog = requestBeingEdited.attributes['data-responseProlog']?.value;
+  const requestPrologHasChanged = request.body.substring(0, 10) !== oldRequest.body.substring(0, 10);
+  const responsePrologHasChanged = response.body.substring(0, 10) !== response.body.substring(0, 10);
+  if (requestProlog === "H4sIAAAAAAAAA" && !requestPrologHasChanged) {
     request.body =
       btoa([...pako.gzip(request.body)].map(e => String.fromCharCode(e)).join(""));
+  } else if ((requestProlog === null || !request.body.startsWith(requestProlog ?? "")) && 
+      request.body.substring(0, 10) !== oldRequest.body.substring(0, 10)) {
+    request.body = btoa(request.body);
   }
-  if (requestBeingEdited.attributes['data-responseProlog']?.value === "H4sIAAAAAAAAA") {
+  if (responseProlog === "H4sIAAAAAAAAA" && !responsePrologHasChanged) {
     response.body =
       btoa([...pako.gzip(response.body)].map(e => String.fromCharCode(e)).join(""));
+  } else if ((responseProlog === null || !response.body.startsWith(responseProlog ?? "")) && 
+      response.body.substring(0, 10) !== oldResponse.body.substring(0, 10)) {
+    response.body = btoa(response.body);
   }
   request = btoa(JSON.stringify(request));
   response = btoa(JSON.stringify(response));
@@ -1722,10 +1748,18 @@ const cleanEntropy = (
       "sec-ch-ua-platform",
       "user-agent",
       // no user agent comparison
+      "sec-fetch-dest",
+      // disable check on action triggering the request
+      "sec-fetch-mode",
+      // disable check on action triggering the request
       "sec-fetch-site",
       // disable check on same-origin domain
+      "sec-fetch-user",
+      // disable check on persona triggering the request
       "referer",
       // referer is more of a nuisance than a true discriminant
+      "upgrade-insecure-requests",
+      // disable unwanted security check
     ].forEach(header => {
       delete request?.headers?.[header];
     });
