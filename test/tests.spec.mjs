@@ -84,7 +84,10 @@ describe("config load", async () => {
       mapping: {
         "/config/": "config://",
         "/logs/": "logs://",
+        "/recorder/": "recorder://",
       },
+      connectTimeout: 3,
+      socketTimeout: 3,
       port: 8080,
       replaceRequestBodyUrls: false,
       replaceResponseBodyUrls: false,
@@ -108,7 +111,10 @@ describe("config load", async () => {
       mapping: {
         "/config/": "config://",
         "/logs/": "logs://",
+        "/recorder/": "recorder://",
       },
+      connectTimeout: 3,
+      socketTimeout: 3,
       port: 8080,
       replaceRequestBodyUrls: false,
       replaceResponseBodyUrls: false,
@@ -129,7 +135,10 @@ describe("config load", async () => {
       mapping: {
         "/config/": "config://",
         "/logs/": "logs://",
+        "/recorder/": "recorder://",
       },
+      connectTimeout: 3,
+      socketTimeout: 3,
       port: 8080,
       replaceRequestBodyUrls: false,
       replaceResponseBodyUrls: false,
@@ -159,6 +168,8 @@ describe("config load", async () => {
         "/home/": "https://localhost:12345/home/",
         "": "https://acme.com",
       },
+      connectTimeout: 3,
+      socketTimeout: 3,
       port: 8080,
       replaceRequestBodyUrls: false,
       replaceResponseBodyUrls: false,
@@ -181,6 +192,8 @@ describe("config load", async () => {
           key: "key",
           cert: "cert",
         },
+        connectTimeout: 3,
+        socketTimeout: 3,
         port: 443,
         replaceRequestBodyUrls: true,
         replaceResponseBodyUrls: true,
@@ -204,6 +217,8 @@ describe("config load", async () => {
         key: "key",
         cert: "cert",
       },
+      connectTimeout: 3,
+      socketTimeout: 3,
       port: 443,
       replaceRequestBodyUrls: true,
       replaceResponseBodyUrls: true,
@@ -652,4 +667,18 @@ describe("server cruise", async () => {
     assert.notEqual(responseText, expectedResponseText);
     assert.equal(actualText, expectedResponseText);
   });
+});
+
+describe('Websocket feature', () => {
+  it("should send a payload of 123278 bytes with the payload length set to 0x1E18E", () => {
+    const samplePayload = Array(123278)
+      .fill(0)
+      .map(_ => 'abcdefghijklmnopqrstuvwxyz'.charAt(Math.random() * 26))
+      .join("");
+    const buffer = createWebsocketBufferFrom(samplePayload, true)
+    const hexPayloadLengthBuffer = Buffer.allocUnsafe(10);
+    buffer.copy(hexPayloadLengthBuffer, 0, 0, 10);
+    const hexPayloadLength = hexPayloadLengthBuffer.toString("hex");
+    assert.equal(hexPayloadLength, "81ff000000000001e18e")
+  })
 });

@@ -5,7 +5,7 @@ That is a secure http/2 (or insecure http1.1) reverse-proxy installed on your ma
 - with 0 transitive dependency
 - with 1 install step
 - with a startup time of a few milliseconds
-- with one 35kb index.js file
+- with one 46kb index.js file
 
 How simple is that ?
 
@@ -32,6 +32,7 @@ npx local-traffic
     "/my-static-webapp/": "file:///home/user/projects/my-static-webapp/",
     "/config/": "config://",
     "/logs/": "logs://",
+    "/recorder/": "recorder://",
     "/jquery-local/jquery.js": {
       "replaceBody": "https://mycdn.net/jquery/jquery-3.6.4.js",
       "downstreamUrl": "file:///home/user/projects/zepto/dist/zepto.js"
@@ -48,9 +49,10 @@ npx local-traffic
 4. Go to [http://localhost:8080/my-static-webapp/index.html](http://localhost:8080/my-static-webapp/index.html) with your browser (given your project name is my-static-webapp, but I am not 100% sure)
 5. Go to [http://localhost:8080/logs/](http://localhost:8080/logs/) to watch the request logs
 6. Go to [http://localhost:8080/config/](http://localhost:8080/config/) to change the config in a web editor
-7. From the web config editor, create a SSL keypair and start working with a self signed SSL certificate right away
-8. Your page will use /jquery-local/jquery.js instead of the CDN asset, and will serve the file from your hard drive
-9. Your server now proxies the mapping that you have configured
+7. You can use the [http://localhost:8080/recorder/](recorder) to turn your proxy into a mock server.
+8. From the web config editor, create a SSL keypair and start working with a self signed SSL certificate right away
+9. Your page will use /jquery-local/jquery.js instead of the CDN asset, and will serve the file from your hard drive
+10. Your server now proxies the mapping that you have configured
 
 ## usage
 
@@ -90,3 +92,5 @@ All boolean settings default to false when unspecified.
 - `simpleLogs`: (`boolean`) disable colored logs for text terminals
 - `websocket`: (`boolean`) true to activate websocket connections proxying via sockets. Required for logs UI.
 - `disableWebSecurity`: (`boolean`) true for easygoing values in cross origin requests or content security policy headers
+- `connectTimeout`: (`number`) max time before aborting the connection (defaults to 3000ms)
+- `socketTimeout`: (`number`) max time waiting for a response (defaults to 3000ms)

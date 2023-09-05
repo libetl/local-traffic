@@ -1,34 +1,34 @@
 import {
-  ClientHttp2Session,
+  type ClientHttp2Session,
+  type Http2Session,
+  type Http2ServerRequest,
+  type Http2ServerResponse,
+  type OutgoingHttpHeaders,
+  type SecureClientSessionOptions,
+  type SecureServerOptions,
+  type ClientHttp2Stream,
+  type IncomingHttpStatusHeader,
   createSecureServer,
   connect,
-  Http2Session,
-  Http2ServerRequest,
-  Http2ServerResponse,
-  OutgoingHttpHeaders,
-  SecureClientSessionOptions,
-  SecureServerOptions,
-  ClientHttp2Stream,
-  IncomingHttpStatusHeader,
 } from "http2";
 import {
+  type IncomingMessage,
+  type ClientRequest,
+  type IncomingHttpHeaders,
+  type ServerResponse,
+  type Server,
   request as httpRequest,
-  IncomingMessage,
-  ClientRequest,
-  IncomingHttpHeaders,
   createServer,
-  ServerResponse,
-  Server,
 } from "http";
-import { request as httpsRequest, RequestOptions } from "https";
+import { type RequestOptions, request as httpsRequest } from "https";
 import { URL } from "url";
 import {
+  type StatWatcher,
   watchFile,
   readdir,
   readFile,
   writeFile,
   lstat,
-  StatWatcher,
 } from "fs";
 import {
   gzip,
@@ -57,6 +57,7 @@ enum EMOJIS {
   PORT = "☎️ ",
   OUTBOUND = "↗️ ",
   RULES = "🔗",
+  MOCKS = "🌐",
   REWRITE = "✒️ ",
   RESTART = "🔄",
   WEBSOCKET = "☄️ ",
@@ -81,6 +82,10 @@ interface WebsocketListener {
   wantsMask: boolean;
 }
 
+type WebsocketLogsListener = WebsocketListener & {
+  wantsResponseMessage?: boolean;
+};
+
 interface PartialRead {
   payloadLength: number;
   mask: number[];
@@ -98,18 +103,35 @@ interface LocalConfiguration {
   simpleLogs?: boolean;
   websocket?: boolean;
   disableWebSecurity?: boolean;
+  connectTimeout?: number;
+  socketTimeout?: number;
 }
 
 type Mapping = {
   [subPath: string]: string | { replaceBody: string; downstreamUrl: string };
 };
 
+type Mocks = Map<string, string>;
+type MockResponseObject = {
+  body: string;
+  headers: IncomingHttpHeaders & IncomingHttpStatusHeader;
+  status: number;
+};
+
+enum ServerMode {
+  PROXY = "proxy",
+  MOCK = "mock",
+}
+
 interface State {
   config: LocalConfiguration;
   server: Server;
-  logsListeners: WebsocketListener[];
-  configListeners: WebsocketListener[];
+  logsListeners: WebsocketLogsListener[];
+  configListeners: WebsocketLogsListener[];
   configFileWatcher: StatWatcher;
+  mode: ServerMode;
+  mocks: Mocks;
+  strictMock: boolean;
   log: (text: string, level?: LogLevel, emoji?: string) => void;
   notifyConfigListeners: (data: Record<string, unknown>) => void;
   notifyLogsListeners: (data: Record<string, unknown>) => void;
@@ -121,20 +143,6 @@ const filename = resolve(
   cwd(),
   argv.slice(-1)[0].endsWith(".json") ? argv.slice(-1)[0] : userHomeConfigFile,
 );
-const defaultConfig: LocalConfiguration = {
-  mapping: {
-    "/config/": "config://",
-    "/logs/": "logs://",
-  },
-  port: 8080,
-  replaceRequestBodyUrls: false,
-  replaceResponseBodyUrls: false,
-  dontUseHttp2Downstream: false,
-  dontTranslateLocationHeader: false,
-  simpleLogs: false,
-  websocket: true,
-  disableWebSecurity: false,
-};
 
 const instantTime = (): bigint => {
   return (
@@ -210,25 +218,35 @@ const createWebsocketBufferFrom = (
   const mask = Array(4)
     .fill(0)
     .map(() => (wantsMask ? Math.floor(Math.random() * (2 << 7)) : 0));
-  const maskedTextBits = [...text.substring(0, 2 << 15)].map(
-    (c, i) => c.charCodeAt(0) ^ mask[i & 3],
-  );
-  const length = Math.min((2 << 15) - 1, text.length);
+  const maskedTextBits = text
+    .split("")
+    .map((c, i) => c.charCodeAt(0) ^ mask[i & 3]);
+  const length = text.length;
+  const magicHeader = (1 << 7) + 1;
+  const maskHeader = wantsMask ? 1 << 7 : 0;
   const header =
     text.length < (2 << 6) - 2
-      ? Buffer.from(
-          Uint8Array.from([(1 << 7) + 1, (wantsMask ? 1 << 7 : 0) + length])
-            .buffer,
-        )
-      : Buffer.concat([
+      ? Buffer.from(Uint8Array.from([magicHeader, maskHeader + length]).buffer)
+      : text.length < (2 << 15) - 1
+      ? Buffer.concat([
           Buffer.from(
-            Uint8Array.from([
-              (1 << 7) + 1,
-              ((1 << 7) - 2) | (wantsMask ? 1 << 7 : 0),
-            ]).buffer,
+            Uint8Array.from([magicHeader, ((1 << 7) - 2) | maskHeader]).buffer,
           ),
           Buffer.from(Uint8Array.from([length >> 8]).buffer),
           Buffer.from(Uint8Array.from([length & ((1 << 8) - 1)]).buffer),
+        ])
+      : Buffer.concat([
+          Buffer.from(
+            Uint8Array.from([magicHeader, ((1 << 7) - 1) | maskHeader]).buffer,
+          ),
+          Buffer.concat(
+            Number(length)
+              .toString(16)
+              .padStart(16, "0")
+              .match(/.{2}/g)
+              .map(e => parseInt(e, 16))
+              .map(number => Buffer.from(Uint8Array.from([number]).buffer)),
+          ),
         ]);
   const maskingKey = Buffer.from(Int8Array.from(mask).buffer);
   const payload = Buffer.from(Int8Array.from(maskedTextBits).buffer);
@@ -288,16 +306,25 @@ const notifyConfigListeners = function (
   this: State,
   data: Record<string, unknown>,
 ) {
-  return notifyListeners(this, data, this.configListeners);
+  return notifyListeners(data, this.configListeners);
 };
 const notifyLogsListeners = function (
   this: State,
   data: Record<string, unknown>,
 ) {
-  return notifyListeners(this, data, this.logsListeners);
+  const { response, ...dataWithoutResponseBody } = data;
+  return Promise.all([
+    notifyListeners(
+      data,
+      this.logsListeners.filter(l => l.wantsResponseMessage),
+    ),
+    notifyListeners(
+      dataWithoutResponseBody,
+      this.logsListeners.filter(l => !l.wantsResponseMessage),
+    ),
+  ]);
 };
 const notifyListeners = (
-  state: State,
   data: Record<string, unknown>,
   listeners: WebsocketListener[],
 ) => {
@@ -334,11 +361,13 @@ const quickStatus = function (this: State) {
       EMOJIS.INBOUND
     } ${this.config.ssl ? "H/2 " : "H1.1"}${
       this.config.replaceResponseBodyUrls ? EMOJIS.REWRITE : "  "
-    }⎹\u001b[48;5;54m\u001b[48;5;55m⎸${EMOJIS.RULES}${Object.keys(
-      this.config.mapping,
-    )
-      .length.toString()
-      .padStart(3)}⎹\u001b[48;5;56m⎸${
+    }⎹\u001b[48;5;54m\u001b[48;5;55m⎸${
+      this.mode === ServerMode.PROXY
+        ? `${EMOJIS.RULES}${Object.keys(this.config.mapping)
+            .length.toString()
+            .padStart(3)}`
+        : `${EMOJIS.MOCKS}${this.mocks.size.toString().padStart(3)}`
+    }⎹\u001b[48;5;56m⎸${
       this.config.websocket ? EMOJIS.WEBSOCKET : EMOJIS.NO
     }⎹\u001b[48;5;57m⎸${
       !this.config.simpleLogs ? EMOJIS.COLORED : EMOJIS.NO
@@ -349,6 +378,602 @@ const quickStatus = function (this: State) {
   this.notifyConfigListeners(this.config as Record<string, unknown>);
 };
 
+const errorPage = (
+  thrown: Error,
+  serverMode: ServerMode,
+  phase: string,
+  requestedURL: URL,
+  downstreamURL?: URL,
+) => `${header(0x1f4a3, "error", thrown.message)}
+<p>An error happened while trying to proxy a remote exchange</p>
+<div class="alert alert-warning" role="alert">
+  &#x24D8;&nbsp;This is not an error from the downstream service.
+</div>
+<div class="alert alert-danger" role="alert">
+<pre><code>${thrown.stack || `<i>${thrown.name} : ${thrown.message}</i>`}${
+  (thrown as ErrorWithErrno).errno
+    ? `<br/>(code : ${(thrown as ErrorWithErrno).errno})`
+    : ""
+}</code></pre>
+</div>
+More information about the request :
+<table class="table">
+  <tbody>
+    <tr>
+      <td>server mode</td>
+      <td>${serverMode}</td>
+    </tr>
+    <tr>
+      <td>phase</td>
+      <td>${phase}</td>
+    </tr>
+    <tr>
+      <td>requested URL</td>
+      <td>${requestedURL}</td>
+    </tr>
+    <tr>
+      <td>downstream URL</td>
+      <td>${downstreamURL || "&lt;no-target-url&gt;"}</td>
+    </tr>
+  </tbody>
+</table>
+</div></body></html>`;
+
+const logsView = (
+  proxyHostnameAndPort: string,
+  config: LocalConfiguration,
+  options: { captureResponseBody: boolean },
+) =>
+  `<table id="table-access" class="table table-striped" style="display: block; width: 100%; overflow-y: auto">
+  <thead>
+    <tr>
+      <th scope="col"${
+        options.captureResponseBody === true ? ' style="min-width: 110px"' : ""
+      }>...</th>
+      <th scope="col">Date</th>
+      <th scope="col">Level</th>
+      <th scope="col">Protocol</th>
+      <th scope="col">Method</th>
+      <th scope="col">Status</th>
+      <th scope="col">Duration</th>
+      <th scope="col">Upstream Path</th>
+      <th scope="col">Downstream Path</th>
+    </tr>
+  </thead>
+  <tbody id="access">
+  </tbody>
+</table>
+<table id="table-proxy" class="table table-striped" style="display: none; width: 100%; overflow-y: auto">
+  <thead>
+    <tr>
+      <th scope="col">Date</th>
+      <th scope="col">Level</th>
+      <th scope="col">Message</th>
+    </tr>
+  </thead>
+  <tbody id="proxy">
+  </tbody>
+</table>
+<script type="text/javascript">
+    function start() {
+      document.getElementById('table-access').style.height =
+        (document.documentElement.clientHeight - 150) + 'px';
+      const socket = new WebSocket("ws${
+        config.ssl ? "s" : ""
+      }://${proxyHostnameAndPort}/local-traffic-logs${
+    options.captureResponseBody ? "?wantsResponseMessage=true" : ""
+  }");
+      socket.onmessage = function(event) {
+        let data = event.data
+        let uniqueHash;
+        try {
+          const { uniqueHash: uniqueHash1, ...data1 } = JSON.parse(event.data);
+          data = data1;
+          uniqueHash = uniqueHash1;
+        } catch(e) { }
+        if (document.getElementById('mock-mode')?.checked) return;
+        if (${options.captureResponseBody === true} && 
+          data?.downstreamPath?.startsWith('recorder://'))
+          return;
+        const time = new Date().toISOString().split('T')[1].replace('Z', '');
+        const remove = ${options.captureResponseBody === true} && uniqueHash
+        ? '<button onclick="javascript:remove(event)" type="button" ' +
+          'class="btn btn-primary">&#x274C;</button>'
+        : ''
+        const replay = uniqueHash ? '<button data-response="' + 
+          btoa(JSON.stringify(data.response ?? {})) +
+          '" data-uniquehash="' + uniqueHash + '" onclick="javascript:replay(event)" ' +
+          'type="button" class="btn btn-primary">&#x1F501;</button>' : '';
+        if(data.statusCode && uniqueHash) {
+          const color = getColorFromStatusCode(data.statusCode);
+          const statusCodeColumn = document.querySelector("#event-" + data.randomId + " .statusCode");
+          if (statusCodeColumn)
+            statusCodeColumn.innerHTML = '<span class="badge bg-' + color + '">' + data.statusCode + '</span>';
+
+          const durationColumn = document.querySelector("#event-" + data.randomId + " .duration");
+          if (durationColumn) {
+            const duration = data.duration > 10000 ? Math.floor(data.duration / 1000) + 's' :
+              data.duration + 'ms';
+            durationColumn.innerHTML = duration;
+          }
+
+          const protocolColumn = document.querySelector("#event-" + data.randomId + " .protocol");
+          if (protocolColumn) {
+            protocolColumn.innerHTML = data.protocol;
+          }
+
+          const replayColumn = document.querySelector("#event-" + data.randomId + " .replay");
+          if (replayColumn) {
+            replayColumn.innerHTML = replay + remove;
+          }
+        } else if (uniqueHash) {
+            document.getElementById("access")
+              .insertAdjacentHTML('afterbegin', '<tr id="event-' + data.randomId + '">' +
+                  '<td scope="col" class="replay">' + replay + remove + '</td>' +
+                  '<td scope="col">' + time + '</td>' +
+                  '<td scope="col">' + (data.level || 'info')+ '</td>' + 
+                  '<td scope="col" class="protocol">' + data.protocol + '</td>' + 
+                  '<td scope="col">' + data.method + '</td>' + 
+                  '<td scope="col" class="statusCode"><span class="badge bg-secondary">...</span></td>' +
+                  '<td scope="col" class="duration">&#x23F1;</td>' +
+                  '<td scope="col">' + data.upstreamPath + '</td>' + 
+                  '<td scope="col">' + data.downstreamPath + '</td>' + 
+                  '</tr>');
+          } else if(data.event) {
+          document.getElementById("proxy")
+            .insertAdjacentHTML('afterbegin', '<tr><td scope="col">' + time + '</td>' +
+                '<td scope="col">' + (data.level || 'info')+ '</td>' + 
+                '<td scope="col">' + data.event + '</td></tr>');
+        }
+        cleanup();
+      };
+      socket.onerror = function(error) {
+        console.log(\`[error] \${JSON.stringify(error)}\`);
+        setTimeout(start, 5000);
+      };
+    };
+    function show(id) {
+      [...document.querySelectorAll('table')].forEach((table, index) => {
+        table.style.display = index === id ? 'block': 'none'
+      });
+      [...document.querySelectorAll('.navbar-nav .nav-item .nav-link')].forEach((link, index) => {
+        if (index === id) { link.classList.add('active') } else link.classList.remove('active');
+      });
+    }
+    function remove(event) {
+      event.target.closest('tr').remove();
+      if (window.updateState) window.updateState();
+    }
+    function cleanup() {
+      const currentLimit = parseInt(document.getElementById('limit').value)
+      for (let table of ['access', 'proxy']) {
+        while (currentLimit && document.getElementById(table).childNodes.length && 
+        document.getElementById(table).childNodes.length > currentLimit) {
+          [...document.getElementById(table).childNodes].slice(-1)[0].remove();
+        }
+      }
+    }
+    function replay(event) {
+      const uniqueHash = event.target.dataset.uniquehash;
+      const { method, url, headers, body } = JSON.parse(atob(uniqueHash));
+      fetch(url, {
+        method,
+        headers,
+        body: !body.data || !body.data.length 
+          ? undefined
+          : new TextDecoder().decode(new Int8Array(body.data))
+      });
+    }
+    function getColorFromStatusCode(statusCode) {
+      return Math.floor(statusCode / 100) === 1 ? "info" :
+        Math.floor(statusCode / 100) === 2 ? "success" :
+        Math.floor(statusCode / 100) === 3 ? "dark" :
+        Math.floor(statusCode / 100) === 4 ? "warning" :
+        Math.floor(statusCode / 100) === 5 ? "danger" :
+        "secondary";
+    }
+    window.addEventListener("DOMContentLoaded", start);
+</script>`;
+
+const logsPage = (proxyHostnameAndPort: string, state: State) =>
+  staticResponse(`${header(0x1f4fa, "logs", "")}
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary nav-fill">
+  <div class="container-fluid">
+    <ul class="navbar-nav">
+      <li class="nav-item">
+        <a class="nav-link active" aria-current="page" href="javascript:show(0)">Access</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" href="javascript:show(1)">Proxy</a>
+      </li>
+    </ul>
+    <span class="navbar-text">
+      Limit : <select id="limit" onchange="javascript:cleanup()"><option value="-1">0 (clear)</option><option value="10">10</option>
+        <option value="50">50</option><option value="100">100</option><option value="200">200</option>
+        <option selected="selected" value="500">500</option><option value="0">Infinity (discouraged)</option>
+      </select> rows
+    </span>
+  </div>
+</nav>
+${logsView(proxyHostnameAndPort, state.config, { captureResponseBody: false })}
+</body></html>`);
+
+const configPage = (proxyHostnameAndPort: string, state: State) =>
+  staticResponse(`${header(0x1f39b, "config", "")}
+    <link href="${cdn}jsoneditor/dist/jsoneditor.min.css" rel="stylesheet" type="text/css">
+    <script src="${cdn}jsoneditor/dist/jsoneditor.min.js"></script>
+    <script src="${cdn}node-forge/dist/forge.min.js"></script>
+    <div id="ssl-modal" class="modal" tabindex="-1" role="dialog">
+      <div class="modal-dialog" role="document">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">SSL keypair generation in progress</h5>
+          </div>
+          <div class="modal-body">
+            <p>Wait a few seconds or move your mouse to increase the entropy.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="jsoneditor" style="width: 400px; height: 400px;"></div>
+    <script>
+    // create the editor
+    const container = document.getElementById("jsoneditor")
+    const options = {mode: "code", allowSchemaSuggestions: true, schema: {
+      type: "object",
+      properties: {
+        ${Object.entries({ ...defaultConfig, ssl: { cert: "", key: "" } })
+          .map(
+            ([property, exampleValue]) =>
+              `${property}: {type: "${
+                typeof exampleValue === "number"
+                  ? "integer"
+                  : typeof exampleValue === "string"
+                  ? "string"
+                  : typeof exampleValue === "boolean"
+                  ? "boolean"
+                  : "object"
+              }"}`,
+          )
+          .join(",\n          ")}
+      },
+      required: [],
+      additionalProperties: false
+    }}
+
+    function save() {
+      socket.send(JSON.stringify(editor.get()));
+    }
+
+    function generateSslCertificate() {
+      const sslModal = new bootstrap.Modal(document.getElementById('ssl-modal'), {});
+      sslModal.show()
+      setTimeout(function() {
+        const keypair = forge.pki.rsa.generateKeyPair(2048);
+        const certificate = forge.pki.createCertificate();
+        const now = new Date();
+        const fiveYears = new Date(new Date(now).setFullYear(now.getFullYear() + 5));
+        Object.assign(certificate, {
+          publicKey: keypair.publicKey,
+          serialNumber: "01",
+          validity: {
+            notBefore: now,
+            notAfter: fiveYears,
+          },
+        });
+        certificate.sign(keypair.privateKey, forge.md.sha256.create());
+        const key = forge.pki.privateKeyToPem(keypair.privateKey);
+        const cert = forge.pki.certificateToPem(certificate);
+        const existingConfig = editor.get();
+        editor.set({ ...existingConfig, ssl: { key, cert },
+          port: parseInt(("" + existingConfig.port).replace(/(80|[0-9])80$/, '443'))
+        });
+        sslModal.hide();
+      }, 100);
+    }
+
+    const editor = new JSONEditor(container, options);
+    let socket;
+    const initialJson = ${JSON.stringify(state.config)}
+    editor.set(initialJson)
+    editor.validate();
+    editor.aceEditor.commands.addCommand({
+      name: 'save',
+      bindKey: {win: 'Ctrl-S',  mac: 'Command-S'},
+      exec: save,
+    });
+
+    window.addEventListener("DOMContentLoaded", function() {
+      document.getElementById('jsoneditor').style.height =
+        (document.documentElement.clientHeight - 150) + 'px';
+      document.getElementById('jsoneditor').style.width =
+        parseInt(window.getComputedStyle(
+          document.querySelector('.container')).maxWidth) + 'px';
+      const sslButton = document.createElement('button');
+      sslButton.addEventListener("click", generateSslCertificate);
+      sslButton.type="button";
+      sslButton.classList.add("btn");
+      sslButton.classList.add("btn-primary");
+      sslButton.innerHTML="&#x1F512;";
+      document.querySelector('.jsoneditor-menu')
+              .appendChild(sslButton);
+      const saveButton = document.createElement('button');
+      saveButton.addEventListener("click", save);
+      saveButton.type="button";
+      saveButton.classList.add("btn");
+      saveButton.classList.add("btn-primary");
+      saveButton.innerHTML="&#x1F4BE;";
+      document.querySelector('.jsoneditor-menu')
+              .appendChild(saveButton);
+      socket = new WebSocket("ws${
+        state.config.ssl ? "s" : ""
+      }://${proxyHostnameAndPort}/local-traffic-config");
+      socket.onmessage = function(event) {
+        editor.set(JSON.parse(event.data))
+        editor.validate()
+      }
+    });
+    </script>
+  </body></html>`);
+
+const recorderPage = (
+  proxyHostnameAndPort: string,
+  state: State,
+  request: Http2ServerRequest | IncomingMessage,
+) => {
+  if (["PUT", "POST", "DELETE"].includes(request.method)) {
+    return staticResponse(`{"status": "acknowledged"}`, {
+      contentType: "application/json; charset=utf-8",
+      onOutboundWrite: buffer => {
+        let mocksUpdate: Partial<{
+          mocks: { uniqueHash: string; response: string }[];
+          mode: ServerMode;
+          strictMock: boolean;
+        }> = {};
+        try {
+          mocksUpdate = JSON.parse(buffer.toString("ascii"));
+        } catch (e) {}
+        if (
+          typeof mocksUpdate !== "object" ||
+          Object.keys(mocksUpdate).filter(
+            key => !["strictMock", "mode", "mocks"].includes(key),
+          ).length ||
+          (!Array.isArray(mocksUpdate.mocks) && mocksUpdate.mocks !== undefined)
+        ) {
+          state.log(
+            `invalid mocks update received`,
+            LogLevel.WARNING,
+            EMOJIS.MOCKS,
+          );
+          return;
+        }
+        const { mocks: mocksArray, mode, strictMock } = mocksUpdate;
+        const mocks: Mocks = new Map<string, string>(
+          mocksArray.map(({ response, uniqueHash }) => [
+            cleanEntropy(uniqueHash),
+            response,
+          ]),
+        );
+        const modeHasBeenChangedToProxy =
+          mode !== state.mode && mode === ServerMode.PROXY;
+        const mocksConfigHasBeenChanged =
+          (mode !== state.mode && mode === ServerMode.MOCK) ||
+          state.mocks.size !== mocks.size;
+        const strictMockModeHasBeenChanged =
+          !!strictMock !== !!state.strictMock;
+        const mocksHaveBeenPurged = request.method === "DELETE";
+        if (modeHasBeenChangedToProxy) {
+          state.log(
+            `${Object.keys(state.config.mapping)
+              .length.toString()
+              .padStart(5)} loaded mapping rules`,
+            LogLevel.INFO,
+            EMOJIS.RULES,
+          );
+        }
+
+        if (mocksConfigHasBeenChanged) {
+          state.log(
+            `${(mocks ?? state.mocks).size
+              .toString()
+              .padStart(5)} loaded mocks`,
+            LogLevel.INFO,
+            EMOJIS.MOCKS,
+          );
+        }
+        if (strictMockModeHasBeenChanged) {
+          state.log(
+            `mocks strict mode : ${strictMock ?? state.strictMock}`,
+            LogLevel.INFO,
+            EMOJIS.MOCKS,
+          );
+        }
+        if (mocksHaveBeenPurged)
+          update(state, {
+            strictMock,
+            mode,
+            mocks: new Map<string, string>(),
+          });
+        else update(state, { strictMock, mode, mocks: mocks ?? state.mocks });
+        if (
+          modeHasBeenChangedToProxy ||
+          mocksConfigHasBeenChanged ||
+          strictMockModeHasBeenChanged ||
+          mocksHaveBeenPurged
+        )
+          state.quickStatus();
+      },
+    });
+  }
+  return staticResponse(`${header(0x23fa, "recorder", "")}
+  <span>Mode : </span>
+  <div class="btn-group" role="group" aria-label="Server Mode">
+    <input type="radio" class="btn-check" name="server-mode" id="record-mode" autocomplete="off"${
+      state.mode === ServerMode.PROXY ? " checked" : ""
+    }>
+    <label class="btn btn-outline-primary" for="record-mode">&#9210; Record</label>
+    <input type="radio" class="btn-check" name="server-mode" id="mock-mode" autocomplete="off"${
+      state.mode === ServerMode.MOCK ? " checked" : ""
+    }>
+    <label class="btn btn-outline-primary" for="mock-mode">&#x1F310; Mock</label>
+  </div>
+  <span>Actions : </span>
+  <button type="button" class="btn btn-light" id="upload-mocks">&#x1F4E5; Upload mocks</button>
+  <button type="button" class="btn btn-light" id="download-mocks">&#x1F4E6; Download mocks</button>
+  <button type="button" class="btn btn-light" id="delete-mocks">&#x1F5D1; Delete mocks</button>
+  <div class="form-check form-switch">
+    <input class="form-check-input" type="checkbox" id="strict-mock-mode"${
+      state.strictMock ? " checked" : ""
+    }>
+    <label class="form-check-label" for="strict-mock-mode">Strict mock mode</label>
+  </div>
+  <input type="hidden" id="limit" value="0"/>
+  <script>
+  function getMocksData () {
+    return JSON.stringify(
+      [...document.querySelectorAll('button[data-uniqueHash]')].map(button => ({
+        response: button.attributes['data-response']?.value,
+        uniqueHash: button.attributes['data-uniqueHash']?.value}))
+     )
+  }
+  function updateState () {
+    fetch("http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
+    Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
+      value?.toString()?.startsWith("recorder:"),
+    )?.[0] ?? "/recorder/"
+  }", {
+       method: 'PUT',
+       headers: { 'Content-Type': 'application/json' },
+       body: '{"strictMock":' + document.getElementById('strict-mock-mode').checked +
+             ',"mode":"' + 
+             (document.getElementById('mock-mode').checked ? "mock" : "proxy") + '"' +
+            ',"mocks":' + getMocksData() + '}'
+     })
+  }
+  function loadMocks(mocksHashes) {
+    const time = new Date().toISOString().split('T')[1].replace('Z', '');
+    let mocks = [];
+    try {
+      mocks = mocksHashes.map(mock => ({...mock, 
+        request: JSON.parse(atob(mock.uniqueHash)),
+        response: JSON.parse(atob(mock.response))
+      }));
+    } catch(e) { }
+    mocks.forEach(mock => {
+      const randomId = window.crypto.randomUUID();
+      const remove = '<button onclick="javascript:remove(event)" type="button" ' +
+      'class="btn btn-primary">&#x274C;</button>';
+      const replay = mock.uniqueHash ? '<button data-response="' + 
+        btoa(JSON.stringify(mock.response ?? {})) +
+        '" data-uniquehash="' + mock.uniqueHash + '" onclick="javascript:replay(event)" ' +
+        'type="button" class="btn btn-primary">&#x1F501;</button>' : '';
+      document.getElementById("access")
+      .insertAdjacentHTML('afterbegin', '<tr id="event-' + randomId + '">' +
+          '<td scope="col" class="replay">' + replay + remove + '</td>' +
+          '<td scope="col">' + time + '</td>' +
+          '<td scope="col">info</td>' + 
+          '<td scope="col" class="protocol">HTTP/2</td>' + 
+          '<td scope="col">' + mock.request.method + '</td>' + 
+          '<td scope="col" class="statusCode"><span class="badge bg-' + 
+          getColorFromStatusCode(mock.response.status) + '">' + mock.response.status + '</span></td>' +
+          '<td scope="col" class="duration">0ms</td>' +
+          '<td scope="col">' + mock.request.url + '</td>' + 
+          '<td scope="col">N/A</td>' + 
+          '</tr>');
+    });
+}
+document.getElementById('upload-mocks').addEventListener('click', () => {
+  const time = new Date().toISOString().split('T')[1].replace('Z', '');
+  const fileInput = document.createElement('input');
+  fileInput.type = "file";
+  fileInput.multiple = "multiple";
+  fileInput.onchange = function() {
+    const fileReader = new FileReader();
+    [...fileInput.files].reduce((promise, file) =>
+      promise.then(result => new Promise(resolve => {
+        fileReader.readAsText(file);
+        fileReader.onload = function(){
+          resolve(result.concat(fileReader.result));
+        };
+      })), Promise.resolve([]))
+    .then(files => files.flatMap(file => JSON.parse(file)))
+    .catch(e => [])
+    .then(mocks => loadMocks(mocks))
+    .then(() => updateState());
+  }
+  fileInput.click();
+});
+document.getElementById('download-mocks').addEventListener('click', () => {
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([getMocksData()], {
+    type: "application/json",
+  }));
+  link.download = "mocks-" + new Date().toISOString() + ".json";
+  link.click();
+  URL.revokeObjectURL(link.href);
+})
+document.getElementById('delete-mocks').addEventListener('click', () => {
+  document.getElementById('limit').value = -1;
+  cleanup();
+  updateState();
+  document.getElementById('limit').value = 0;
+})
+document.getElementById('record-mode').addEventListener('change', () => {
+  document.getElementById('limit').value = 0;
+  cleanup();
+  updateState();
+})
+document.getElementById('mock-mode').addEventListener('change', () => {
+  updateState();
+})
+document.getElementById('strict-mock-mode').addEventListener('change', (e) => { 
+  updateState();
+})
+setTimeout(() => {
+  loadMocks(${JSON.stringify(
+    [...state.mocks.entries()].map(([uniqueHash, response]) => ({
+      uniqueHash,
+      response,
+    })),
+  )});
+  updateState();
+}, 10)
+  </script>
+  ${logsView(proxyHostnameAndPort, state.config, { captureResponseBody: true })}
+  </body></html>`);
+};
+
+const specialPageMapping: Record<
+  string,
+  (
+    proxyHostnameAndPort: string,
+    state: State,
+    request: Http2ServerRequest | IncomingMessage,
+  ) => ClientHttp2Session
+> = {
+  logs: logsPage,
+  config: configPage,
+  recorder: recorderPage,
+};
+const specialPages = Object.keys(specialPageMapping);
+const specialProtocols = specialPages.map(page => `${page}:`);
+const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
+  Pick<LocalConfiguration, "ssl"> = {
+  mapping: Object.assign(
+    {},
+    ...specialPages.map(page => ({ [`/${page}/`]: `${page}://` })),
+  ),
+  port: 8080,
+  replaceRequestBodyUrls: false,
+  replaceResponseBodyUrls: false,
+  dontUseHttp2Downstream: false,
+  dontTranslateLocationHeader: false,
+  simpleLogs: false,
+  websocket: true,
+  disableWebSecurity: false,
+  connectTimeout: 3000,
+  socketTimeout: 3000,
+};
 const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
   new Promise<LocalConfiguration>(resolve =>
     readFile(filename, (error, data) => {
@@ -559,6 +1184,63 @@ const header = (
 )}; local-traffic ${category}</h1>
 <br/>`;
 
+const mockRequest = ({
+  response,
+}: {
+  response: string;
+}): ClientHttp2Session => {
+  return {
+    error: null as Error,
+    data: null as MockResponseObject,
+    hasRun: false,
+    run: function () {
+      return this.hasRun
+        ? Promise.resolve()
+        : new Promise(promiseResolve => {
+            try {
+              this.data = JSON.parse(
+                Buffer.from(response, "base64").toString("utf-8"),
+              );
+            } catch (e) {
+              this.data = {};
+            }
+            promiseResolve(void 0);
+          });
+    },
+    events: {} as { [name: string]: (...any: any) => any },
+    on: function (name: string, action: (...any: any) => any) {
+      this.events[name] = action;
+      this.run().then(() => {
+        if (name === "response")
+          this.events["response"](
+            {
+              ...this.data.headers,
+              "X-LocalTraffic-Mock": "1",
+            },
+            this.data.status,
+          );
+        if (name === "data" && this.data) {
+          this.events["data"](Buffer.from(this.data.body ?? "", "base64"));
+          this.events["end"]();
+        }
+        if (name === "error" && this.error) {
+          this.events["error"](this.error);
+        }
+      });
+      return this;
+    },
+    end: function () {
+      return this;
+    },
+    request: function () {
+      return this;
+    },
+    write: function () {
+      return this;
+    },
+  } as unknown as ClientHttp2Session;
+};
+
 const fileRequest = (url: URL): ClientHttp2Session => {
   const file = resolve(
     "/",
@@ -666,13 +1348,23 @@ const fileRequest = (url: URL): ClientHttp2Session => {
     request: function () {
       return this;
     },
+    write: function () {
+      return this;
+    },
   } as unknown as ClientHttp2Session;
 };
 
-const staticPage = (data: string): ClientHttp2Session =>
+const staticResponse = (
+  data: string,
+  options?: {
+    contentType?: string;
+    onOutboundWrite?: (buffer: Buffer) => void;
+  },
+): ClientHttp2Session =>
   ({
     error: null as Error,
     data: null as string | Buffer,
+    outboundData: null as Buffer,
     run: function () {
       return new Promise(resolve => {
         this.data = data;
@@ -687,7 +1379,7 @@ const staticPage = (data: string): ClientHttp2Session =>
           this.events["response"](
             {
               Server: "local",
-              "Content-Type": "text/html",
+              "Content-Type": options?.contentType ?? "text/html",
             },
             0,
           );
@@ -701,6 +1393,11 @@ const staticPage = (data: string): ClientHttp2Session =>
       });
       return this;
     },
+    write: function (payload?: Buffer) {
+      this.outboundData = payload;
+      if (payload instanceof Buffer) options?.onOutboundWrite(payload);
+      return this;
+    },
     end: function () {
       return this;
     },
@@ -708,312 +1405,6 @@ const staticPage = (data: string): ClientHttp2Session =>
       return this;
     },
   } as unknown as ClientHttp2Session);
-
-const logsPage = (proxyHostnameAndPort: string, ssl: boolean) =>
-  staticPage(`${header(0x1f4fa, "logs", "")}
-<nav class="navbar navbar-expand-lg navbar-dark bg-primary nav-fill">
-  <div class="container-fluid">
-    <ul class="navbar-nav">
-      <li class="nav-item">
-        <a class="nav-link active" aria-current="page" href="javascript:show(0)">Access</a>
-      </li>
-      <li class="nav-item">
-        <a class="nav-link" href="javascript:show(1)">Proxy</a>
-      </li>
-    </ul>
-    <span class="navbar-text">
-      Limit : <select id="limit" onchange="javascript:cleanup()"><option value="-1">0 (clear)</option><option value="10">10</option>
-        <option value="50">50</option><option value="100">100</option><option value="200">200</option>
-        <option selected="selected" value="500">500</option><option value="0">Infinity (discouraged)</option>
-      </select> rows
-    </span>
-  </div>
-</nav>
-<table id="table-access" class="table table-striped" style="display: block; width: 100%; overflow-y: auto">
-  <thead>
-    <tr>
-      <th scope="col">...</th>
-      <th scope="col">Date</th>
-      <th scope="col">Level</th>
-      <th scope="col">Protocol</th>
-      <th scope="col">Method</th>
-      <th scope="col">Status</th>
-      <th scope="col">Duration</th>
-      <th scope="col">Upstream Path</th>
-      <th scope="col">Downstream Path</th>
-    </tr>
-  </thead>
-  <tbody id="access">
-  </tbody>
-</table>
-<table id="table-proxy" class="table table-striped" style="display: none; width: 100%; overflow-y: auto">
-  <thead>
-    <tr>
-      <th scope="col">Date</th>
-      <th scope="col">Level</th>
-      <th scope="col">Message</th>
-    </tr>
-  </thead>
-  <tbody id="proxy">
-  </tbody>
-</table>
-<script type="text/javascript">
-    function start() {
-      document.getElementById('table-access').style.height =
-        (document.documentElement.clientHeight - 150) + 'px';
-      const socket = new WebSocket("ws${
-        ssl ? "s" : ""
-      }://${proxyHostnameAndPort}/local-traffic-logs");
-      socket.onmessage = function(event) {
-        let data = event.data
-        let uniqueHash;
-        try {
-          const { uniqueHash: uniqueHash1, ...data1 } = JSON.parse(event.data);
-          data = data1;
-          uniqueHash = uniqueHash1;
-        } catch(e) { }
-        const time = new Date().toISOString().split('T')[1].replace('Z', '');
-        const replay = uniqueHash ? '<button data-uniquehash="' + uniqueHash + '" onclick="javascript:replay(event)" ' +
-          'type="button" class="btn btn-primary"' +
-          (uniqueHash === 'N/A' ? ' disabled="disabled"' : '') + '>&#x1F501;</button>' : '';
-        if(data.statusCode && uniqueHash) {
-          const color = Math.floor(data.statusCode / 100) === 1 ? "info" :
-            Math.floor(data.statusCode / 100) === 2 ? "success" :
-            Math.floor(data.statusCode / 100) === 3 ? "dark" :
-            Math.floor(data.statusCode / 100) === 4 ? "warning" :
-            Math.floor(data.statusCode / 100) === 5 ? "danger" :
-            "secondary";
-          const statusCodeColumn = document.querySelector("#event-" + data.randomId + " .statusCode");
-          if (statusCodeColumn)
-            statusCodeColumn.innerHTML = '<span class="badge bg-' + color + '">' + data.statusCode + '</span>';
-
-          const durationColumn = document.querySelector("#event-" + data.randomId + " .duration");
-          if (durationColumn) {
-            const duration = data.duration > 10000 ? Math.floor(data.duration / 1000) + 's' :
-              data.duration + 'ms';
-            durationColumn.innerHTML = duration;
-          }
-
-          const protocolColumn = document.querySelector("#event-" + data.randomId + " .protocol");
-          if (protocolColumn) {
-            protocolColumn.innerHTML = data.protocol;
-          }
-
-          const replayColumn = document.querySelector("#event-" + data.randomId + " .replay");
-          if (replayColumn) {
-            replayColumn.innerHTML = replay;
-          }
-        } else if (uniqueHash) {
-            document.getElementById("access")
-              .insertAdjacentHTML('afterbegin', '<tr id="event-' + data.randomId + '">' +
-                  '<td scope="col" class="replay">' + replay + '</td>' +
-                  '<td scope="col">' + time + '</td>' +
-                  '<td scope="col">' + (data.level || 'info')+ '</td>' + 
-                  '<td scope="col" class="protocol">' + data.protocol + '</td>' + 
-                  '<td scope="col">' + data.method + '</td>' + 
-                  '<td scope="col" class="statusCode"><span class="badge bg-secondary">...</span></td>' +
-                  '<td scope="col" class="duration">&#x23F1;</td>' +
-                  '<td scope="col">' + data.upstreamPath + '</td>' + 
-                  '<td scope="col">' + data.downstreamPath + '</td>' + 
-                  '</tr>');
-          } else if(data.event) {
-          document.getElementById("proxy")
-            .insertAdjacentHTML('afterbegin', '<tr><td scope="col">' + time + '</td>' +
-                '<td scope="col">' + (data.level || 'info')+ '</td>' + 
-                '<td scope="col">' + data.event + '</td></tr>');
-        }
-        cleanup();
-      };
-      socket.onerror = function(error) {
-        console.log(\`[error] \${error}\`);
-        setTimeout(start, 5000);
-      };
-    };
-    function show(id) {
-      [...document.querySelectorAll('table')].forEach((table, index) => {
-        table.style.display = index === id ? 'block': 'none'
-      });
-      [...document.querySelectorAll('.navbar-nav .nav-item .nav-link')].forEach((link, index) => {
-        if (index === id) { link.classList.add('active') } else link.classList.remove('active');
-      });
-    }
-    function cleanup() {
-      const currentLimit = parseInt(document.getElementById('limit').value)
-      for (let table of ['access', 'proxy']) {
-        while (currentLimit && document.getElementById(table).childNodes.length && 
-        document.getElementById(table).childNodes.length > currentLimit) {
-          [...document.getElementById(table).childNodes].slice(-1)[0].remove();
-        }
-      }
-    }
-    function replay(event) {
-      const uniqueHash = event.target.dataset.uniquehash;
-      const { method, url, headers, body } = JSON.parse(atob(uniqueHash));
-      fetch(url, {
-        method,
-        headers,
-        body: !body.data || !body.data.length 
-          ? undefined
-          : new TextDecoder().decode(new Int8Array(body.data))
-      });
-    }
-    window.addEventListener("DOMContentLoaded", start);
-</script>
-</body></html>`);
-
-const configPage = (proxyHostnameAndPort: string, config: LocalConfiguration) =>
-  staticPage(`${header(0x1f39b, "config", "")}
-    <link href="${cdn}jsoneditor/dist/jsoneditor.min.css" rel="stylesheet" type="text/css">
-    <script src="${cdn}jsoneditor/dist/jsoneditor.min.js"></script>
-    <script src="${cdn}node-forge/dist/forge.min.js"></script>
-    <div id="ssl-modal" class="modal" tabindex="-1" role="dialog">
-      <div class="modal-dialog" role="document">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h5 class="modal-title">SSL keypair generation in progress</h5>
-          </div>
-          <div class="modal-body">
-            <p>Wait a few seconds or move your mouse to improve the entropy.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div id="jsoneditor" style="width: 400px; height: 400px;"></div>
-    <script>
-    // create the editor
-    const container = document.getElementById("jsoneditor")
-    const options = {mode: "code", allowSchemaSuggestions: true, schema: {
-      type: "object",
-      properties: {
-        ${Object.entries({ ...defaultConfig, ssl: { cert: "", key: "" } })
-          .map(
-            ([property, exampleValue]) =>
-              `${property}: {type: "${
-                typeof exampleValue === "number"
-                  ? "integer"
-                  : typeof exampleValue === "string"
-                  ? "string"
-                  : typeof exampleValue === "boolean"
-                  ? "boolean"
-                  : "object"
-              }"}`,
-          )
-          .join(",\n          ")}
-      },
-      required: [],
-      additionalProperties: false
-    }}
-
-    function save() {
-      socket.send(JSON.stringify(editor.get()));
-    }
-
-    function generateSslCertificate() {
-      const sslModal = new bootstrap.Modal(document.getElementById('ssl-modal'), {});
-      sslModal.show()
-      setTimeout(function() {
-        const keypair = forge.pki.rsa.generateKeyPair(2048);
-        const certificate = forge.pki.createCertificate();
-        const now = new Date();
-        const fiveYears = new Date(new Date(now).setFullYear(now.getFullYear() + 5));
-        Object.assign(certificate, {
-          publicKey: keypair.publicKey,
-          serialNumber: "01",
-          validity: {
-            notBefore: now,
-            notAfter: fiveYears,
-          },
-        });
-        certificate.sign(keypair.privateKey, forge.md.sha256.create());
-        const key = forge.pki.privateKeyToPem(keypair.privateKey);
-        const cert = forge.pki.certificateToPem(certificate);
-        const existingConfig = editor.get();
-        editor.set({ ...existingConfig, ssl: { key, cert },
-          port: parseInt(("" + existingConfig.port).replace(/(80|[0-9])80$/, '443'))
-        });
-        sslModal.hide();
-      }, 100);
-    }
-
-    const editor = new JSONEditor(container, options);
-    let socket;
-    const initialJson = ${JSON.stringify(config)}
-    editor.set(initialJson)
-    editor.validate();
-    editor.aceEditor.commands.addCommand({
-      name: 'save',
-      bindKey: {win: 'Ctrl-S',  mac: 'Command-S'},
-      exec: save,
-    });
-
-    window.addEventListener("DOMContentLoaded", function() {
-      document.getElementById('jsoneditor').style.height =
-        (document.documentElement.clientHeight - 150) + 'px';
-      document.getElementById('jsoneditor').style.width =
-        parseInt(window.getComputedStyle(
-          document.querySelector('.container')).maxWidth) + 'px';
-      const sslButton = document.createElement('button');
-      sslButton.addEventListener("click", generateSslCertificate);
-      sslButton.type="button";
-      sslButton.classList.add("btn");
-      sslButton.classList.add("btn-primary");
-      sslButton.innerHTML="&#x1F512;";
-      document.querySelector('.jsoneditor-menu')
-              .appendChild(sslButton);
-      const saveButton = document.createElement('button');
-      saveButton.addEventListener("click", save);
-      saveButton.type="button";
-      saveButton.classList.add("btn");
-      saveButton.classList.add("btn-primary");
-      saveButton.innerHTML="&#x1F4BE;";
-      document.querySelector('.jsoneditor-menu')
-              .appendChild(saveButton);
-      socket = new WebSocket("ws${
-        config.ssl ? "s" : ""
-      }://${proxyHostnameAndPort}/local-traffic-config");
-      socket.onmessage = function(event) {
-        editor.set(JSON.parse(event.data))
-        editor.validate()
-      }
-    });
-    </script>
-  </body></html>`);
-
-const errorPage = (
-  thrown: Error,
-  phase: string,
-  requestedURL: URL,
-  downstreamURL?: URL,
-) => `${header(0x1f4a3, "error", thrown.message)}
-<p>An error happened while trying to proxy a remote exchange</p>
-<div class="alert alert-warning" role="alert">
-  &#x24D8;&nbsp;This is not an error from the downstream service.
-</div>
-<div class="alert alert-danger" role="alert">
-<pre><code>${thrown.stack || `<i>${thrown.name} : ${thrown.message}</i>`}${
-  (thrown as ErrorWithErrno).errno
-    ? `<br/>(code : ${(thrown as ErrorWithErrno).errno})`
-    : ""
-}</code></pre>
-</div>
-More information about the request :
-<table class="table">
-  <tbody>
-    <tr>
-      <td>phase</td>
-      <td>${phase}</td>
-    </tr>
-    <tr>
-      <td>requested URL</td>
-      <td>${requestedURL}</td>
-    </tr>
-    <tr>
-      <td>downstream URL</td>
-      <td>${downstreamURL || "&lt;no-target-url&gt;"}</td>
-    </tr>
-  </tbody>
-</table>
-</div></body></html>`;
 
 const replaceBody = async (
   payloadBuffer: Buffer,
@@ -1061,7 +1452,7 @@ const replaceBody = async (
     .then((uncompressedBuffer: Buffer) => {
       const fileTooBig = uncompressedBuffer.length > 1e7;
       const fileHasSpecialChars = () =>
-        /[^\x00-\x7F]/.test(uncompressedBuffer.toString());
+        /[^\x00-\xFF]/.test(uncompressedBuffer.toString());
       const contentTypeCanBeProcessed = [
         "text/html",
         "application/javascript",
@@ -1143,15 +1534,17 @@ const replaceTextUsingMapping = (
       typeof value === "string" ? value : value.replaceBody,
     ])
     .reduce((inProgress, [path, value]) => {
-      return value.startsWith("logs:") ||
-        value.startsWith("config:") ||
+      return specialProtocols.some(protocol => value.startsWith(protocol)) ||
         (path !== "" && !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
         ? inProgress
         : direction === REPLACEMENT_DIRECTION.INBOUND
         ? inProgress.replace(
             new RegExp(
               value
-                .replace(/^(file|logs):\/\//, "")
+                .replace(
+                  new RegExp(`^(file|${specialPages.join("|")}):\/\/`),
+                  "",
+                )
                 .replace(/[*+?^${}()|[\]\\]/g, "")
                 .replace(/^https/, "https?") + "/*",
               "ig",
@@ -1172,6 +1565,51 @@ const replaceTextUsingMapping = (
     }, text)
     .split(`${proxyHostnameAndPort}/:`)
     .join(`${proxyHostnameAndPort}:`);
+
+const cleanEntropy = (uniqueHash: string) => {
+  try {
+    const request = JSON.parse(
+      Buffer.from(uniqueHash, "base64").toString("utf-8"),
+    );
+    [
+      "authorization",
+      "cache-control",
+      "date",
+      "proxy-authenticate",
+      "proxy-authorization",
+      "expires",
+      "last-modified",
+      "if-modified-since",
+      "if-unmodified-since",
+      "keep-alive",
+      "cookie",
+      "access-control-max-age",
+      "retry-after",
+      "signed-headers",
+      "server-timing",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile",
+      "sec-ch-ua-platform",
+      "user-agent",
+      // no user agent comparison
+      "sec-fetch-site",
+      // disable check on same-origin domain
+      "referer",
+      // referer is more of a nuisance than a true discriminant
+    ].forEach(header => {
+      delete request?.headers?.[header];
+    });
+    request.headers = Object.keys(request.headers)
+      .sort()
+      .reduce((obj, key) => {
+        obj[key] = request.headers[key];
+        return obj;
+      }, {});
+    return Buffer.from(JSON.stringify(request), "utf-8").toString("base64");
+  } catch (e) {
+    return uniqueHash;
+  }
+};
 
 const send = (
   code: number,
@@ -1250,6 +1688,10 @@ const websocketServe = function (
   request: IncomingMessage,
   upstreamSocket: Duplex,
 ): Partial<State> {
+  upstreamSocket.on("error", () => {
+    state.log(`websocket connection reset`, LogLevel.WARNING, EMOJIS.WEBSOCKET);
+  });
+
   if (!state.config.websocket) {
     upstreamSocket.end(`HTTP/1.1 503 Service Unavailable\r\n\r\n`);
     return {};
@@ -1259,15 +1701,19 @@ const websocketServe = function (
     key,
     target: targetWithForcedPrefix,
     path,
+    url,
   } = determineMapping(request, state.config);
 
-  if (path === "/local-traffic-logs") {
+  if (path.startsWith("/local-traffic-logs")) {
     acknowledgeWebsocket(upstreamSocket, request.headers["sec-websocket-key"]);
     return {
       logsListeners: state.logsListeners.concat({
         stream: upstreamSocket,
         wantsMask: !(request.headers["user-agent"]?.toString() ?? "").includes(
           "Chrome",
+        ),
+        wantsResponseMessage: [...url.searchParams.entries()].some(
+          ([key, value]) => key === "wantsResponseMessage" && value === "true",
         ),
       }),
     };
@@ -1402,6 +1848,7 @@ const serve = async function (
       Buffer.from(
         errorPage(
           new Error(`client must supply a 'host' header`),
+          state.mode,
           "proxy",
           new URL(
             `http${state.config.ssl ? "s" : ""}://unknowndomain${
@@ -1423,6 +1870,7 @@ const serve = async function (
       Buffer.from(
         errorPage(
           new Error(`No mapping found in config file ${filename}`),
+          state.mode,
           "proxy",
           url,
         ),
@@ -1439,69 +1887,54 @@ const serve = async function (
   )}`.replace(/^\/*/, "/");
   const targetUrl = new URL(`${target.protocol}//${targetHost}${fullPath}`);
 
-  let http2IsSupported = !state.config.dontUseHttp2Downstream;
-  const randomId = randomBytes(20).toString("hex");
-  state.notifyLogsListeners({
-    level: "info",
-    protocol: http2IsSupported ? "HTTP/2" : "HTTP1.1",
-    method: inboundRequest.method,
-    upstreamPath: path,
-    downstreamPath: targetUrl.href,
-    randomId,
-    uniqueHash: "N/A",
-  });
-
-  // phase: connection
-  const startTime = instantTime();
+  const targetUsesSpecialProtocol = specialProtocols.some(
+    protocol => target.protocol === protocol,
+  );
   let error: Buffer = null;
-  const outboundRequest: ClientHttp2Session =
-    target.protocol === "file:"
-      ? fileRequest(targetUrl)
-      : target.protocol === "logs:"
-      ? logsPage(proxyHostnameAndPort, !!state.config.ssl)
-      : target.protocol === "config:"
-      ? configPage(proxyHostnameAndPort, state.config)
-      : !http2IsSupported
-      ? null
-      : await Promise.race([
-          new Promise<ClientHttp2Session>(resolve => {
-            const result = connect(
-              targetUrl,
-              {
-                timeout: 3000,
-                sessionTimeout: 3000,
-                rejectUnauthorized: false,
-                protocol: target.protocol,
-              } as SecureClientSessionOptions,
-              (_, socketPath) => {
-                http2IsSupported =
-                  http2IsSupported && !!(socketPath as any).alpnProtocol;
-                resolve(!http2IsSupported ? null : result);
-              },
+  let http2IsSupported = !state.config.dontUseHttp2Downstream;
+  const http2Connection =
+    http2IsSupported &&
+    !targetUsesSpecialProtocol &&
+    target.protocol !== "file:" &&
+    (await Promise.race([
+      new Promise<ClientHttp2Session>(resolve => {
+        const result = connect(
+          targetUrl,
+          {
+            timeout: state.config.connectTimeout,
+            sessionTimeout: state.config.socketTimeout,
+            rejectUnauthorized: false,
+            protocol: target.protocol,
+          } as SecureClientSessionOptions,
+          (_, socketPath) => {
+            http2IsSupported =
+              http2IsSupported && !!(socketPath as any).alpnProtocol;
+            resolve(!http2IsSupported ? null : result);
+          },
+        );
+        (result as unknown as Http2Session).on("error", (thrown: Error) => {
+          error =
+            http2IsSupported &&
+            Buffer.from(
+              errorPage(thrown, state.mode, "connection", url, targetUrl),
             );
-            (result as unknown as Http2Session).on("error", (thrown: Error) => {
-              error =
-                http2IsSupported &&
-                Buffer.from(errorPage(thrown, "connection", url, targetUrl));
-            });
-          }),
-          new Promise<ClientHttp2Session>(resolve =>
-            setTimeout(() => {
-              http2IsSupported = false;
-              resolve(null);
-            }, 3000),
-          ),
-        ]);
-  if (!(error instanceof Buffer)) error = null;
-
+        });
+      }),
+      new Promise<ClientHttp2Session>(resolve =>
+        setTimeout(() => {
+          http2IsSupported = false;
+          resolve(null);
+        }, state.config.connectTimeout),
+      ),
+    ]));
+  const randomId = randomBytes(20).toString("hex");
+  let requestBody: Buffer | null = null;
+  const bufferedRequestBody =
+    state.config.replaceRequestBodyUrls || state.logsListeners.length;
   const http1WithRequestBody = (inboundRequest as IncomingMessage)
     ?.readableLength;
   const http2WithRequestBody = (inboundRequest as Http2ServerRequest)?.stream
     ?.readableLength;
-
-  let requestBody: Buffer | null = null;
-  const bufferedRequestBody =
-    state.config.replaceRequestBodyUrls || state.logsListeners.length;
   const requestBodyExpected = !(
     ((state.config.ssl && http2WithRequestBody === 0) ||
       (!state.config.ssl && http1WithRequestBody === 0)) &&
@@ -1518,7 +1951,7 @@ const serve = async function (
 
     let requestBodyBuffer: Buffer = Buffer.from([]);
     await Promise.race([
-      new Promise(resolve => setTimeout(resolve, 10000)),
+      new Promise(resolve => setTimeout(resolve, state.config.connectTimeout)),
       new Promise(resolve => {
         if (!requestBodyExpected) {
           resolve(void 0);
@@ -1549,6 +1982,74 @@ const serve = async function (
           direction: REPLACEMENT_DIRECTION.OUTBOUND,
         });
   }
+  const uniqueHash = Buffer.from(
+    JSON.stringify({
+      method: inboundRequest.method,
+      url: inboundRequest.url,
+      headers: Object.assign(
+        {},
+        ...Object.entries(inboundRequest.headers)
+          .filter(([headerName]) => !headerName.startsWith(":"))
+          .map(([key, value]) => ({ [key]: value })),
+      ),
+      body: requestBody?.toJSON(),
+    }),
+  ).toString("base64");
+  const targetIsFile = target.protocol === "file:";
+
+  state.notifyLogsListeners({
+    level: "info",
+    protocol: http2IsSupported ? "HTTP/2" : "HTTP1.1",
+    method: inboundRequest.method,
+    upstreamPath: path,
+    downstreamPath: targetUrl.href,
+    randomId,
+    uniqueHash,
+  });
+
+  const cleanedUniqueHash =
+    state.mode === ServerMode.MOCK ? cleanEntropy(uniqueHash) : "";
+
+  const shouldMock =
+    state.mode === ServerMode.MOCK &&
+    (!targetUsesSpecialProtocol || targetIsFile);
+
+  const foundMock = state.mocks.get(cleanedUniqueHash);
+
+  if (shouldMock && !foundMock && state.strictMock) {
+    send(
+      502,
+      inboundResponse,
+      Buffer.from(
+        errorPage(
+          new Error(`No corresponding mock found in the server. 
+          Try switching back to the proxy mode`),
+          state.mode,
+          "mock",
+          url,
+        ),
+      ),
+    );
+    return;
+  }
+
+  // phase: connection
+  const startTime = instantTime();
+  const outboundRequest: ClientHttp2Session =
+    shouldMock && foundMock
+      ? mockRequest({ response: foundMock })
+      : targetIsFile
+      ? fileRequest(targetUrl)
+      : targetUsesSpecialProtocol
+      ? specialPageMapping[target.protocol.replace(/:$/, "")](
+          proxyHostnameAndPort,
+          state,
+          inboundRequest,
+        )
+      : http2IsSupported
+      ? http2Connection
+      : null;
+  if (!(error instanceof Buffer)) error = null;
 
   const outboundHeaders: OutgoingHttpHeaders = {
     ...[...Object.entries(inboundRequest.headers)]
@@ -1582,21 +2083,23 @@ const serve = async function (
         : !http1WithRequestBody,
     });
 
-  outboundExchange?.on("error", (thrown: Error) => {
-    const httpVersionSupported = (thrown as ErrorWithErrno).errno === -505;
-    error = Buffer.from(
-      errorPage(
-        thrown,
-        "stream" +
-          (httpVersionSupported
-            ? " (error -505 usually means that the downstream service " +
-              "does not support this http version)"
-            : ""),
-        url,
-        targetUrl,
-      ),
-    );
-  });
+  typeof outboundExchange === "object" &&
+    outboundExchange?.on("error", (thrown: Error) => {
+      const httpVersionSupported = (thrown as ErrorWithErrno).errno === -505;
+      error = Buffer.from(
+        errorPage(
+          thrown,
+          state.mode,
+          "stream" +
+            (httpVersionSupported
+              ? " (error -505 usually means that the downstream service " +
+                "does not support this http version)"
+              : ""),
+          url,
+          targetUrl,
+        ),
+      );
+    });
 
   const http1RequestOptions: RequestOptions = {
     hostname: target.hostname,
@@ -1621,7 +2124,7 @@ const serve = async function (
   const outboundHttp1Response: IncomingMessage =
     !error &&
     !http2IsSupported &&
-    !["file:", "logs:", "config:"].includes(target.protocol) &&
+    !["file:", ...specialProtocols].includes(target.protocol) &&
     (await new Promise(resolve => {
       const outboundHttp1Request: ClientRequest =
         target.protocol === "https:"
@@ -1629,7 +2132,9 @@ const serve = async function (
           : httpRequest(http1RequestOptions, resolve);
 
       outboundHttp1Request.on("error", thrown => {
-        error = Buffer.from(errorPage(thrown, "request", url, targetUrl));
+        error = Buffer.from(
+          errorPage(thrown, state.mode, "request", url, targetUrl),
+        );
         resolve(null as IncomingMessage);
       });
       if (bufferedRequestBody) {
@@ -1717,7 +2222,10 @@ const serve = async function (
             proxyHostnameAndPort,
             ssl: !!state.config.ssl,
             mapping: state.config.mapping,
-          }).replace(/^(config:|logs:|file:)\/+/, ""),
+          }).replace(
+            new RegExp(`^(${specialProtocols.join("|")}|file:)\/+`),
+            "",
+          ),
         );
   const translatedReplacedRedirectUrl = !redirectUrl
     ? redirectUrl
@@ -1754,7 +2262,8 @@ const serve = async function (
     }).then((payloadBuffer: Buffer) => {
       if (!state.config.replaceResponseBodyUrls) return payloadBuffer;
       if (!payloadBuffer.length) return payloadBuffer;
-      if (target.protocol === "config:") return payloadBuffer;
+      if (specialProtocols.some(protocol => target.protocol === protocol))
+        return payloadBuffer;
 
       return replaceBody(payloadBuffer, outboundResponseHeaders, {
         proxyHostnameAndPort,
@@ -1768,7 +2277,7 @@ const serve = async function (
         send(
           502,
           inboundResponse,
-          Buffer.from(errorPage(e, "stream", url, targetUrl)),
+          Buffer.from(errorPage(e, state.mode, "stream", url, targetUrl)),
         );
         return Buffer.from("");
       });
@@ -1839,13 +2348,15 @@ const serve = async function (
     outboundResponseHeaders[":status"] ||
     outboundHttp1Response.statusCode ||
     200;
-  inboundResponse.writeHead(
-    statusCode,
-    state.config.ssl
-      ? undefined // statusMessage is discarded in http/2
-      : outboundHttp1Response.statusMessage || "Status read from http/2",
-    responseHeaders,
-  );
+  try {
+    inboundResponse.writeHead(
+      statusCode,
+      state.config.ssl
+        ? undefined // statusMessage is discarded in http/2
+        : outboundHttp1Response.statusMessage || "Status read from http/2",
+      responseHeaders,
+    );
+  } catch (e) {}
   if (payload) inboundResponse.end(payload);
   else inboundResponse.end();
   const endTime = instantTime();
@@ -1855,19 +2366,17 @@ const serve = async function (
     statusCode,
     protocol: http2IsSupported ? "HTTP/2" : "HTTP1.1",
     duration: Math.floor(Number(endTime - startTime) / 1000000),
-    uniqueHash: Buffer.from(
-      JSON.stringify({
-        method: inboundRequest.method,
-        url: inboundRequest.url,
-        headers: Object.assign(
-          {},
-          ...Object.entries(inboundRequest.headers)
-            .filter(([headerName]) => !headerName.startsWith(":"))
-            .map(([key, value]) => ({ [key]: value })),
-        ),
-        body: requestBody?.toJSON(),
-      }),
-    ).toString("base64"),
+    uniqueHash,
+    response: state.logsListeners.some(
+      listener => listener.wantsResponseMessage,
+    ) // let's make sure it is worth doing .toString("base64")
+      ? // ... it might be very expensive
+        {
+          body: payload.toString("base64"),
+          headers: outboundResponseHeaders,
+          status: statusCode,
+        }
+      : {},
   });
 };
 
@@ -1949,6 +2458,10 @@ const update = async (
     .forEach(l => l.stream.destroy());
 
   const config = newState.config ?? currentState.config;
+  const mode = newState.mode ?? currentState.mode ?? ServerMode.PROXY;
+  const strictMock = newState.strictMock ?? currentState.strictMock ?? false;
+  const mocks =
+    newState.mocks ?? currentState.mocks ?? new Map<string, string>();
   const configListeners = (
     newState.configListeners === null
       ? []
@@ -1965,6 +2478,9 @@ const update = async (
     config,
     logsListeners,
     configListeners,
+    mode,
+    mocks,
+    strictMock,
     configFileWatcher:
       state.configFileWatcher === undefined
         ? watchFile(filename, async () => update(state, await onWatch(state)))
@@ -2003,15 +2519,18 @@ const update = async (
 };
 
 const mainProgram =
-  argv.map(arg => arg.trim()).filter(
-    arg => arg &&
-      !["ts-node", "node", "npx", "npm", "exec"].some(
-        pattern =>
-          arg.includes(pattern) &&
-          !arg.match(/npm-cache/) &&
-          !arg.match(/_npx/),
-      ),
-  )[0] ?? "";
+  argv
+    .map(arg => arg.trim())
+    .filter(
+      arg =>
+        arg &&
+        !["ts-node", "node", "npx", "npm", "exec"].some(
+          pattern =>
+            arg.includes(pattern) &&
+            !arg.match(/npm-cache/) &&
+            !arg.match(/_npx/),
+        ),
+    )[0] ?? "";
 
 const runAsMainProgram =
   mainProgram.toLowerCase().replace(/[-_]/g, "").includes("localtraffic") &&
@@ -2091,6 +2610,7 @@ export {
   acknowledgeWebsocket,
   replaceBody,
   replaceTextUsingMapping,
+  cleanEntropy,
   send,
   determineMapping,
   serve,
