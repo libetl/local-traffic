@@ -931,7 +931,7 @@ function loadMocks(mocksHashes) {
 document.getElementById('add-mock').addEventListener('click', () => {
   const iframe = document.createElement('iframe');
   iframe.style.display = 'none';
-  iframe.onload = function() { i.parentNode.removeChild(i); };
+  iframe.onload = function() { iframe.parentNode.removeChild(i); };
   iframe.src = "http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
     Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
       value?.toString()?.startsWith("recorder:"),
