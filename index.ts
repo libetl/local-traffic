@@ -740,6 +740,11 @@ const recorderPage = (
   state: State,
   request: Http2ServerRequest | IncomingMessage,
 ) => {
+  if (request.url?.endsWith("?forceLogInRecorderPage=true")) {
+    return staticResponse(`{"ping":"pong"}`, {
+      contentType: "application/json; charset=utf-8",
+    });
+  }
   if (["PUT", "POST", "DELETE"].includes(request.method)) {
     return staticResponse(`{"status": "acknowledged"}`, {
       contentType: "application/json; charset=utf-8",
@@ -931,7 +936,7 @@ function loadMocks(mocksHashes) {
 document.getElementById('add-mock').addEventListener('click', () => {
   const iframe = document.createElement('iframe');
   iframe.style.display = 'none';
-  iframe.onload = function() { iframe.parentNode.removeChild(i); };
+  iframe.onload = function() { iframe.parentNode.removeChild(iframe); };
   iframe.src = "http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
     Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
       value?.toString()?.startsWith("recorder:"),
