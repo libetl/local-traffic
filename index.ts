@@ -929,16 +929,15 @@ function loadMocks(mocksHashes) {
   });
 }
 document.getElementById('add-mock').addEventListener('click', () => {
-  fetch("http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
+  const iframe = document.createElement('iframe');
+  iframe.style.display = 'none';
+  iframe.onload = function() { i.parentNode.removeChild(i); };
+  iframe.src = "http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
     Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
       value?.toString()?.startsWith("recorder:"),
     )?.[0] ?? "/recorder/"
-  }?forceLogInRecorderPage=true", {
-     method: 'GET',
-     headers: { 
-       accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-     }
-   })
+  }?forceLogInRecorderPage=true";
+  document.body.appendChild(iframe);
 });
 document.getElementById('upload-mocks').addEventListener('click', () => {
   const time = new Date().toISOString().split('T')[1].replace('Z', '');
