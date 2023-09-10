@@ -889,7 +889,7 @@ const recorderPage = (
 </div>
 <script>
 const xmlOrJsonPrologsInBase64 = [
-  "eyJ","PD94bWw=","PCFET0NUWVBF","PCFkb2N0eXBl","PGh0bWw","PEhUTUw","H4sIAAAAAAAAA", "W3tc"
+  "eyJ","PD94bWw=","PCFET0NUWVBF","PCFkb2N0eXBl","PGh0bWw","PEhUTUw","H4sIAAAAAAAA", "W3tc"
 ];
 function getMocksData () {
   return JSON.stringify(
@@ -1009,14 +1009,14 @@ function saveRequest () {
   const responseProlog = requestBeingEdited.attributes['data-responseProlog']?.value;
   const requestPrologHasChanged = request.body.substring(0, 10) !== oldRequest.body.substring(0, 10);
   const responsePrologHasChanged = response.body.substring(0, 10) !== response.body.substring(0, 10);
-  if (requestProlog === "H4sIAAAAAAAAA" && !requestPrologHasChanged) {
+  if (requestProlog === "H4sIAAAAAAAA" && !requestPrologHasChanged) {
     request.body =
       btoa([...pako.gzip(request.body)].map(e => String.fromCharCode(e)).join(""));
   } else if ((requestProlog === null || !request.body.startsWith(requestProlog ?? "")) && 
       request.body.substring(0, 10) !== oldRequest.body.substring(0, 10)) {
     request.body = btoa(request.body);
   }
-  if (responseProlog === "H4sIAAAAAAAAA" && !responsePrologHasChanged) {
+  if (responseProlog === "H4sIAAAAAAAA" && !responsePrologHasChanged) {
     response.body =
       btoa([...pako.gzip(response.body)].map(e => String.fromCharCode(e)).join(""));
   } else if ((responseProlog === null || !response.body.startsWith(responseProlog ?? "")) && 
@@ -1040,7 +1040,7 @@ document.getElementById('edit-request').addEventListener('show.bs.modal', event 
   const responseProlog = xmlOrJsonPrologsInBase64.find(prolog => response.body?.startsWith(prolog));
   if (requestProlog) {
     event.relatedTarget.setAttribute('data-requestProlog', requestProlog);
-    request.body = request.body.startsWith("H4sIAAAAAAAAA") 
+    request.body = request.body.startsWith("H4sIAAAAAAAA") 
     ? pako.ungzip(new Uint8Array(atob(request.body).split("").map(e => e.charCodeAt(0))), {to: "string"})
     : atob(request.body);
     request.body = request.body.startsWith("{\\"") || request.body.startsWith("[{\\"")
@@ -1048,7 +1048,7 @@ document.getElementById('edit-request').addEventListener('show.bs.modal', event 
   }
   if (responseProlog) {
     event.relatedTarget.setAttribute('data-responseProlog', responseProlog);
-    response.body = response.body.startsWith("H4sIAAAAAAAAA") 
+    response.body = response.body.startsWith("H4sIAAAAAAAA") 
     ? pako.ungzip(new Uint8Array(atob(response.body).split("").map(e => e.charCodeAt(0))), {to: "string"})
     : atob(response.body);
     response.body = response.body.startsWith("{\\"") || response.body.startsWith("[{\\"")

@@ -1,6 +1,6 @@
 {
   "name": "local-traffic",
-  "version": "0.0.83",
+  "version": "0.0.84",
   "main": "./dist/local-traffic.js",
   "private": false,
   "keywords": [
@@ -19,7 +19,7 @@
     "typescript": "tsc",
     "shebang": "echo '#!/usr/bin/env node' | cat - ./dist/minified.js > ./dist/local-traffic.js",
     "terser": "terser ./dist/index.js -c -m --toplevel > ./dist/terser.js",
-    "remove-useless-whitespaces": "cat ./dist/terser.js | sed -r -s 's/\\\\n\\s*/\\\\n/g' > ./dist/minified.js",
+    "remove-useless-whitespaces": "cat ./dist/terser.js | sed -r 's/\\\\n\\s*/\\\\n/g' > ./dist/minified.js",
     "chmod": "chmod a+x ./dist/local-traffic.js",
     "clean": "rm -rf dist",
     "build": "npm run clean && npm run typescript && npm run terser && npm run remove-useless-whitespaces && npm run shebang && npm run chmod",
@@ -27,7 +27,7 @@
     "test": "node ./test/tests.spec.mjs"
   },
   "devDependencies": {
-    "@types/node": "^20.5.9",
+    "@types/node": "^20.6.0",
     "terser": "^5.19.4",
     "typescript": "^5.2.2"
   },
