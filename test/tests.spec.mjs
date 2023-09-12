@@ -94,6 +94,7 @@ describe("config load", async () => {
       dontUseHttp2Downstream: false,
       dontTranslateLocationHeader: false,
       simpleLogs: false,
+      logAccessInTerminal: false,
       websocket: true,
       disableWebSecurity: false,
     });
@@ -121,6 +122,7 @@ describe("config load", async () => {
       dontUseHttp2Downstream: false,
       dontTranslateLocationHeader: false,
       simpleLogs: false,
+      logAccessInTerminal: false,
       websocket: true,
       disableWebSecurity: false,
     });
@@ -145,6 +147,7 @@ describe("config load", async () => {
       dontUseHttp2Downstream: false,
       dontTranslateLocationHeader: false,
       simpleLogs: false,
+      logAccessInTerminal: false,
       websocket: true,
       disableWebSecurity: false,
     });
@@ -176,6 +179,7 @@ describe("config load", async () => {
       dontUseHttp2Downstream: false,
       dontTranslateLocationHeader: false,
       simpleLogs: false,
+      logAccessInTerminal: false,
       websocket: true,
       disableWebSecurity: false,
     });
@@ -200,6 +204,7 @@ describe("config load", async () => {
         dontUseHttp2Downstream: true,
         dontTranslateLocationHeader: true,
         simpleLogs: true,
+        logAccessInTerminal: true,
         websocket: false,
         disableWebSecurity: true,
       }),
@@ -225,6 +230,7 @@ describe("config load", async () => {
       dontUseHttp2Downstream: true,
       dontTranslateLocationHeader: true,
       simpleLogs: true,
+      logAccessInTerminal: true,
       websocket: false,
       disableWebSecurity: true,
     });
