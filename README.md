@@ -5,7 +5,7 @@ That is a secure http/2 (or insecure http1.1) reverse-proxy installed on your ma
 - with 0 transitive dependency
 - with 1 install step
 - with a startup time of a few milliseconds
-- with one 46kb index.js file
+- with one 53kb index.js file
 
 How simple is that ?
 
@@ -90,6 +90,7 @@ All boolean settings default to false when unspecified.
 - `dontTranslateLocationHeader`: (`boolean`) when getting a response location header, in case `replaceResponseBodyUrls` does not change the URL, change the origin to the proxy anyway
 - `dontUseHttp2Downstream`: (`boolean`) force calling downstream services in http1.1 only (to save some time)
 - `simpleLogs`: (`boolean`) disable colored logs for text terminals
+- `logAccessInTerminal`: (`boolean`) write an access log in the terminal on each call (defaults to false)
 - `websocket`: (`boolean`) true to activate websocket connections proxying via sockets. Required for logs UI.
 - `disableWebSecurity`: (`boolean`) true for easygoing values in cross origin requests or content security policy headers
 - `connectTimeout`: (`number`) max time before aborting the connection (defaults to 3000ms)

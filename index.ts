@@ -59,6 +59,7 @@ enum EMOJIS {
   RULES = "🔗",
   MOCKS = "🌐",
   REWRITE = "✒️ ",
+  LOGS = "📝",
   RESTART = "🔄",
   WEBSOCKET = "☄️ ",
   COLORED = "✨",
@@ -100,6 +101,7 @@ interface LocalConfiguration {
   replaceResponseBodyUrls?: boolean;
   dontUseHttp2Downstream?: boolean;
   dontTranslateLocationHeader?: boolean;
+  logAccessInTerminal?: boolean;
   simpleLogs?: boolean;
   websocket?: boolean;
   disableWebSecurity?: boolean;
@@ -1123,6 +1125,7 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   replaceResponseBodyUrls: false,
   dontUseHttp2Downstream: false,
   dontTranslateLocationHeader: false,
+  logAccessInTerminal: false,
   simpleLogs: false,
   websocket: true,
   disableWebSecurity: false,
@@ -1262,6 +1265,13 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
       `websocket ${!config.websocket ? "de" : ""}activated`,
       LogLevel.INFO,
       EMOJIS.WEBSOCKET,
+    );
+  }
+  if (config.logAccessInTerminal !== previousConfig.logAccessInTerminal) {
+    state.log(
+      `access terminal logging ${!config.logAccessInTerminal ? "off" : "on"}`,
+      LogLevel.INFO,
+      EMOJIS.LOGS,
     );
   }
   if (config.simpleLogs !== previousConfig.simpleLogs) {
@@ -2173,6 +2183,41 @@ const serve = async function (
     randomId,
     uniqueHash,
   });
+  if (
+    state.config.logAccessInTerminal &&
+    !targetUrl.pathname.startsWith("/:/")
+  ) {
+    state.log(
+      state.config.simpleLogs
+        ? `${inboundRequest.method} ${targetUrl.pathname}`
+        : `\u001b[48;5;${
+            inboundRequest.method === "GET"
+              ? "22"
+              : inboundRequest.method === "POST"
+              ? "52"
+              : inboundRequest.method === "PUT"
+              ? "94"
+              : inboundRequest.method === "DELETE"
+              ? "244"
+              : inboundRequest.method === "OPTIONS"
+              ? "19"
+              : inboundRequest.method === "PATCH"
+              ? "162"
+              : inboundRequest.method === "HEAD"
+              ? "53"
+              : inboundRequest.method === "TRACE"
+              ? "6"
+              : inboundRequest.method === "CONNECT"
+              ? "2"
+              : "0"
+          }m⎸${inboundRequest.method
+            .toString()
+            .padStart(7)} \u001b[48;5;8m⎸${targetUrl.pathname
+            .toString()
+            .padStart(40)
+            .substring(0, 40)}⎹\u001b[0m`,
+    );
+  }
 
   const cleanedUniqueHash =
     state.mode === ServerMode.MOCK ? cleanEntropy(uniqueHash) : "";
