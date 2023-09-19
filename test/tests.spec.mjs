@@ -54,6 +54,7 @@ const {
   load,
   errorListener,
   quickStatus,
+  recorderHandler,
   websocketServe,
   createWebsocketBufferFrom,
   readWebsocketBuffer,
@@ -686,5 +687,39 @@ describe('Websocket feature', () => {
     buffer.copy(hexPayloadLengthBuffer, 0, 0, 10);
     const hexPayloadLength = hexPayloadLengthBuffer.toString("hex");
     assert.equal(hexPayloadLength, "81ff000000000001e18e")
+  })
+});
+
+describe('Recorder switches logic', () => {
+  it("should disable auto-record when switching back to proxy mode", () => {
+    const state = {
+      config: {
+        port: 1337,
+        mapping: {}
+      },
+      mockConfig: {
+        autoRecord: true
+      },
+      log: () => { },
+    }
+    recorderHandler(state, Buffer.from('{"mode":"proxy"}'), false);
+    assert.equal(state.mode, "proxy");
+    assert.equal(state.mockConfig.autoRecord, false);
+  })
+
+  it("should allow to keep auto-record when switching back to proxy mode", () => {
+    const state = {
+      config: {
+        port: 1337,
+        mapping: {}
+      },
+      mockConfig: {
+        autoRecord: true
+      },
+      log: () => { },
+    }
+    recorderHandler(state, Buffer.from('{"autoRecord":true,"mode":"proxy"}'), false);
+    assert.equal(state.mode, "proxy");
+    assert.equal(state.mockConfig.autoRecord, true);
   })
 });

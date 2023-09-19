@@ -58,6 +58,8 @@ enum EMOJIS {
   OUTBOUND = "↗️ ",
   RULES = "🔗",
   MOCKS = "🌐",
+  STRICT_MOCKS = "🕸️\b ",
+  AUTO_RECORD = "📼",
   REWRITE = "✒️ ",
   LOGS = "📝",
   RESTART = "🔄",
@@ -125,6 +127,12 @@ enum ServerMode {
   MOCK = "mock",
 }
 
+interface MockConfig {
+  mocks: Mocks;
+  strict: boolean;
+  autoRecord: boolean;
+}
+
 interface State {
   config: LocalConfiguration;
   server: Server;
@@ -132,8 +140,7 @@ interface State {
   configListeners: WebsocketLogsListener[];
   configFileWatcher: StatWatcher;
   mode: ServerMode;
-  mocks: Mocks;
-  strictMock: boolean;
+  mockConfig: MockConfig;
   log: (text: string, level?: LogLevel, emoji?: string) => void;
   notifyConfigListeners: (data: Record<string, unknown>) => void;
   notifyLogsListeners: (data: Record<string, unknown>) => void;
@@ -364,11 +371,17 @@ const quickStatus = function (this: State) {
     } ${this.config.ssl ? "H/2 " : "H1.1"}${
       this.config.replaceResponseBodyUrls ? EMOJIS.REWRITE : "  "
     }⎹\u001b[48;5;54m\u001b[48;5;55m⎸${
-      this.mode === ServerMode.PROXY
+      this.mode === ServerMode.PROXY && this.mockConfig.autoRecord
+        ? `${EMOJIS.AUTO_RECORD}${this.mockConfig.mocks.size
+            .toString()
+            .padStart(3)}`
+        : this.mode === ServerMode.PROXY
         ? `${EMOJIS.RULES}${Object.keys(this.config.mapping)
             .length.toString()
             .padStart(3)}`
-        : `${EMOJIS.MOCKS}${this.mocks.size.toString().padStart(3)}`
+        : `${
+            this.mockConfig.strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS
+          }${this.mockConfig.mocks.size.toString().padStart(3)}`
     }⎹\u001b[48;5;56m⎸${
       this.config.websocket ? EMOJIS.WEBSOCKET : EMOJIS.NO
     }⎹\u001b[48;5;57m⎸${
@@ -551,7 +564,7 @@ const logsView = (
     }
     function getActionsHtmlText(uniqueHash, response) {
       const edit = ${options.captureResponseBody === true} && uniqueHash
-      ? '<button data-response="' + btoa(JSON.stringify(response ?? {})) +
+      ? '<button data-response="' + (response ?? "") +
       '" data-uniquehash="' + uniqueHash + 
       '" data-bs-toggle="modal" data-bs-target="#edit-request" type="button" ' +
         'class="btn btn-primary">&#x1F4DD;</button>'
@@ -737,6 +750,122 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
     </script>
   </body></html>`);
 
+const recorderHandler = (
+  state: State,
+  buffer: Buffer,
+  requestMethodIsDelete: boolean,
+) => {
+  let mocksUpdate: Partial<
+    Omit<MockConfig, "mocks"> & {
+      mocks: { uniqueHash: string; response: string }[];
+      mode: ServerMode;
+    }
+  > = {};
+  try {
+    mocksUpdate = JSON.parse(buffer.toString("ascii"));
+  } catch (e) {}
+  if (
+    typeof mocksUpdate !== "object" ||
+    Object.keys(mocksUpdate).filter(
+      key => !["strict", "mode", "mocks", "autoRecord"].includes(key),
+    ).length ||
+    (!Array.isArray(mocksUpdate.mocks) && mocksUpdate.mocks !== undefined)
+  ) {
+    state.log(`invalid mocks update received`, LogLevel.WARNING, EMOJIS.MOCKS);
+    return;
+  }
+  const {
+    mocks: mocksArray,
+    mode: newMode,
+    strict: strictMode,
+    autoRecord: autoRecordUpdate,
+  } = mocksUpdate;
+  const mocks: Mocks | null = !mocksArray
+    ? null
+    : new Map<string, string>(
+        mocksArray.map(({ response, uniqueHash }) => [
+          cleanEntropy(uniqueHash),
+          response,
+        ]),
+      );
+  const modeHasBeenChangedToProxy =
+    newMode !== state.mode && newMode === ServerMode.PROXY;
+  const autoRecord =
+    modeHasBeenChangedToProxy && autoRecordUpdate !== true
+      ? false
+      : autoRecordUpdate ?? state.mockConfig.autoRecord;
+  const autoRecordModeHasBeenChanged =
+    autoRecord !== undefined && autoRecord != state.mockConfig.autoRecord;
+  const mocksConfigHasBeenChanged =
+    (newMode !== state.mode && newMode === ServerMode.MOCK) ||
+    (mocks !== null && state.mockConfig.mocks.size !== mocks.size);
+  const strict = strictMode ?? state.mockConfig.strict;
+  const mode = newMode ?? state.mode;
+  const strictModeHasBeenChanged = !!strict !== !!state.mockConfig.strict;
+  const mocksHaveBeenPurged = requestMethodIsDelete;
+  if (modeHasBeenChangedToProxy) {
+    state.log(
+      `${Object.keys(state.config.mapping)
+        .length.toString()
+        .padStart(5)} loaded mapping rules`,
+      LogLevel.INFO,
+      EMOJIS.RULES,
+    );
+  }
+  if (mocksConfigHasBeenChanged) {
+    state.log(
+      `${(mocks ?? state.mockConfig.mocks).size
+        .toString()
+        .padStart(5)} loaded mocks`,
+      LogLevel.INFO,
+      strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS,
+    );
+  }
+  if (strictModeHasBeenChanged) {
+    state.log(
+      `mocks strict mode : ${strict ?? state.mockConfig.strict}`,
+      LogLevel.INFO,
+      strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS,
+    );
+  }
+  if (autoRecordModeHasBeenChanged) {
+    state.log(
+      `mocks auto-record : ${autoRecord}`,
+      LogLevel.INFO,
+      mode === ServerMode.PROXY
+        ? EMOJIS.AUTO_RECORD
+        : strict
+        ? EMOJIS.STRICT_MOCKS
+        : EMOJIS.MOCKS,
+    );
+  }
+  if (mocksHaveBeenPurged)
+    update(state, {
+      mode,
+      mockConfig: {
+        autoRecord: false,
+        strict,
+        mocks: new Map<string, string>(),
+      },
+    });
+  else
+    update(state, {
+      mode,
+      mockConfig: {
+        strict,
+        autoRecord,
+        mocks: mocks ?? state.mockConfig.mocks,
+      },
+    });
+  if (
+    modeHasBeenChangedToProxy ||
+    mocksConfigHasBeenChanged ||
+    strictModeHasBeenChanged ||
+    mocksHaveBeenPurged
+  )
+    state.quickStatus();
+};
+
 const recorderPage = (
   proxyHostnameAndPort: string,
   state: State,
@@ -750,87 +879,8 @@ const recorderPage = (
   if (["PUT", "POST", "DELETE"].includes(request.method)) {
     return staticResponse(`{"status": "acknowledged"}`, {
       contentType: "application/json; charset=utf-8",
-      onOutboundWrite: buffer => {
-        let mocksUpdate: Partial<{
-          mocks: { uniqueHash: string; response: string }[];
-          mode: ServerMode;
-          strictMock: boolean;
-        }> = {};
-        try {
-          mocksUpdate = JSON.parse(buffer.toString("ascii"));
-        } catch (e) {}
-        if (
-          typeof mocksUpdate !== "object" ||
-          Object.keys(mocksUpdate).filter(
-            key => !["strictMock", "mode", "mocks"].includes(key),
-          ).length ||
-          (!Array.isArray(mocksUpdate.mocks) && mocksUpdate.mocks !== undefined)
-        ) {
-          state.log(
-            `invalid mocks update received`,
-            LogLevel.WARNING,
-            EMOJIS.MOCKS,
-          );
-          return;
-        }
-        const { mocks: mocksArray, mode, strictMock } = mocksUpdate;
-        const mocks: Mocks | null = !mocksArray
-          ? null
-          : new Map<string, string>(
-              mocksArray.map(({ response, uniqueHash }) => [
-                cleanEntropy(uniqueHash),
-                response,
-              ]),
-            );
-        const modeHasBeenChangedToProxy =
-          mode !== state.mode && mode === ServerMode.PROXY;
-        const mocksConfigHasBeenChanged =
-          (mode !== state.mode && mode === ServerMode.MOCK) ||
-          (mocks !== null && state.mocks.size !== mocks.size);
-        const strictMockModeHasBeenChanged =
-          !!strictMock !== !!state.strictMock;
-        const mocksHaveBeenPurged = request.method === "DELETE";
-        if (modeHasBeenChangedToProxy) {
-          state.log(
-            `${Object.keys(state.config.mapping)
-              .length.toString()
-              .padStart(5)} loaded mapping rules`,
-            LogLevel.INFO,
-            EMOJIS.RULES,
-          );
-        }
-
-        if (mocksConfigHasBeenChanged) {
-          state.log(
-            `${(mocks ?? state.mocks).size
-              .toString()
-              .padStart(5)} loaded mocks`,
-            LogLevel.INFO,
-            EMOJIS.MOCKS,
-          );
-        }
-        if (strictMockModeHasBeenChanged) {
-          state.log(
-            `mocks strict mode : ${strictMock ?? state.strictMock}`,
-            LogLevel.INFO,
-            EMOJIS.MOCKS,
-          );
-        }
-        if (mocksHaveBeenPurged)
-          update(state, {
-            strictMock,
-            mode,
-            mocks: new Map<string, string>(),
-          });
-        else update(state, { strictMock, mode, mocks: mocks ?? state.mocks });
-        if (
-          modeHasBeenChangedToProxy ||
-          mocksConfigHasBeenChanged ||
-          strictMockModeHasBeenChanged ||
-          mocksHaveBeenPurged
-        )
-          state.quickStatus();
-      },
+      onOutboundWrite: buffer =>
+        recorderHandler(state, buffer, request.method === "DELETE"),
     });
   }
   return staticResponse(`${header(0x23fa, "recorder", "")}
@@ -855,7 +905,7 @@ const recorderPage = (
 <button type="button" class="btn btn-light" id="delete-mocks">&#x1F5D1; Delete mocks</button>
 <div class="form-check form-switch">
   <input class="form-check-input" type="checkbox" id="strict-mock-mode"${
-    state.strictMock ? " checked" : ""
+    state.mockConfig.strict ? " checked" : ""
   }>
   <label class="form-check-label" for="strict-mock-mode">Strict mock mode</label>
 </div>
@@ -908,8 +958,8 @@ function updateState () {
   }", {
      method: 'PUT',
      headers: { 'Content-Type': 'application/json' },
-     body: '{"strictMock":' + document.getElementById('strict-mock-mode').checked +
-           ',"mode":"' + 
+     body: '{"strict":' + document.getElementById('strict-mock-mode').checked +
+           ',"autoRecord":false,"mode":"' + 
            (document.getElementById('mock-mode').checked ? "mock" : "proxy") + '"' +
           ',"mocks":' + getMocksData() + '}'
    })
@@ -1064,7 +1114,7 @@ document.getElementById('edit-request').addEventListener('show.bs.modal', event 
 
 setTimeout(() => {
   loadMocks(${JSON.stringify(
-    [...state.mocks.entries()].map(([uniqueHash, response]) => ({
+    [...state.mockConfig.mocks.entries()].map(([uniqueHash, response]) => ({
       uniqueHash,
       response,
     })),
@@ -1742,26 +1792,29 @@ const cleanEntropy = (
         ? requestObject
         : JSON.parse(Buffer.from(requestObject, "base64").toString("utf-8"));
     [
+      "access-control-max-age",
       "authorization",
       "cache-control",
+      "cookie",
       "date",
-      "proxy-authenticate",
-      "proxy-authorization",
+      "dnt",
       "expires",
-      "last-modified",
       "if-modified-since",
       "if-unmodified-since",
       "keep-alive",
-      "cookie",
-      "access-control-max-age",
+      "last-modified",
+      // cache header not helpful here
+      "pragma",
+      "proxy-authenticate",
+      "proxy-authorization",
+      "referer",
+      // referer is more of a nuisance than a true discriminant
       "retry-after",
       "signed-headers",
       "server-timing",
       "sec-ch-ua",
       "sec-ch-ua-mobile",
       "sec-ch-ua-platform",
-      "user-agent",
-      // no user agent comparison
       "sec-fetch-dest",
       // disable check on action triggering the request
       "sec-fetch-mode",
@@ -1770,10 +1823,10 @@ const cleanEntropy = (
       // disable check on same-origin domain
       "sec-fetch-user",
       // disable check on persona triggering the request
-      "referer",
-      // referer is more of a nuisance than a true discriminant
       "upgrade-insecure-requests",
       // disable unwanted security check
+      "user-agent",
+      // no user agent comparison
     ].forEach(header => {
       delete request?.headers?.[header];
     });
@@ -2161,17 +2214,27 @@ const serve = async function (
           direction: REPLACEMENT_DIRECTION.OUTBOUND,
         });
   }
-  const uniqueHash = cleanEntropy({
-    method: inboundRequest.method,
-    url: inboundRequest.url,
-    headers: Object.assign(
-      {},
-      ...Object.entries(inboundRequest.headers)
-        .filter(([headerName]) => !headerName.startsWith(":"))
-        .map(([key, value]) => ({ [key]: value })),
-    ),
-    body: requestBody?.toString("base64"),
-  });
+  const atLeastOneLoggerWantsReponseBody = state.logsListeners.some(
+    listener => listener.wantsResponseMessage,
+  );
+  const autoRecordModeEnabled =
+    state.mockConfig.autoRecord && state.mode === ServerMode.PROXY;
+  const uniqueHash =
+    state.mode === ServerMode.MOCK ||
+    atLeastOneLoggerWantsReponseBody ||
+    autoRecordModeEnabled
+      ? cleanEntropy({
+          method: inboundRequest.method,
+          url: inboundRequest.url,
+          headers: Object.assign(
+            {},
+            ...Object.entries(inboundRequest.headers)
+              .filter(([headerName]) => !headerName.startsWith(":"))
+              .map(([key, value]) => ({ [key]: value })),
+          ),
+          body: requestBody?.toString("base64"),
+        })
+      : "";
   const targetIsFile = target.protocol === "file:";
 
   state.notifyLogsListeners({
@@ -2219,16 +2282,13 @@ const serve = async function (
     );
   }
 
-  const cleanedUniqueHash =
-    state.mode === ServerMode.MOCK ? cleanEntropy(uniqueHash) : "";
-
   const shouldMock =
     state.mode === ServerMode.MOCK &&
     (!targetUsesSpecialProtocol || targetIsFile);
 
-  const foundMock = state.mocks.get(cleanedUniqueHash);
+  const foundMock = state.mockConfig.mocks.get(uniqueHash);
 
-  if (shouldMock && !foundMock && state.strictMock) {
+  if (shouldMock && !foundMock && state.mockConfig.strict) {
     send(
       502,
       inboundResponse,
@@ -2573,23 +2633,31 @@ const serve = async function (
   else inboundResponse.end();
   const endTime = instantTime();
 
+  const response =
+    atLeastOneLoggerWantsReponseBody || autoRecordModeEnabled
+      ? Buffer.from(
+          JSON.stringify({
+            body: payload?.toString("base64"),
+            headers: outboundResponseHeaders,
+            status: statusCode,
+          }),
+        ).toString("base64")
+      : "";
+
   state.notifyLogsListeners({
     randomId,
     statusCode,
     protocol: http2IsSupported ? "HTTP/2" : "HTTP1.1",
     duration: Math.floor(Number(endTime - startTime) / 1000000),
     uniqueHash,
-    response: state.logsListeners.some(
-      listener => listener.wantsResponseMessage,
-    ) // let's make sure it is worth doing .toString("base64")
-      ? // ... it might be very expensive
-        {
-          body: payload.toString("base64"),
-          headers: outboundResponseHeaders,
-          status: statusCode,
-        }
-      : {},
+    response,
   });
+
+  // not using quick status if logAccessInTerminal is enabled
+  if (autoRecordModeEnabled && !state.config.logAccessInTerminal) {
+    state.mockConfig.mocks.set(uniqueHash, response);
+    stdout.moveCursor(0, -1, () => stdout.clearLine(-1, state.quickStatus));
+  }
 };
 
 const errorListener = (state: State, err: Error) => {
@@ -2671,9 +2739,16 @@ const update = async (
 
   const config = newState.config ?? currentState.config;
   const mode = newState.mode ?? currentState.mode ?? ServerMode.PROXY;
-  const strictMock = newState.strictMock ?? currentState.strictMock ?? false;
+  const autoRecord =
+    newState.mockConfig?.autoRecord ??
+    currentState.mockConfig?.autoRecord ??
+    false;
+  const strict =
+    newState.mockConfig?.strict ?? currentState.mockConfig?.strict ?? false;
   const mocks =
-    newState.mocks ?? currentState.mocks ?? new Map<string, string>();
+    newState.mockConfig?.mocks ??
+    currentState.mockConfig?.mocks ??
+    new Map<string, string>();
   const configListeners = (
     newState.configListeners === null
       ? []
@@ -2691,8 +2766,11 @@ const update = async (
     logsListeners,
     configListeners,
     mode,
-    mocks,
-    strictMock,
+    mockConfig: {
+      mocks,
+      strict,
+      autoRecord,
+    },
     configFileWatcher:
       state.configFileWatcher === undefined
         ? watchFile(filename, async () => update(state, await onWatch(state)))
@@ -2816,6 +2894,7 @@ export {
   load,
   errorListener,
   quickStatus,
+  recorderHandler,
   websocketServe,
   createWebsocketBufferFrom,
   readWebsocketBuffer,
