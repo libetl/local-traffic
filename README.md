@@ -113,7 +113,7 @@ Arguments :
 | mode          | "proxy" or "mock"        | server mode                  | "proxy" |
 | strict        | boolean                  | errors when no mock is found | false   |
 | autoRecord    | boolean                  | adds mocks from server       | false   |
-| mocks         | {uniqueHash,response}[]  | adds mocks from server       | []      |
+| mocks         | {uniqueHash,response}[]  | mocks definition             | []      |
 
 The recorder webapp can take care of the mocks by itself,
 so `autoRecord` is only necessary when using local-traffic headless or without human
