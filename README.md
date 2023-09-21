@@ -110,7 +110,7 @@ The API always matches the route targetting `recorder://`.
 Arguments :
 | parameter     | Type                     | Description                  | Defaults|
 | ------------- | ------------------------ | ---------------------------- | --------|
-| mode          | "proxy"|"mock"           | server mode                  | "proxy" |
+| mode          | "proxy" or "mock"        | server mode                  | "proxy" |
 | strict        | boolean                  | errors when no mock is found | false   |
 | autoRecord    | boolean                  | adds mocks from server       | false   |
 | mocks         | {uniqueHash,response}[]  | adds mocks from server       | []      |
