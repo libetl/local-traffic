@@ -200,6 +200,12 @@ const log = function (
           .replace(new RegExp(EMOJIS.REWRITE, "g"), "+rewrite")
           .replace(new RegExp(EMOJIS.WEBSOCKET, "g"), "websocket")
           .replace(new RegExp(EMOJIS.SHIELD, "g"), "web-security")
+          .replace(new RegExp(EMOJIS.MOCKS, "g"), "mocks")
+          .replace(new RegExp(EMOJIS.STRICT_MOCKS, "g"), "mocks (strict)")
+          .replace(new RegExp(EMOJIS.AUTO_RECORD, "g"), "auto record")
+          .replace(new RegExp(EMOJIS.LOGS, "g"), "logs")
+          .replace(new RegExp(EMOJIS.RESTART, "g"), "restart")
+          .replace(new RegExp(EMOJIS.COLORED, "g"), "colored")
           .replace(/\|+/g, "|")
       : text;
 
@@ -212,6 +218,13 @@ const log = function (
             !stdout.isTTY ? "" : emoji || ""
           }  ${text.padEnd(40)} ⎹\u001b[0m`
         : text
+    }${
+      level === null &&
+      state.mode === ServerMode.PROXY &&
+      state.mockConfig.autoRecord &&
+      !state.config.logAccessInTerminal
+        ? "\n"
+        : ""
     }`,
   );
   state?.notifyLogsListeners?.({
@@ -876,6 +889,22 @@ const recorderPage = (
       contentType: "application/json; charset=utf-8",
     });
   }
+  if (
+    request.method === "GET" &&
+    request.headers?.["content-type"]?.includes("application/json")
+  ) {
+    return staticResponse(
+      JSON.stringify({
+        ...state.mockConfig,
+        mocks: [...state.mockConfig.mocks.entries()].map(
+          ([uniqueHash, response]) => ({ uniqueHash, response }),
+        ),
+      }),
+      {
+        contentType: "application/json; charset=utf-8",
+      },
+    );
+  }
   if (["PUT", "POST", "DELETE"].includes(request.method)) {
     return staticResponse(`{"status": "acknowledged"}`, {
       contentType: "application/json; charset=utf-8",
@@ -887,59 +916,77 @@ const recorderPage = (
 <link href="${cdn}jsoneditor/dist/jsoneditor.min.css" rel="stylesheet" type="text/css">
 <script src="${cdn}jsoneditor/dist/jsoneditor.min.js"></script>
 <script src="${cdn}pako/dist/pako.min.js"></script>
-<span>Mode : </span>
-<div class="btn-group" role="group" aria-label="Server Mode">
-  <input type="radio" class="btn-check" name="server-mode" id="record-mode" autocomplete="off"${
-    state.mode === ServerMode.PROXY ? " checked" : ""
-  }>
-  <label class="btn btn-outline-primary" for="record-mode">&#9210; Record</label>
-  <input type="radio" class="btn-check" name="server-mode" id="mock-mode" autocomplete="off"${
-    state.mode === ServerMode.MOCK ? " checked" : ""
-  }>
-  <label class="btn btn-outline-primary" for="mock-mode">&#x1F310; Mock</label>
-</div>
-<span>Actions : </span>
-<button type="button" class="btn btn-light" id="add-mock">&#x2795; Mock from dummy request</button>
-<button type="button" class="btn btn-light" id="upload-mocks">&#x1F4E5; Upload mocks</button>
-<button type="button" class="btn btn-light" id="download-mocks">&#x1F4E6; Download mocks</button>
-<button type="button" class="btn btn-light" id="delete-mocks">&#x1F5D1; Delete mocks</button>
-<div class="form-check form-switch">
-  <input class="form-check-input" type="checkbox" id="strict-mock-mode"${
-    state.mockConfig.strict ? " checked" : ""
-  }>
-  <label class="form-check-label" for="strict-mock-mode">Strict mock mode</label>
-</div>
-<input type="hidden" id="limit" value="0"/>
-<div class="modal fade" id="edit-request" tabindex="-1" 
- aria-labelledby="edit-request-label" aria-hidden="true">
-  <div class="modal-dialog" style="max-width: 900px">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h1 class="modal-title fs-5" id="edit-request-label">Edit request to /</h1>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+<form>
+  <div id="commands"${
+      state.mockConfig.autoRecord ? ' style="filter:blur(8px)"' : ""
+    }>
+    <span>Mode : </span>
+    <div class="btn-group" role="group" aria-label="Server Mode">
+      <input type="radio" class="btn-check" name="server-mode" id="record-mode" autocomplete="off"${
+        state.mode === ServerMode.PROXY ? " checked" : ""
+      }>
+      <label class="btn btn-outline-primary" for="record-mode">&#9210; Record</label>
+      <input type="radio" class="btn-check" name="server-mode" id="mock-mode" autocomplete="off"${
+        state.mode === ServerMode.MOCK ? " checked" : ""
+      }>
+      <label class="btn btn-outline-primary" for="mock-mode">&#x1F310; Mock</label>
+    </div>
+    <span>Actions : </span>
+    <button type="button" class="btn btn-light" id="add-mock">&#x2795; Mock from dummy request</button>
+    <button type="button" class="btn btn-light" id="upload-mocks">&#x1F4E5; Upload mocks</button>
+    <button type="button" class="btn btn-light" id="download-mocks">&#x1F4E6; Download mocks</button>
+    <button type="button" class="btn btn-light" id="delete-mocks">&#x1F5D1; Delete mocks</button>
+  </div>
+  <div class="row">
+    <div class="col-lg" style="max-width: 200px">
+      <div class="form-check form-switch" id="strict-mock-mode-form-control">
+        <input class="form-check-input" type="checkbox" id="strict-mock-mode"${
+          state.mockConfig.strict ? " checked=\"checked\"" : ""
+        }>
+        <label class="form-check-label" for="strict-mock-mode">Strict mock mode</label>
       </div>
-      <div class="modal-body">
-        <div class="container">
-          <div class="row">
-            <div class="col-lg">
-              <h2>Request :</h2>
-              <div id="uniqueHash-editor" style="width: 400px; height: 400px;"></div>
-            </div>
-            <div class="col-lg">
-              <h2>Response : </h2>
-              <div id="response-editor" style="width: 400px; height: 400px;"></div>
+    </div>
+    <div class="col-lg" style="max-width: 200px">
+      <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" id="auto-record-mode"${
+          state.mockConfig.autoRecord ? " checked=\"checked\"" : ""
+        }>
+        <label class="form-check-label" for="auto-record-mode">Auto record mode</label>
+      </div>
+    </div>
+    <div class="col-lg">&nbsp;</div>
+  </div>
+  <input type="hidden" id="limit" value="0"/>
+  <div class="modal fade" id="edit-request" tabindex="-1" 
+   aria-labelledby="edit-request-label" aria-hidden="true">
+    <div class="modal-dialog" style="max-width: 900px">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h1 class="modal-title fs-5" id="edit-request-label">Edit request to /</h1>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="container">
+            <div class="row">
+              <div class="col-lg">
+                <h2>Request :</h2>
+                <div id="uniqueHash-editor" style="width: 400px; height: 400px;"></div>
+              </div>
+              <div class="col-lg">
+                <h2>Response : </h2>
+                <div id="response-editor" style="width: 400px; height: 400px;"></div>
+              </div>
             </div>
           </div>
         </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-        <button type="button" class="btn btn-primary" onclick="javascript:saveRequest()">Save changes</button>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          <button type="button" class="btn btn-primary" onclick="javascript:saveRequest()">Save changes</button>
+        </div>
       </div>
     </div>
   </div>
-</div>
-<script>
+  <script>
 const xmlOrJsonPrologsInBase64 = [
   "eyJ","PD94bWw=","PCFET0NUWVBF","PCFkb2N0eXBl","PGh0bWw","PEhUTUw","H4sIAAAAAAAA", "W3tc"
 ];
@@ -959,7 +1006,8 @@ function updateState () {
      method: 'PUT',
      headers: { 'Content-Type': 'application/json' },
      body: '{"strict":' + document.getElementById('strict-mock-mode').checked +
-           ',"autoRecord":false,"mode":"' + 
+           ',"autoRecord":' + document.getElementById('auto-record-mode').checked +
+           ',"mode":"' + 
            (document.getElementById('mock-mode').checked ? "mock" : "proxy") + '"' +
           ',"mocks":' + getMocksData() + '}'
    })
@@ -1039,6 +1087,18 @@ document.getElementById('record-mode').addEventListener('change', () => {
 })
 document.getElementById('mock-mode').addEventListener('change', () => {
   updateState();
+})
+document.getElementById('auto-record-mode').addEventListener('change', (e) => { 
+  updateState();
+  document.getElementById('table-access').style.filter = 
+    document.getElementById('auto-record-mode').checked ? 'blur(8px)' : 'blur(0px)';
+  document.getElementById('commands').style.filter = 
+      document.getElementById('auto-record-mode').checked ? 'blur(8px)' : 'blur(0px)';
+  document.getElementById('alert-about-auto-record-mode').style.display = 
+    document.getElementById('auto-record-mode').checked ? 'block' : 'none';
+  document.getElementById('strict-mock-mode-form-control').style.filter = 
+    document.getElementById('auto-record-mode').checked ? 'blur(8px)' : 'blur(0px)';
+    
 })
 document.getElementById('strict-mock-mode').addEventListener('change', (e) => { 
   updateState();
@@ -1142,11 +1202,33 @@ setTimeout(() => {
     required: [],
     additionalProperties: false
   }});
-  updateState();
+  ${
+    state.mockConfig.autoRecord
+      ? ";document.getElementById('strict-mock-mode-form-control')" +
+        ".style.filter='blur(8px)';" +
+        ";document.getElementById('table-access').style.filter='blur(8px)';"
+      : ""
+  }
+  document.forms[0].reset();
 }, 10)
-  </script>
-  ${logsView(proxyHostnameAndPort, state.config, { captureResponseBody: true })}
-  </body>
+</script>
+</form>
+<div class="alert alert-warning" role="alert"
+     style="display:${
+       state.mockConfig.autoRecord ? "block" : "none"
+     };left:20%;right:20%;position:absolute;z-index:1;" id="alert-about-auto-record-mode">
+  &#x24D8;&nbsp;Auto-record mode and recorder webapp are known to be mutually exclusive.
+  <br/><br/>Changing the mock on both sides is somehow hard to sort out.
+  <br/>This is triggering concurrent modifications in the mock config.
+  <hr/>
+  Here is what you can do :
+  <ul>
+    <li>If you want to record mocks using a frontend app, turn off the auto-record mode.</li>
+    <li>If you want to record mocks with the recorder API only, close this app.</li>
+  </ul>
+</div>
+${logsView(proxyHostnameAndPort, state.config, { captureResponseBody: true })}
+</body>
 </html>`);
 };
 
@@ -2654,7 +2736,11 @@ const serve = async function (
   });
 
   // not using quick status if logAccessInTerminal is enabled
-  if (autoRecordModeEnabled && !state.config.logAccessInTerminal) {
+  if (
+    autoRecordModeEnabled &&
+    !state.config.logAccessInTerminal &&
+    !targetUsesSpecialProtocol
+  ) {
     state.mockConfig.mocks.set(uniqueHash, response);
     stdout.moveCursor(0, -1, () => stdout.clearLine(-1, state.quickStatus));
   }
