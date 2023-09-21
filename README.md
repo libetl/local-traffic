@@ -96,7 +96,7 @@ All boolean settings default to false when unspecified.
 - `connectTimeout`: (`number`) max time before aborting the connection (defaults to 3000ms)
 - `socketTimeout`: (`number`) max time waiting for a response (defaults to 3000ms)
 
-## Recorder API
+## recorder API
 
 (>= 0.0.86)
 The recorder can be used programmatically with an API.
@@ -105,7 +105,7 @@ This can be used if someone needs to automatically record mocks during instance 
 
 The API always matches the route targetting `recorder://`.
 
-### POST, PUT
+### post, put
 
 Arguments :
 | parameter     | Type                     | Description                  | Defaults|
@@ -119,13 +119,13 @@ The recorder webapp can take care of the mocks by itself,
 so `autoRecord` is only necessary when using local-traffic headless or without human
 intervention
 
-### DELETE
+### delete
 
 The mock config will be reset to empty : 
 - `autoRecord` will be set to false
 - `mocks` will be purged
 
-### GET
+### get
 
 Retrieves the current mock configuration.
 use `Content-Type: application/json` to use the API mode.
