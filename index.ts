@@ -1185,7 +1185,7 @@ setTimeout(() => {
       properties: {
         method: {type: "string"},
         url: {type: "string"},
-        body: {oneOf: [{type:"string"},{type:"object"}]},
+        body: {oneOf: [{type:"string"},{type:"object"},{type:"array"}]},
         headers: {type: "object"},
       },
     required: [],
@@ -1195,7 +1195,7 @@ setTimeout(() => {
     mode: "code", allowSchemaSuggestions: true, schema: {
       type: "object",
       properties: {
-        body: {oneOf: [{type:"string"},{type:"object"}]},
+        body: {oneOf: [{type:"string"},{type:"object"},{type:"array"}]},
         headers: {type: "object"},
         status: {type: "integer"}
     },
@@ -1218,7 +1218,7 @@ setTimeout(() => {
        state.mockConfig.autoRecord ? "block" : "none"
      };left:20%;right:20%;position:absolute;z-index:1;" id="alert-about-auto-record-mode">
   &#x24D8;&nbsp;Auto-record mode and recorder webapp are known to be mutually exclusive.
-  <br/><br/>Changing the mock on both sides is somehow hard to sort out.
+  <br/><br/>Changing the mocks on both sides is somehow hard to sort out.
   <br/>This is triggering concurrent modifications in the mock config.
   <hr/>
   Here is what you can do :
