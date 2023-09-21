@@ -98,6 +98,7 @@ All boolean settings default to false when unspecified.
 
 ## Recorder API
 
+(>= 0.0.86)
 The recorder can be used programmatically with an API.
 This can be used if someone needs to automatically record mocks during instance provisioning
 (when the machine boots up using a cloud provider for example)
