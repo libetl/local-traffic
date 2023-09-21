@@ -49,7 +49,7 @@ npx local-traffic
 4. Go to [http://localhost:8080/my-static-webapp/index.html](http://localhost:8080/my-static-webapp/index.html) with your browser (given your project name is my-static-webapp, but I am not 100% sure)
 5. Go to [http://localhost:8080/logs/](http://localhost:8080/logs/) to watch the request logs
 6. Go to [http://localhost:8080/config/](http://localhost:8080/config/) to change the config in a web editor
-7. You can use the [http://localhost:8080/recorder/](recorder) to turn your proxy into a mock server. There is a user interface and also an API (documented [#recorder-api](here))
+7. You can use the [http://localhost:8080/recorder/](recorder) to turn your proxy into a mock server. There is a user interface and also an API (documented [here](#recorder-api))
 8. From the web config editor, create a SSL keypair and start working with a self signed SSL certificate right away
 9. Your page will use /jquery-local/jquery.js instead of the CDN asset, and will serve the file from your hard drive
 10. Your server now proxies the mapping that you have configured
