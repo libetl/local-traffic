@@ -132,5 +132,5 @@ use `Content-Type: application/json` to use the API mode.
 
 ```bash
 $ curl https://localhost:8443/recorder/ -XGET -k -H'Content-Type: application/json'
-{"mocks":[],"strict":false,"autoRecord":false}
+{"mocks":[],"strict":false,"autoRecord":false,"mode":"proxy"}
 ```

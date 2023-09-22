@@ -896,6 +896,7 @@ const recorderPage = (
     return staticResponse(
       JSON.stringify({
         ...state.mockConfig,
+        mode: state.mode,
         mocks: [...state.mockConfig.mocks.entries()].map(
           ([uniqueHash, response]) => ({ uniqueHash, response }),
         ),
