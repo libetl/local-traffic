@@ -12,7 +12,10 @@
     "websocket"
   ],
   "license": "MIT",
-  "repository": "git@github.com:libetl/local-traffic.git",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/libetl/local-traffic.git"
+  },
   "author": "LiBe <libe4@free.fr>",
   "scripts": {
     "start": "./dist/local-traffic.js",
@@ -32,7 +35,7 @@
     "typescript": "^5.2.2"
   },
   "bin": {
-    "local-traffic": "./dist/local-traffic.js"
+    "local-traffic": "dist/local-traffic.js"
   },
   "engines": {
     "node": ">=8"
