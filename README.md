@@ -128,9 +128,9 @@ The mock config will be reset to empty :
 ### get
 
 Retrieves the current mock configuration.
-use `Content-Type: application/json` to use the API mode.
+use `Accept: application/json` to use the API mode.
 
 ```bash
-$ curl https://localhost:8443/recorder/ -XGET -k -H'Content-Type: application/json'
+$ curl https://localhost:8443/recorder/ -XGET -k -H'Accept: application/json'
 {"mocks":[],"strict":false,"autoRecord":false,"mode":"proxy"}
 ```
