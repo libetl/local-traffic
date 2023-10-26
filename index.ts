@@ -891,7 +891,7 @@ const recorderPage = (
   }
   if (
     request.method === "GET" &&
-    request.headers?.["content-type"]?.includes("application/json")
+    request.headers?.["accept"]?.includes("application/json")
   ) {
     return staticResponse(
       JSON.stringify({
