@@ -1991,12 +1991,29 @@ const determineMapping = (
     ),
   };
 
-  const [key, target] =
-    Object.entries(mappings).find(([key]) =>
-      path.match(RegExp(key.replace(/^\//, "^/"))),
-    ) ?? [];
+  let key : string | undefined;
+  let target : URL | undefined;
+
+  for(const [pattern, url] of Object.entries(mappings)) {
+    const match = path.match(RegExp(pattern.replace(/^\//, "^/")));
+    if(match) {
+      key = pattern;
+
+      // extract the matched values from the path
+      const matchedValues = match.slice(1);
+
+      // interpolate the matched values into the url
+      target = new URL(interpolateString(url.href, matchedValues));
+      break;
+    }
+  }
+
   return { proxyHostname, proxyHostnameAndPort, url, path, key, target };
 };
+
+const interpolateString = (template: string, values: string[]) : string => {
+  return template.replace(/\$\$(\d+)/g, (_, index) => values[parseInt(index) - 1]);
+}
 
 const websocketServe = function (
   state: State,
