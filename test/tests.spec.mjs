@@ -676,6 +676,34 @@ describe("server cruise", async () => {
   });
 });
 
+describe('Internal features of the server', () => {
+  describe('Finding downstream URLs in mapping', () => {
+    it("should match a standard route with string interpolation", () => {
+      const {
+        key,
+        target,
+        path,
+        url,
+      } = determineMapping({
+        headers: {
+          host: "localhost"
+        },
+        url: "/github-profile/mdbell/"
+      }, {
+        port: 443,
+        ssl: true,
+        mapping: {
+          "/github-profile/(.*)/": "https://github.com/$$1/"
+        }
+      })
+      assert.equal(key, "/github-profile/(.*)/")
+      assert.equal(path, "/github-profile/mdbell/")
+      assert.equal(url.href, "https://localhost/github-profile/mdbell/")
+      assert.equal(target.href, "https://github.com/mdbell/")
+    })
+  })
+})
+
 describe('Websocket feature', () => {
   it("should send a payload of 123278 bytes with the payload length set to 0x1E18E", () => {
     const samplePayload = Array(123278)
