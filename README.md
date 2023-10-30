@@ -76,6 +76,20 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 2. Edit the mapping keys and downstream urls
 3. See the status update in the terminal, that's it.
 
+## mapping string interpolations (>=0.0.89) 
+The `mapping` entries support regular expressions, and are able to match them against the destination through string interpolation. They match a double dollar sign (`$$`) followed by the index of the value in the [match array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/match#return_value).
+
+For example:
+```json
+{
+  "mappings": {
+    "/(example|test)": "http://example.com/$$1"
+  }
+}
+```
+
+Would map both "/example" and "/test" to "http://example.com/example" and "http://example.com/test" respectively.
+
 ## all the options
 
 All boolean settings default to false when unspecified.
