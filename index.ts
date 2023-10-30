@@ -2008,10 +2008,6 @@ const determineMapping = (
   return { proxyHostname, proxyHostnameAndPort, url, path, key, target };
 };
 
-const interpolateString = (template: string, values: string[]) : string => {
-  return template.replace(/\$\$(\d+)/g, (_, index) => values[parseInt(index) - 1]);
-}
-
 const websocketServe = function (
   state: State,
   request: IncomingMessage,
