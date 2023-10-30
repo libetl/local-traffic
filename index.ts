@@ -1991,23 +1991,20 @@ const determineMapping = (
     ),
   };
 
-  let key : string | undefined;
-  let target : URL | undefined;
+  let match: RegExpMatchArray | undefined;
+  const [key, rawTarget] =
+    Object.entries(mappings).find(
+      ([key]) => (match = path.match(RegExp(key.replace(/^\//, "^/")))),
+    ) ?? [];
 
-  for(const [pattern, url] of Object.entries(mappings)) {
-    const match = path.match(RegExp(pattern.replace(/^\//, "^/")));
-    if(match) {
-      key = pattern;
-
-      // extract the matched values from the path
-      const matchedValues = match.slice(1);
-
-      // interpolate the matched values into the url
-      target = new URL(interpolateString(url.href, matchedValues));
-      break;
-    }
-  }
-
+  const target = !match
+    ? null
+    : new URL(
+        rawTarget.href.replace(
+          /\$\$(\d+)/g,
+          (_, index) => match[parseInt(index)],
+        ),
+      );
   return { proxyHostname, proxyHostnameAndPort, url, path, key, target };
 };
 
