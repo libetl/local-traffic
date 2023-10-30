@@ -54,6 +54,20 @@ npx local-traffic
 9. Your page will use /jquery-local/jquery.js instead of the CDN asset, and will serve the file from your hard drive
 10. Your server now proxies the mapping that you have configured
 
+## String Interpolations
+Mappings support regular expressions, and are able to match them against the destination through string interpolation. They match a double dollar sign (`$$`) followed by the index of the value in the [match array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/match#return_value).
+
+For example:
+```json
+{
+  "mappings": {
+    "/(example|test)": "http://example.com/$$1"
+  }
+}
+```
+
+Woould map both "/example" and "/test" to "http://example.com/example" and "http://example.com/test" respectively.
+
 ## usage
 
 ### from your terminal, using the command line
