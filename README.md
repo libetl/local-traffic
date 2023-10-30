@@ -66,7 +66,7 @@ For example:
 }
 ```
 
-Woould map both "/example" and "/test" to "http://example.com/example" and "http://example.com/test" respectively.
+Would map both "/example" and "/test" to "http://example.com/example" and "http://example.com/test" respectively.
 
 ## usage
 
