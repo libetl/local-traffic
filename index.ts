@@ -208,25 +208,25 @@ const log = function (
           .replace(new RegExp(EMOJIS.COLORED, "g"), "colored")
           .replace(/\|+/g, "|")
       : text;
-
-  console.log(
-    `${getCurrentTime(state?.config?.simpleLogs)} ${
-      state?.config?.simpleLogs
-        ? simpleLog
-        : level
-        ? `\u001b[48;5;${level}m⎸    ${
-            !stdout.isTTY ? "" : emoji || ""
-          }  ${text.padEnd(40)} ⎹\u001b[0m`
-        : text
-    }${
-      level === null &&
-      state.mode === ServerMode.PROXY &&
-      state.mockConfig.autoRecord &&
-      !state.config.logAccessInTerminal
-        ? "\n"
-        : ""
-    }`,
-  );
+  if (false)
+    console.log(
+      `${getCurrentTime(state?.config?.simpleLogs)} ${
+        state?.config?.simpleLogs
+          ? simpleLog
+          : level
+          ? `\u001b[48;5;${level}m⎸    ${
+              !stdout.isTTY ? "" : emoji || ""
+            }  ${text.padEnd(40)} ⎹\u001b[0m`
+          : text
+      }${
+        level === null &&
+        state.mode === ServerMode.PROXY &&
+        state.mockConfig.autoRecord &&
+        !state.config.logAccessInTerminal
+          ? "\n"
+          : ""
+      }`,
+    );
   state?.notifyLogsListeners?.({
     event: simpleLog,
     level: levelToString(level),
@@ -919,8 +919,8 @@ const recorderPage = (
 <script src="${cdn}pako/dist/pako.min.js"></script>
 <form>
   <div id="commands"${
-      state.mockConfig.autoRecord ? ' style="filter:blur(8px)"' : ""
-    }>
+    state.mockConfig.autoRecord ? ' style="filter:blur(8px)"' : ""
+  }>
     <span>Mode : </span>
     <div class="btn-group" role="group" aria-label="Server Mode">
       <input type="radio" class="btn-check" name="server-mode" id="record-mode" autocomplete="off"${
@@ -942,7 +942,7 @@ const recorderPage = (
     <div class="col-lg" style="max-width: 200px">
       <div class="form-check form-switch" id="strict-mock-mode-form-control">
         <input class="form-check-input" type="checkbox" id="strict-mock-mode"${
-          state.mockConfig.strict ? " checked=\"checked\"" : ""
+          state.mockConfig.strict ? ' checked="checked"' : ""
         }>
         <label class="form-check-label" for="strict-mock-mode">Strict mock mode</label>
       </div>
@@ -950,7 +950,7 @@ const recorderPage = (
     <div class="col-lg" style="max-width: 200px">
       <div class="form-check form-switch">
         <input class="form-check-input" type="checkbox" id="auto-record-mode"${
-          state.mockConfig.autoRecord ? " checked=\"checked\"" : ""
+          state.mockConfig.autoRecord ? ' checked="checked"' : ""
         }>
         <label class="form-check-label" for="auto-record-mode">Auto record mode</label>
       </div>
@@ -2982,8 +2982,80 @@ if (crashTest) {
     .catch(() => exit(1));
 }
 
+const clearScreen = async () => {
+  await new Promise(resolve1 =>
+    stdout.moveCursor(0, -stdout.getWindowSize()[1], () => resolve1(void 0)),
+  );
+  await new Promise(resolve1 => stdout.clearScreenDown(() => resolve1(void 0)));
+};
+
+const square = async (
+  width: number,
+  height: number,
+  {
+    topLeft,
+    topRight,
+    bottomLeft,
+    bottomRight,
+  }: {
+    topLeft?: string;
+    topRight?: string;
+    bottomLeft?: string;
+    bottomRight?: string;
+  } = {},
+) => {
+  await new Promise(resolve1 =>
+    stdout.moveCursor(0, height - 1, () => resolve1(void 0)),
+  );
+  await new Promise(resolve1 =>
+    stdout.write(
+      (bottomLeft ?? "╚") +
+        new Array(width - 2).fill("═").join("") +
+        (bottomRight ?? "╝"),
+      () => resolve1(void 0),
+    ),
+  );
+  await new Promise(resolve1 =>
+    stdout.moveCursor(-width, -height + 2, () => resolve1(void 0)),
+  );
+  await new Promise(resolve1 =>
+    stdout.write(
+      (topLeft ?? "╔") +
+        new Array(width - 2).fill("═").join("") +
+        (topRight ?? "╗"),
+      () => resolve1(void 0),
+    ),
+  );
+  for (let i = 0; i < height - 3; i++) {
+    await new Promise(resolve1 =>
+      stdout.moveCursor(-width, 1, () => resolve1(void 0)),
+    );
+    await new Promise(resolve1 => stdout.write("║", () => resolve1(void 0)));
+    await new Promise(resolve1 =>
+      stdout.moveCursor(width - 2, 0, () => resolve1(void 0)),
+    );
+    await new Promise(resolve1 => stdout.write("║", () => resolve1(void 0)));
+  }
+  await new Promise(resolve1 =>
+    stdout.moveCursor(-width + 1, -height + 1, () => resolve1(void 0)),
+  );
+};
+
 if (!crashTest && runAsMainProgram) {
-  load().then(start);
+  clearScreen()
+    .then(() => square(stdout.getWindowSize()[0], stdout.getWindowSize()[1]))
+    .then(() =>
+      square(
+        Math.floor(stdout.getWindowSize()[0] / 2),
+        stdout.getWindowSize()[1] - 20,
+        {
+          topRight: "╦",
+          bottomLeft: "╠"
+        }
+      ),
+    )
+    .then(() => load())
+    .then(start);
 }
 
 export {
