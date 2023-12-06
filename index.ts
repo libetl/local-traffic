@@ -2325,7 +2325,7 @@ const serve = async function (
           state.mode === ServerMode.MOCK ||
           atLeastOneLoggerWantsResponseBody ||
           autoRecordModeEnabled
-            ? requestBody?.toString("base64") : "",
+            ? (requestBody?.toString("base64") ?? "") : "",
         });
   const targetIsFile = target.protocol === "file:";
 
