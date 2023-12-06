@@ -2307,16 +2307,12 @@ const serve = async function (
           direction: REPLACEMENT_DIRECTION.OUTBOUND,
         });
   }
-  const atLeastOneLoggerWantsReponseBody = state.logsListeners.some(
+  const atLeastOneLoggerWantsResponseBody = state.logsListeners.some(
     listener => listener.wantsResponseMessage,
   );
   const autoRecordModeEnabled =
     state.mockConfig.autoRecord && state.mode === ServerMode.PROXY;
-  const uniqueHash =
-    state.mode === ServerMode.MOCK ||
-    atLeastOneLoggerWantsReponseBody ||
-    autoRecordModeEnabled
-      ? cleanEntropy({
+  const uniqueHash = cleanEntropy({
           method: inboundRequest.method,
           url: inboundRequest.url,
           headers: Object.assign(
@@ -2325,9 +2321,12 @@ const serve = async function (
               .filter(([headerName]) => !headerName.startsWith(":"))
               .map(([key, value]) => ({ [key]: value })),
           ),
-          body: requestBody?.toString("base64"),
-        })
-      : "";
+          body:
+          state.mode === ServerMode.MOCK ||
+          atLeastOneLoggerWantsResponseBody ||
+          autoRecordModeEnabled
+            ? requestBody?.toString("base64") : "",
+        });
   const targetIsFile = target.protocol === "file:";
 
   state.notifyLogsListeners({
@@ -2727,7 +2726,7 @@ const serve = async function (
   const endTime = instantTime();
 
   const response =
-    atLeastOneLoggerWantsReponseBody || autoRecordModeEnabled
+    atLeastOneLoggerWantsResponseBody || autoRecordModeEnabled
       ? Buffer.from(
           JSON.stringify({
             body: payload?.toString("base64"),
