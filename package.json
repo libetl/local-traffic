@@ -30,7 +30,7 @@
     "test": "node ./test/tests.spec.mjs"
   },
   "devDependencies": {
-    "@types/node": "^20.11.0",
+    "@types/node": "^20.11.3",
     "terser": "^5.26.0",
     "typescript": "^5.3.3"
   },
