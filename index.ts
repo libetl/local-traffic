@@ -919,8 +919,8 @@ const recorderPage = (
 <script src="${cdn}pako/dist/pako.min.js"></script>
 <form>
   <div id="commands"${
-      state.mockConfig.autoRecord ? ' style="filter:blur(8px)"' : ""
-    }>
+    state.mockConfig.autoRecord ? ' style="filter:blur(8px)"' : ""
+  }>
     <span>Mode : </span>
     <div class="btn-group" role="group" aria-label="Server Mode">
       <input type="radio" class="btn-check" name="server-mode" id="record-mode" autocomplete="off"${
@@ -942,7 +942,7 @@ const recorderPage = (
     <div class="col-lg" style="max-width: 200px">
       <div class="form-check form-switch" id="strict-mock-mode-form-control">
         <input class="form-check-input" type="checkbox" id="strict-mock-mode"${
-          state.mockConfig.strict ? " checked=\"checked\"" : ""
+          state.mockConfig.strict ? ' checked="checked"' : ""
         }>
         <label class="form-check-label" for="strict-mock-mode">Strict mock mode</label>
       </div>
@@ -950,7 +950,7 @@ const recorderPage = (
     <div class="col-lg" style="max-width: 200px">
       <div class="form-check form-switch">
         <input class="form-check-input" type="checkbox" id="auto-record-mode"${
-          state.mockConfig.autoRecord ? " checked=\"checked\"" : ""
+          state.mockConfig.autoRecord ? ' checked="checked"' : ""
         }>
         <label class="form-check-label" for="auto-record-mode">Auto record mode</label>
       </div>
@@ -2313,20 +2313,21 @@ const serve = async function (
   const autoRecordModeEnabled =
     state.mockConfig.autoRecord && state.mode === ServerMode.PROXY;
   const uniqueHash = cleanEntropy({
-          method: inboundRequest.method,
-          url: inboundRequest.url,
-          headers: Object.assign(
-            {},
-            ...Object.entries(inboundRequest.headers)
-              .filter(([headerName]) => !headerName.startsWith(":"))
-              .map(([key, value]) => ({ [key]: value })),
-          ),
-          body:
-          state.mode === ServerMode.MOCK ||
-          atLeastOneLoggerWantsResponseBody ||
-          autoRecordModeEnabled
-            ? (requestBody?.toString("base64") ?? "") : "",
-        });
+    method: inboundRequest.method,
+    url: inboundRequest.url,
+    headers: Object.assign(
+      {},
+      ...Object.entries(inboundRequest.headers)
+        .filter(([headerName]) => !headerName.startsWith(":"))
+        .map(([key, value]) => ({ [key]: value })),
+    ),
+    body:
+      state.mode === ServerMode.MOCK ||
+      atLeastOneLoggerWantsResponseBody ||
+      autoRecordModeEnabled
+        ? requestBody?.toString("base64") ?? ""
+        : "",
+  });
   const targetIsFile = target.protocol === "file:";
 
   state.notifyLogsListeners({
