@@ -1995,10 +1995,9 @@ const determineMapping = (
   };
 
   let match: RegExpMatchArray | undefined;
-  const [key, rawTarget] =
-    Object.entries(mappings).find(
-      ([key]) => (match = path.match(RegExp(key.replace(/^\//, "^/")))),
-    ) ?? ["/"];
+  const [key, rawTarget] = Object.entries(mappings).find(
+    ([key]) => (match = path.match(RegExp(key.replace(/^\//, "^/")))),
+  ) ?? ["/"];
 
   const target = !match
     ? null
@@ -2188,14 +2187,22 @@ const serve = async function (
     );
     return;
   }
-  const { proxyHostname, proxyHostnameAndPort, url, path, key, target: targetFromProxy } =
-    determineMapping(inboundRequest, state.config);
-  const target = targetFromProxy ?? (state.mode === ServerMode.MOCK
-    ? new URL(`http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}/`)
-    : null)
+  const {
+    proxyHostname,
+    proxyHostnameAndPort,
+    url,
+    path,
+    key,
+    target: targetFromProxy,
+  } = determineMapping(inboundRequest, state.config);
+  const target =
+    targetFromProxy ??
+    (state.mode === ServerMode.MOCK
+      ? new URL(`http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}/`)
+      : null);
 
-    if (!target) {
-      send(
+  if (!target) {
+    send(
       502,
       inboundResponse,
       Buffer.from(
@@ -2387,36 +2394,43 @@ const serve = async function (
 
   const foundMock =
     state.mockConfig.mocks.get(uniqueHash) ??
-    Array.from(state.mockConfig.mocks.entries()).filter(([hash]) => {
-      const requestObject: RequestStruct = JSON.parse(
-        Buffer.from(uniqueHash, "base64").toString("ascii"),
-      );
-      const mockRequestObject: RequestStruct = JSON.parse(
-        Buffer.from(hash, "base64").toString("ascii"),
-      );
-      return (
-        mockRequestObject.method === requestObject.method &&
-        mockRequestObject.url === requestObject.url &&
-        (!mockRequestObject.body ||
-          mockRequestObject.body === requestObject.body) &&
-        Object.entries(mockRequestObject.headers ?? {}).every(
-          ([name, value]) => !value || requestObject.headers?.[name] === value,
-        )
-      );
-    }).sort(([hash1], [hash2]) => {
-      const match2RequestObject: RequestStruct = JSON.parse(
-        Buffer.from(hash2, "utf-8").toString("ascii"),
-      );
-      const match1RequestObject: RequestStruct = JSON.parse(
-        Buffer.from(hash1, "utf-8").toString("ascii"),
-      );
-      const match2HasBody = match2RequestObject.body ? 1 : 0
-      const match1HasBody = match1RequestObject.body ? 1 : 0
-      return Object.keys(match2RequestObject.headers??{}).length + match2HasBody -
-        Object.keys(match1RequestObject.headers??{}).length - match1HasBody
-    })[0]?.[1];
+    Array.from(state.mockConfig.mocks.entries())
+      .filter(([hash]) => {
+        const requestObject: RequestStruct = JSON.parse(
+          Buffer.from(uniqueHash, "base64").toString("ascii"),
+        );
+        const mockRequestObject: RequestStruct = JSON.parse(
+          Buffer.from(hash, "base64").toString("ascii"),
+        );
+        return (
+          mockRequestObject.method === requestObject.method &&
+          mockRequestObject.url === requestObject.url &&
+          (!mockRequestObject.body ||
+            mockRequestObject.body === requestObject.body) &&
+          Object.entries(mockRequestObject.headers ?? {}).every(
+            ([name, value]) =>
+              !value || requestObject.headers?.[name] === value,
+          )
+        );
+      })
+      .sort(([hash1], [hash2]) => {
+        const match2RequestObject: RequestStruct = JSON.parse(
+          Buffer.from(hash2, "utf-8").toString("ascii"),
+        );
+        const match1RequestObject: RequestStruct = JSON.parse(
+          Buffer.from(hash1, "utf-8").toString("ascii"),
+        );
+        const match2HasBody = match2RequestObject.body ? 1 : 0;
+        const match1HasBody = match1RequestObject.body ? 1 : 0;
+        return (
+          Object.keys(match2RequestObject.headers ?? {}).length +
+          match2HasBody -
+          Object.keys(match1RequestObject.headers ?? {}).length -
+          match1HasBody
+        );
+      })[0]?.[1];
 
-    if (shouldMock && !foundMock && state.mockConfig.strict) {
+  if (shouldMock && !foundMock && state.mockConfig.strict) {
     send(
       502,
       inboundResponse,
