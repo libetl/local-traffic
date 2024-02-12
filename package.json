@@ -1,6 +1,6 @@
 {
   "name": "local-traffic",
-  "version": "0.0.89",
+  "version": "0.0.92",
   "main": "./dist/local-traffic.js",
   "private": false,
   "keywords": [
@@ -20,19 +20,19 @@
   "scripts": {
     "start": "./dist/local-traffic.js",
     "typescript": "tsc",
-    "shebang": "echo '#!/usr/bin/env node' | cat - ./dist/minified.js > ./dist/local-traffic.js",
-    "terser": "terser ./dist/index.js -c -m --toplevel > ./dist/terser.js",
-    "remove-useless-whitespaces": "cat ./dist/terser.js | sed -r 's/\\\\n\\s*/\\\\n/g' > ./dist/minified.js",
+    "shebang": "echo '#!/usr/bin/env node' | cat - ./dist/terser.js > ./dist/local-traffic.js",
+    "remove-useless-whitespaces": "cat ./dist/index.js | sed -e 's/^[ \t]*//' > ./dist/minified.js",
+    "terser": "terser ./dist/minified.js -c -m --toplevel > ./dist/terser.js",
     "chmod": "chmod a+x ./dist/local-traffic.js",
     "clean": "rm -rf dist",
-    "build": "npm run clean && npm run typescript && npm run terser && npm run remove-useless-whitespaces && npm run shebang && npm run chmod",
+    "build": "npm run clean && npm run typescript && npm run remove-useless-whitespaces && npm run terser && npm run shebang && npm run chmod",
     "crash-test": "node ./dist/local-traffic.js --crash-test",
     "test": "node ./test/tests.spec.mjs"
   },
   "devDependencies": {
-    "@types/node": "^20.9.0",
-    "terser": "^5.24.0",
-    "typescript": "^5.2.2"
+    "@types/node": "^20.11.17",
+    "terser": "^5.27.0",
+    "typescript": "^5.3.3"
   },
   "bin": {
     "local-traffic": "dist/local-traffic.js"

@@ -122,6 +122,13 @@ type MockResponseObject = {
   status: number;
 };
 
+type RequestStruct = {
+  method: string;
+  url: string;
+  headers: any;
+  body: string;
+};
+
 enum ServerMode {
   PROXY = "proxy",
   MOCK = "mock",
@@ -1864,11 +1871,7 @@ const replaceTextUsingMapping = (
     .split(`${proxyHostnameAndPort}/:`)
     .join(`${proxyHostnameAndPort}:`);
 
-const cleanEntropy = (
-  requestObject:
-    | string
-    | { method: string; url: string; headers: any; body: string },
-) => {
+const cleanEntropy = (requestObject: string | RequestStruct) => {
   try {
     const request =
       typeof requestObject === "object"
@@ -1975,7 +1978,7 @@ const determineMapping = (
     }`;
   const url = new URL(
     `http${parameters.ssl ? "s" : ""}://${proxyHostnameAndPort}${
-      inboundRequest.url
+      inboundRequest.url ?? ""
     }`,
   );
   const path = url.href.substring(url.origin.length);
@@ -1992,10 +1995,9 @@ const determineMapping = (
   };
 
   let match: RegExpMatchArray | undefined;
-  const [key, rawTarget] =
-    Object.entries(mappings).find(
-      ([key]) => (match = path.match(RegExp(key.replace(/^\//, "^/")))),
-    ) ?? [];
+  const [key, rawTarget] = Object.entries(mappings).find(
+    ([key]) => (match = path.match(RegExp(key.replace(/^\//, "^/")))),
+  ) ?? ["/"];
 
   const target = !match
     ? null
@@ -2185,8 +2187,19 @@ const serve = async function (
     );
     return;
   }
-  const { proxyHostname, proxyHostnameAndPort, url, path, key, target } =
-    determineMapping(inboundRequest, state.config);
+  const {
+    proxyHostname,
+    proxyHostnameAndPort,
+    url,
+    path,
+    key,
+    target: targetFromProxy,
+  } = determineMapping(inboundRequest, state.config);
+  const target =
+    targetFromProxy ??
+    (state.mode === ServerMode.MOCK
+      ? new URL(`http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}/`)
+      : null);
 
   if (!target) {
     send(
@@ -2205,13 +2218,12 @@ const serve = async function (
   }
   const targetHost = target.host.replace(RegExp(/\/+$/), "");
   const targetPrefix = target.href.substring(
-    "https://".length + target.host.length,
+    `${target.protocol}//`.length + target.host.length,
   );
   const fullPath = `${targetPrefix}${unixNorm(
     path.replace(RegExp(unixNorm(key)), ""),
   )}`.replace(/^\/*/, "/");
   const targetUrl = new URL(`${target.protocol}//${targetHost}${fullPath}`);
-
   const targetUsesSpecialProtocol = specialProtocols.some(
     protocol => target.protocol === protocol,
   );
@@ -2219,6 +2231,7 @@ const serve = async function (
   let http2IsSupported = !state.config.dontUseHttp2Downstream;
   const http2Connection =
     http2IsSupported &&
+    (state.mode === ServerMode.PROXY || !state?.mockConfig?.strict) &&
     !targetUsesSpecialProtocol &&
     target.protocol !== "file:" &&
     (await Promise.race([
@@ -2307,27 +2320,27 @@ const serve = async function (
           direction: REPLACEMENT_DIRECTION.OUTBOUND,
         });
   }
-  const atLeastOneLoggerWantsReponseBody = state.logsListeners.some(
+  const atLeastOneLoggerWantsResponseBody = state.logsListeners.some(
     listener => listener.wantsResponseMessage,
   );
   const autoRecordModeEnabled =
     state.mockConfig.autoRecord && state.mode === ServerMode.PROXY;
-  const uniqueHash =
-    state.mode === ServerMode.MOCK ||
-    atLeastOneLoggerWantsReponseBody ||
-    autoRecordModeEnabled
-      ? cleanEntropy({
-          method: inboundRequest.method,
-          url: inboundRequest.url,
-          headers: Object.assign(
-            {},
-            ...Object.entries(inboundRequest.headers)
-              .filter(([headerName]) => !headerName.startsWith(":"))
-              .map(([key, value]) => ({ [key]: value })),
-          ),
-          body: requestBody?.toString("base64"),
-        })
-      : "";
+  const uniqueHash = cleanEntropy({
+    method: inboundRequest.method,
+    url: inboundRequest.url,
+    headers: Object.assign(
+      {},
+      ...Object.entries(inboundRequest.headers)
+        .filter(([headerName]) => !headerName.startsWith(":"))
+        .map(([key, value]) => ({ [key]: value })),
+    ),
+    body:
+      state.mode === ServerMode.MOCK ||
+      atLeastOneLoggerWantsResponseBody ||
+      autoRecordModeEnabled
+        ? requestBody?.toString("base64") ?? ""
+        : "",
+  });
   const targetIsFile = target.protocol === "file:";
 
   state.notifyLogsListeners({
@@ -2379,7 +2392,43 @@ const serve = async function (
     state.mode === ServerMode.MOCK &&
     (!targetUsesSpecialProtocol || targetIsFile);
 
-  const foundMock = state.mockConfig.mocks.get(uniqueHash);
+  const foundMock =
+    state.mockConfig.mocks.get(uniqueHash) ??
+    Array.from(state.mockConfig.mocks.entries())
+      .filter(([hash]) => {
+        const requestObject: RequestStruct = JSON.parse(
+          Buffer.from(uniqueHash, "base64").toString("ascii"),
+        );
+        const mockRequestObject: RequestStruct = JSON.parse(
+          Buffer.from(hash, "base64").toString("ascii"),
+        );
+        return (
+          mockRequestObject.method === requestObject.method &&
+          mockRequestObject.url === requestObject.url &&
+          (!mockRequestObject.body ||
+            mockRequestObject.body === requestObject.body) &&
+          Object.entries(mockRequestObject.headers ?? {}).every(
+            ([name, value]) =>
+              !value || requestObject.headers?.[name] === value,
+          )
+        );
+      })
+      .sort(([hash1], [hash2]) => {
+        const match2RequestObject: RequestStruct = JSON.parse(
+          Buffer.from(hash2, "utf-8").toString("ascii"),
+        );
+        const match1RequestObject: RequestStruct = JSON.parse(
+          Buffer.from(hash1, "utf-8").toString("ascii"),
+        );
+        const match2HasBody = match2RequestObject.body ? 1 : 0;
+        const match1HasBody = match1RequestObject.body ? 1 : 0;
+        return (
+          Object.keys(match2RequestObject.headers ?? {}).length +
+          match2HasBody -
+          Object.keys(match1RequestObject.headers ?? {}).length -
+          match1HasBody
+        );
+      })[0]?.[1];
 
   if (shouldMock && !foundMock && state.mockConfig.strict) {
     send(
@@ -2727,7 +2776,7 @@ const serve = async function (
   const endTime = instantTime();
 
   const response =
-    atLeastOneLoggerWantsReponseBody || autoRecordModeEnabled
+    atLeastOneLoggerWantsResponseBody || autoRecordModeEnabled
       ? Buffer.from(
           JSON.stringify({
             body: payload?.toString("base64"),

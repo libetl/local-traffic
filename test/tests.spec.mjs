@@ -1,8 +1,9 @@
 import { after, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, relative } from "node:path";
 import typescript from "typescript";
-import { readFile as realReadFile } from "node:fs/promises";
+import { readFile as realReadFile, writeFile as writeRealFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import {
   gzip,
   gunzip,
@@ -26,6 +27,8 @@ import {
   responses,
 } from "./mocks.mjs";
 
+const temporaryFileLocation = `${tmpdir()}/local-traffic.mjs`;
+const useTemporaryFile = false
 const localTraffic = await (async () => {
   const source = (
     await realReadFile(
@@ -40,12 +43,20 @@ const localTraffic = await (async () => {
   const javascriptWithMocks = javascript
     .replace(
       /from "(http|http2|https|fs|os|process)"/g,
-      `from "${dirname(import.meta.url)}/mocks.mjs"`,
+      `from "${useTemporaryFile
+        ? relative(tmpdir(), dirname(import.meta.url).replace(/file:\/\//, ''))
+        : dirname(import.meta.url)}/mocks.mjs"`,
     )
     .replace(/3000/g, "3");
-  const base64Module = `data:text/javascript;base64,${Buffer.from(
-    javascriptWithMocks,
-  ).toString("base64url")}`;
+
+  if (useTemporaryFile)
+    await writeRealFile(temporaryFileLocation, javascriptWithMocks)
+
+  const base64Module = useTemporaryFile
+    ? temporaryFileLocation
+    : `data:text/javascript;base64,${Buffer.from(
+      javascriptWithMocks,
+    ).toString("base64url")}`;
   return await import(base64Module);
 })();
 
@@ -749,5 +760,140 @@ describe('Recorder switches logic', () => {
     recorderHandler(state, Buffer.from('{"autoRecord":true,"mode":"proxy"}'), false);
     assert.equal(state.mode, "proxy");
     assert.equal(state.mockConfig.autoRecord, true);
+  })
+});
+
+describe('Mock server matcher', () => {
+  it('should work when there is an exact match', async () => {
+    let body = ''
+    await serve({
+      config: {
+        port: 1337,
+        mapping: {}
+      },
+      mockConfig: {
+        autoRecord: true,
+        strict: true,
+        mocks: new Map([[
+          Buffer.from(JSON.stringify({
+            method: "GET",
+            url: "/",
+            headers: { host: 'example.com' },
+            body: ""
+          })).toString("base64"),
+          Buffer.from(JSON.stringify({
+            body:
+              Buffer.from("matched a mock").toString('base64')
+          })).toString("base64")
+        ]])
+      },
+      logsListeners: [],
+      mode: 'mock',
+      log: () => { },
+      notifyLogsListeners: () => { }
+    }, {
+      method: 'GET',
+      url: '/',
+      headers: {
+        host: 'example.com'
+      },
+      readableLength: 0,
+    }, {
+      writeHead: () => { },
+      end: (payload) => {
+        body = payload.toString("ascii")
+      }
+    })
+    assert.equal(body, "matched a mock");
+  })
+
+  it('should match when the request has more headers than the mock', async () => {
+    let body = ''
+    await serve({
+      config: {
+        port: 1337,
+        mapping: {}
+      },
+      mockConfig: {
+        autoRecord: true,
+        strict: true,
+        mocks: new Map([[
+          Buffer.from(JSON.stringify({
+            method: "GET",
+            url: "/",
+            headers: { host: 'example.com' },
+            body: ""
+          })).toString("base64"),
+          Buffer.from(JSON.stringify({
+            body:
+              Buffer.from("matched a mock").toString('base64')
+          })).toString("base64")
+        ]])
+      },
+      logsListeners: [],
+      mode: 'mock',
+      log: () => { },
+      notifyLogsListeners: () => { }
+    }, {
+      method: 'GET',
+      url: '/',
+      headers: {
+        'X-My-Header': 'My-Value',
+        host: 'example.com'
+      },
+      readableLength: 0,
+    }, {
+      writeHead: () => { },
+      end: (payload) => {
+        body = payload.toString("ascii")
+      }
+    })
+    assert.equal(body, "matched a mock");
+  })
+
+  it('should not match when the mock has more headers than the request', async () => {
+    let body = ''
+    await serve({
+      config: {
+        port: 1337,
+        mapping: {}
+      },
+      mockConfig: {
+        autoRecord: true,
+        strict: true,
+        mocks: new Map([[
+          Buffer.from(JSON.stringify({
+            method: "GET",
+            url: "/",
+            headers: {
+              host: 'example.com',
+              'X-My-Header': 'My-Value',
+            },
+            body: ""
+          })).toString("base64"),
+          Buffer.from(JSON.stringify({
+            body:
+              Buffer.from("matched a mock").toString('base64')
+          })).toString("base64")
+        ]])
+      },
+      logsListeners: [],
+      mode: 'mock',
+      log: () => { },
+      notifyLogsListeners: () => { }
+    }, {
+      method: 'GET',
+      url: '/',
+      headers: {
+        host: 'example.com'
+      },
+      readableLength: 0,
+    }, {
+      writeHead: () => { },
+      end: (payload) => {
+        body = payload.toString("ascii")
+      }
+    })
+    assert.match(body, /No corresponding mock found in the server\./);
   })
 });
