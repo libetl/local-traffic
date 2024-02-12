@@ -28,7 +28,7 @@ import {
 } from "./mocks.mjs";
 
 const temporaryFileLocation = `${tmpdir()}/local-traffic.mjs`;
-const useTemporaryFile = true
+const useTemporaryFile = false
 const localTraffic = await (async () => {
   const source = (
     await realReadFile(
