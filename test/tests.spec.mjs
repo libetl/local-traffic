@@ -28,7 +28,7 @@ import {
 } from "./mocks.mjs";
 
 const temporaryFileLocation = `${tmpdir()}/local-traffic.mjs`;
-const useTemporaryFile = false
+const useTemporaryFile = true
 const localTraffic = await (async () => {
   const source = (
     await realReadFile(
@@ -849,6 +849,94 @@ describe('Mock server matcher', () => {
       }
     })
     assert.equal(body, "matched a mock");
+  })
+
+  it('should match when the most accurate mock when more than one mock match the request', async () => {
+    let body = ''
+    await serve({
+      config: {
+        port: 1337,
+        mapping: {}
+      },
+      mockConfig: {
+        autoRecord: true,
+        strict: true,
+        mocks: new Map([
+        [
+          Buffer.from(JSON.stringify({
+            method: "GET",
+            url: "/",
+            headers: {
+              host: 'example.com',
+              'X-My-Header1': 'My-Value1',
+              'X-My-Header2': 'My-Value2',
+              'X-My-Header3': 'My-Value3',
+            },
+            body: ""
+          })).toString("base64"),
+          Buffer.from(JSON.stringify({
+            body:
+              Buffer.from("matched mock#1").toString('base64')
+          })).toString("base64")
+        ],
+        [
+          Buffer.from(JSON.stringify({
+            method: "GET",
+            url: "/",
+            headers: {
+              host: 'example.com',
+              'X-My-Header1': 'My-Value1',
+              'X-My-Header2': 'My-Value2',
+              'X-My-Header3': 'My-Value3',
+              'X-My-Header4': 'My-Value5',
+            },
+            body: ""
+          })).toString("base64"),
+          Buffer.from(JSON.stringify({
+            body:
+              Buffer.from("matched mock#2").toString('base64')
+          })).toString("base64")
+        ],
+        [
+          Buffer.from(JSON.stringify({
+            method: "GET",
+            url: "/",
+            headers: {
+              host: 'example.com',
+              'X-My-Header1': 'My-Value1',
+              'X-My-Header2': 'My-Value2',
+              'X-My-Header3': 'My-Value3',
+            },
+            body: ""
+          })).toString("base64"),
+          Buffer.from(JSON.stringify({
+            body:
+              Buffer.from("matched mock#3").toString('base64')
+          })).toString("base64")
+        ]])
+      },
+      logsListeners: [],
+      mode: 'mock',
+      log: () => { },
+      notifyLogsListeners: () => { }
+    }, {
+      method: 'GET',
+      url: '/',
+      headers: {
+        host: 'example.com',
+        'X-My-Header1': 'My-Value1',
+        'X-My-Header2': 'My-Value2',
+        'X-My-Header3': 'My-Value3',
+        'X-My-Header4': 'My-Value4',
+      },
+      readableLength: 0,
+    }, {
+      writeHead: () => { },
+      end: (payload) => {
+        body = payload.toString("ascii")
+      }
+    })
+    assert.equal(body, "matched mock#3");
   })
 
   it('should not match when the mock has more headers than the request', async () => {
