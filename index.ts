@@ -2415,10 +2415,10 @@ const serve = async function (
       })
       .sort(([hash1], [hash2]) => {
         const match2RequestObject: RequestStruct = JSON.parse(
-          Buffer.from(hash2, "utf-8").toString("ascii"),
+          Buffer.from(hash2, "base64").toString("ascii"),
         );
         const match1RequestObject: RequestStruct = JSON.parse(
-          Buffer.from(hash1, "utf-8").toString("ascii"),
+          Buffer.from(hash1, "base64").toString("ascii"),
         );
         const match2HasBody = match2RequestObject.body ? 1 : 0;
         const match1HasBody = match1RequestObject.body ? 1 : 0;
