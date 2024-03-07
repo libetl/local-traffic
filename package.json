@@ -32,7 +32,7 @@
   "devDependencies": {
     "@types/node": "^20.11.24",
     "terser": "^5.28.1",
-    "typescript": "^5.3.3"
+    "typescript": "^5.4.2"
   },
   "bin": {
     "local-traffic": "dist/local-traffic.js"
