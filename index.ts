@@ -886,6 +886,40 @@ const recorderHandler = (
     state.quickStatus();
 };
 
+const dataPage = (
+  proxyHostnameAndPort: string,
+  state: State,
+  _request: Http2ServerRequest | IncomingMessage,
+  mappingAttributes?: {
+    target: URL;
+    key: string;
+    proxyHostname: string;
+  }
+): ClientHttp2Session => {
+  const [, contentType, encoding, value] = /^data:([^;,]*)?;?([^,])?,(.*)$/.exec(
+    mappingAttributes?.target.href ?? "data:,") ?? ['', '', '', ''];
+  const decodedValue = decodeURIComponent(value)
+  const rawText = encoding === 'base64' ?
+    Buffer.from(decodedValue, 'base64url').toString('binary')
+    : decodedValue;
+  return staticResponse(
+    !state.config.replaceResponseBodyUrls
+      ? rawText
+      : replaceBody(Buffer.from(rawText), {
+        'content-type': contentType ? contentType : 'text/plain'
+      }, {
+        mapping: state.config.mapping,
+        proxyHostnameAndPort,
+        proxyHostname: mappingAttributes?.proxyHostname,
+        key: mappingAttributes?.key,
+        direction: REPLACEMENT_DIRECTION.INBOUND,
+        ssl: !!state.config.ssl,
+        port: state.config.port
+      }), {
+    contentType,
+  })
+}
+
 const recorderPage = (
   proxyHostnameAndPort: string,
   state: State,
@@ -1240,17 +1274,140 @@ ${logsView(proxyHostnameAndPort, state.config, { captureResponseBody: true })}
 </html>`);
 };
 
+const filePage = (_proxyHostnameAndPort: string,
+  _state: State,
+  _request: Http2ServerRequest | IncomingMessage,
+  mappingAttributes: { target: URL }): ClientHttp2Session => {
+  const url = mappingAttributes?.target;
+  const file = resolve(
+    "/",
+    url.hostname,
+    ...url.pathname
+      .replace(/[?#].*$/, "")
+      .replace(/^\/+/, "")
+      .split("/")
+      .map(decodeURIComponent),
+  );
+  return {
+    error: null as Error,
+    data: null as string | Buffer,
+    hasRun: false,
+    run: function () {
+      return this.hasRun
+        ? Promise.resolve()
+        : new Promise(promiseResolve =>
+          readFile(file, (error, data) => {
+            this.hasRun = true;
+            if (!error || error.code !== "EISDIR") {
+              this.error = error;
+              this.data = data;
+              promiseResolve(void 0);
+              return;
+            }
+            readdir(file, (readDirError, filelist) => {
+              this.error = readDirError;
+              this.data = filelist;
+              if (readDirError) {
+                promiseResolve(void 0);
+                return;
+              }
+              Promise.all(
+                filelist.map(
+                  file =>
+                    new Promise(innerResolve =>
+                      lstat(resolve(url.pathname, file), (err, stats) =>
+                        innerResolve([file, stats, err]),
+                      ),
+                    ),
+                ),
+              ).then(filesWithTypes => {
+                const entries = filesWithTypes
+                  .filter(entry => !entry[2] && entry[1].isDirectory())
+                  .concat(
+                    filesWithTypes.filter(
+                      entry => !entry[2] && entry[1].isFile(),
+                    ),
+                  );
+                this.data = `${header(
+                  0x1f4c2,
+                  "directory",
+                  url.href,
+                )}<p>Directory content of <i>${url.href.replace(
+                  /\//g,
+                  "&#x002F;",
+                )}</i></p><ul class="list-group"><li class="list-group-item">&#x1F4C1;<a href="${url.pathname.endsWith("/") ? ".." : "."
+                  }">&lt;parent&gt;</a></li>${entries
+                    .filter(entry => !entry[2])
+                    .map(entry => {
+                      const type = entry[1].isDirectory() ? 0x1f4c1 : 0x1f4c4;
+                      return `<li class="list-group-item">&#x${type.toString(
+                        16,
+                      )};<a href="${url.pathname.endsWith("/")
+                        ? ""
+                        : `${url.pathname.split("/").slice(-1)[0]}/`
+                        }${entry[0]}">${entry[0]}</a></li>`;
+                    })
+                    .join("\n")}</li></ul></body></html>`;
+                promiseResolve(void 0);
+              });
+            });
+          }),
+        );
+    },
+    events: {} as { [name: string]: (...any: any) => any },
+    on: function (name: string, action: (...any: any) => any) {
+      this.events[name] = action;
+      this.run().then(() => {
+        if (name === "response")
+          this.events["response"](
+            file.endsWith(".svg")
+              ? {
+                Server: "local",
+                "Content-Type": "image/svg+xml",
+              }
+              : { Server: "local" },
+            0,
+          );
+        if (name === "data" && this.data) {
+          this.events["data"](this.data);
+          this.events["end"]();
+        }
+        if (name === "error" && this.error) {
+          this.events["error"](this.error);
+        }
+      });
+      return this;
+    },
+    end: function () {
+      return this;
+    },
+    request: function () {
+      return this;
+    },
+    write: function () {
+      return this;
+    },
+  } as unknown as ClientHttp2Session;
+};
+
 const specialPageMapping: Record<
   string,
   (
     proxyHostnameAndPort: string,
     state: State,
     request: Http2ServerRequest | IncomingMessage,
+    mappingAttributes: {
+      target: URL;
+      proxyHostname: string,
+      key: string,
+    }
   ) => ClientHttp2Session
 > = {
   logs: logsPage,
   config: configPage,
   recorder: recorderPage,
+  file: filePage,
+  data: dataPage,
 };
 const specialPages = Object.keys(specialPageMapping);
 const specialProtocols = specialPages.map(page => `${page}:`);
@@ -1258,7 +1415,8 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   Pick<LocalConfiguration, "ssl"> = {
   mapping: Object.assign(
     {},
-    ...specialPages.map(page => ({ [`/${page}/`]: `${page}://` })),
+    ...specialPages.filter(page => page !== "data" && page !== "file")
+      .map(page => ({ [`/${page}/`]: `${page}://` })),
   ),
   port: 8080,
   replaceRequestBodyUrls: false,
@@ -1546,121 +1704,8 @@ const mockRequest = ({
   } as unknown as ClientHttp2Session;
 };
 
-const fileRequest = (url: URL): ClientHttp2Session => {
-  const file = resolve(
-    "/",
-    url.hostname,
-    ...url.pathname
-      .replace(/[?#].*$/, "")
-      .replace(/^\/+/, "")
-      .split("/"),
-  );
-  return {
-    error: null as Error,
-    data: null as string | Buffer,
-    hasRun: false,
-    run: function () {
-      return this.hasRun
-        ? Promise.resolve()
-        : new Promise(promiseResolve =>
-            readFile(file, (error, data) => {
-              this.hasRun = true;
-              if (!error || error.code !== "EISDIR") {
-                this.error = error;
-                this.data = data;
-                promiseResolve(void 0);
-                return;
-              }
-              readdir(file, (readDirError, filelist) => {
-                this.error = readDirError;
-                this.data = filelist;
-                if (readDirError) {
-                  promiseResolve(void 0);
-                  return;
-                }
-                Promise.all(
-                  filelist.map(
-                    file =>
-                      new Promise(innerResolve =>
-                        lstat(resolve(url.pathname, file), (err, stats) =>
-                          innerResolve([file, stats, err]),
-                        ),
-                      ),
-                  ),
-                ).then(filesWithTypes => {
-                  const entries = filesWithTypes
-                    .filter(entry => !entry[2] && entry[1].isDirectory())
-                    .concat(
-                      filesWithTypes.filter(
-                        entry => !entry[2] && entry[1].isFile(),
-                      ),
-                    );
-                  this.data = `${header(
-                    0x1f4c2,
-                    "directory",
-                    url.href,
-                  )}<p>Directory content of <i>${url.href.replace(
-                    /\//g,
-                    "&#x002F;",
-                  )}</i></p><ul class="list-group"><li class="list-group-item">&#x1F4C1;<a href="${
-                    url.pathname.endsWith("/") ? ".." : "."
-                  }">&lt;parent&gt;</a></li>${entries
-                    .filter(entry => !entry[2])
-                    .map(entry => {
-                      const type = entry[1].isDirectory() ? 0x1f4c1 : 0x1f4c4;
-                      return `<li class="list-group-item">&#x${type.toString(
-                        16,
-                      )};<a href="${
-                        url.pathname.endsWith("/")
-                          ? ""
-                          : `${url.pathname.split("/").slice(-1)[0]}/`
-                      }${entry[0]}">${entry[0]}</a></li>`;
-                    })
-                    .join("\n")}</li></ul></body></html>`;
-                  promiseResolve(void 0);
-                });
-              });
-            }),
-          );
-    },
-    events: {} as { [name: string]: (...any: any) => any },
-    on: function (name: string, action: (...any: any) => any) {
-      this.events[name] = action;
-      this.run().then(() => {
-        if (name === "response")
-          this.events["response"](
-            file.endsWith(".svg")
-              ? {
-                  Server: "local",
-                  "Content-Type": "image/svg+xml",
-                }
-              : { Server: "local" },
-            0,
-          );
-        if (name === "data" && this.data) {
-          this.events["data"](this.data);
-          this.events["end"]();
-        }
-        if (name === "error" && this.error) {
-          this.events["error"](this.error);
-        }
-      });
-      return this;
-    },
-    end: function () {
-      return this;
-    },
-    request: function () {
-      return this;
-    },
-    write: function () {
-      return this;
-    },
-  } as unknown as ClientHttp2Session;
-};
-
 const staticResponse = (
-  data: string,
+  data: string | Promise<Buffer>,
   options?: {
     contentType?: string;
     onOutboundWrite?: (buffer: Buffer) => void;
@@ -1671,9 +1716,11 @@ const staticResponse = (
     data: null as string | Buffer,
     outboundData: null as Buffer,
     run: function () {
-      return new Promise(resolve => {
+      return typeof data === 'string' ? new Promise(resolve => {
         this.data = data;
         resolve(void 0);
+      }) : (data as Promise<Buffer>).then(text => {
+        this.data = text.toString('utf8');
       });
     },
     events: {} as { [name: string]: (...any: any) => any },
@@ -1713,7 +1760,10 @@ const staticResponse = (
 
 const replaceBody = async (
   payloadBuffer: Buffer,
-  headers: Record<string, number | string | string[]>,
+  headers: {
+    'content-encoding'?: string;
+    'content-type'?: string;
+  },
   parameters: {
     mapping: Mapping;
     proxyHostnameAndPort: string;
@@ -1847,7 +1897,7 @@ const replaceTextUsingMapping = (
             new RegExp(
               value
                 .replace(
-                  new RegExp(`^(file|${specialPages.join("|")}):\/\/`),
+                  new RegExp(`^(${specialPages.join("|")}):\/\/`),
                   "",
                 )
                 .replace(/[*+?^${}()|[\]\\]/g, "")
@@ -1986,11 +2036,13 @@ const determineMapping = (
   const mappings: Record<string, URL> = {
     ...Object.assign(
       {},
-      ...Object.entries(parameters.mapping).map(([key, value]) => ({
-        [key]: new URL(
-          unixNorm(typeof value === "string" ? value : value.downstreamUrl),
+      ...Object.entries(parameters.mapping).map(([key, entry]) => {
+        const value = typeof entry === "string" ? entry : (entry?.downstreamUrl ?? "")
+        return ({
+          [key]: new URL(value?.startsWith?.("data:") ? value : unixNorm(value)
         ),
-      })),
+        })
+      }),
     ),
   };
 
@@ -2216,14 +2268,15 @@ const serve = async function (
     );
     return;
   }
+  const protocolSlashes = target.protocol === 'data:' ? '' : '//'
   const targetHost = target.host.replace(RegExp(/\/+$/), "");
   const targetPrefix = target.href.substring(
-    `${target.protocol}//`.length + target.host.length,
+    `${target.protocol}${protocolSlashes}`.length + target.host.length,
   );
-  const fullPath = `${targetPrefix}${unixNorm(
+  const fullPath = target.protocol === 'file:' ? targetPrefix : `${targetPrefix}${unixNorm(
     path.replace(RegExp(unixNorm(key)), ""),
-  )}`.replace(/^\/*/, "/");
-  const targetUrl = new URL(`${target.protocol}//${targetHost}${fullPath}`);
+  )}`.replace(/^\/*/, target.protocol === 'data:' ? '' : '/');
+  const targetUrl = new URL(`${target.protocol}${protocolSlashes}${targetHost}${fullPath}`);
   const targetUsesSpecialProtocol = specialProtocols.some(
     protocol => target.protocol === protocol,
   );
@@ -2233,7 +2286,6 @@ const serve = async function (
     http2IsSupported &&
     (state.mode === ServerMode.PROXY || !state?.mockConfig?.strict) &&
     !targetUsesSpecialProtocol &&
-    target.protocol !== "file:" &&
     (await Promise.race([
       new Promise<ClientHttp2Session>(resolve => {
         const result = connect(
@@ -2341,7 +2393,6 @@ const serve = async function (
         ? requestBody?.toString("base64") ?? ""
         : "",
   });
-  const targetIsFile = target.protocol === "file:";
 
   state.notifyLogsListeners({
     level: "info",
@@ -2389,8 +2440,7 @@ const serve = async function (
   }
 
   const shouldMock =
-    state.mode === ServerMode.MOCK &&
-    (!targetUsesSpecialProtocol || targetIsFile);
+    state.mode === ServerMode.MOCK && !targetUsesSpecialProtocol;
 
   const foundMock =
     state.mockConfig.mocks.get(uniqueHash) ??
@@ -2452,13 +2502,12 @@ const serve = async function (
   const outboundRequest: ClientHttp2Session =
     shouldMock && foundMock
       ? mockRequest({ response: foundMock })
-      : targetIsFile
-      ? fileRequest(targetUrl)
       : targetUsesSpecialProtocol
       ? specialPageMapping[target.protocol.replace(/:$/, "")](
           proxyHostnameAndPort,
           state,
           inboundRequest,
+        { target: targetUrl, proxyHostname, key }
         )
       : http2IsSupported
       ? http2Connection
@@ -2538,7 +2587,7 @@ const serve = async function (
   const outboundHttp1Response: IncomingMessage =
     !error &&
     !http2IsSupported &&
-    !["file:", ...specialProtocols].includes(target.protocol) &&
+    ![...specialProtocols].includes(target.protocol) &&
     (await new Promise(resolve => {
       const outboundHttp1Request: ClientRequest =
         target.protocol === "https:"
@@ -2637,7 +2686,7 @@ const serve = async function (
             ssl: !!state.config.ssl,
             mapping: state.config.mapping,
           }).replace(
-            new RegExp(`^(${specialProtocols.join("|")}|file:)\/+`),
+            new RegExp(`^(${specialProtocols.join("|")})\/+`),
             "",
           ),
         );
