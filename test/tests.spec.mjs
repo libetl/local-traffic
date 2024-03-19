@@ -685,6 +685,38 @@ describe("server cruise", async () => {
     assert.notEqual(responseText, expectedResponseText);
     assert.equal(actualText, expectedResponseText);
   });
+
+  it("Data url should use replace response body urls feature", async () => {
+    await start({
+      port: 8080,
+      simpleLogs: false,
+      replaceResponseBodyUrls: true,
+      mapping: {
+        "/test.html": "data:text/html,Hello, this is the value you've been looking for: https://acme.com/data-service/v1/companies/59884/data/27/values",
+        "/other-data-service/v1/companies/59884/data/27/values": {
+          "replaceBody":"https://acme.com/data-service/v1/companies/59884/data/27/values",
+          "downstreamUrl": "file:///Users/me/Projects/tmp/data-service/27.json"
+        },
+        "": "https://www.acme.com"
+      }
+    });
+
+    buffers.unshift(
+      `request=${JSON.stringify({
+        method: "GET",
+        headers: {
+          host: "localhost",
+        },
+        url: "/test.html",
+      })}`,
+    );
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    const response = responses.shift();
+    assert.equal(response.code, 200);
+    assert.equal(response.body.toString('utf8'), 
+    "Hello, this is the value you've been looking for: http://localhost:8080/other-data-service/v1/companies/59884/data/27/values/");
+  })
 });
 
 describe('Internal features of the server', () => {
@@ -713,7 +745,7 @@ describe('Internal features of the server', () => {
       assert.equal(target.href, "https://github.com/mdbell/")
     })
   })
-})
+});
 
 describe('Websocket feature', () => {
   it("should send a payload of 123278 bytes with the payload length set to 0x1E18E", () => {
