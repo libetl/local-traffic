@@ -2273,7 +2273,9 @@ const serve = async function (
   const targetPrefix = target.href.substring(
     `${target.protocol}${protocolSlashes}`.length + target.host.length,
   );
-  const fullPath = target.protocol === 'file:' ? targetPrefix : `${targetPrefix}${unixNorm(
+  const fullPath = target.protocol === 'file:' || target.protocol === 'data:'
+  ? targetPrefix
+  : `${targetPrefix}${unixNorm(
     path.replace(RegExp(unixNorm(key)), ""),
   )}`.replace(/^\/*/, target.protocol === 'data:' ? '' : '/');
   const targetUrl = new URL(`${target.protocol}${protocolSlashes}${targetHost}${fullPath}`);
