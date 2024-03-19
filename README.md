@@ -30,12 +30,12 @@ npx local-traffic
   "mapping": {
     "/npm/": "https://www.npmjs.com/",
     "/my-static-webapp/": "file:///home/user/projects/my-static-webapp/",
-    "/welcome/": "data:text/html,<a href=\"https://acme.com/acme.js\">See my hobby project</a>",
+    "/welcome/": "data:text/html,<a href=\"https://ac.me/acme.js\">See my hobby project</a>",
     "/config/": "config://",
     "/logs/": "logs://",
     "/recorder/": "recorder://",
     "/jquery-local/jquery.js": {
-      "replaceBody": "https://mycdn.net/jquery/jquery-3.6.4.js",
+      "replaceBody": "https://ac.me/acme.js",
       "downstreamUrl": "file:///home/user/projects/zepto/dist/zepto.js"
     },
     "": "https://github.com/"
