@@ -5,7 +5,7 @@ That is a secure http/2 (or insecure http1.1) reverse-proxy installed on your ma
 - with 0 transitive dependency
 - with 1 install step
 - with a startup time of a few milliseconds
-- with one 59kb index.js file
+- with one 60kb index.js file
 
 How simple is that ?
 
@@ -48,12 +48,13 @@ npx local-traffic
 2. Go to [http://localhost:8080/prettier](http://localhost:8080/prettier) with your browser
 3. Go to [http://localhost:8080/npm/](http://localhost:8080/npm) with your browser
 4. Go to [http://localhost:8080/my-static-webapp/index.html](http://localhost:8080/my-static-webapp/index.html) with your browser (given your project name is my-static-webapp, but I am not 100% sure)
-5. Go to [http://localhost:8080/logs/](http://localhost:8080/logs/) to watch the request logs
-6. Go to [http://localhost:8080/config/](http://localhost:8080/config/) to change the config in a web editor
-7. You can use the [http://localhost:8080/recorder/](recorder) to turn your proxy into a mock server. There is a user interface and also an API (documented [here](#recorder-api))
-8. From the web config editor, create a SSL keypair and start working with a self signed SSL certificate right away
-9. Your page will use /jquery-local/jquery.js instead of the CDN asset, and will serve the file from your hard drive
-10. Your server now proxies the mapping that you have configured
+5. Go to [http://localhost:8080/welcome/](http://localhost:8080/welcome/) with your browser (data urls work with version >= 0.0.94)
+6. Go to [http://localhost:8080/logs/](http://localhost:8080/logs/) to watch the request logs
+7. Go to [http://localhost:8080/config/](http://localhost:8080/config/) to change the config in a web editor
+8. You can use the [http://localhost:8080/recorder/](recorder) to turn your proxy into a mock server. There is a user interface and also an API (documented [here](#recorder-api))
+9. From the web config editor, create a SSL keypair and start working with a self signed SSL certificate right away
+10. Your page will use /jquery-local/jquery.js instead of the CDN asset, and will serve the file from your hard drive
+11. Your server now proxies the mapping that you have configured
 
 ## usage
 
