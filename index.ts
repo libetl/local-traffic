@@ -896,7 +896,7 @@ const dataPage = (
     proxyHostname: string;
   }
 ): ClientHttp2Session => {
-  const [, contentType, encoding, value] = /^data:([^;,]*)?;?([^,])?,(.*)$/.exec(
+  const [, contentType, encoding, value] = /^data:([^;,]*)?;?([^,]*)?,(.*)$/.exec(
     mappingAttributes?.target.href ?? "data:,") ?? ['', '', '', ''];
   const decodedValue = decodeURIComponent(value)
   const rawText = encoding === 'base64' ?
