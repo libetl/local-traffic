@@ -31,6 +31,7 @@ npx local-traffic
     "/npm/": "https://www.npmjs.com/",
     "/my-static-webapp/": "file:///home/user/projects/my-static-webapp/",
     "/welcome/": "data:text/html,<a href=\"https://ac.me/acme.js\">See my hobby project</a>",
+    "/(see-this-example|yet-another-example)": "http://example.com/$$1",
     "/config/": "config://",
     "/logs/": "logs://",
     "/recorder/": "recorder://",
@@ -48,13 +49,14 @@ npx local-traffic
 2. Go to [http://localhost:8080/prettier](http://localhost:8080/prettier) with your browser
 3. Go to [http://localhost:8080/npm/](http://localhost:8080/npm) with your browser
 4. Go to [http://localhost:8080/my-static-webapp/index.html](http://localhost:8080/my-static-webapp/index.html) with your browser (given your project name is my-static-webapp, but I am not 100% sure)
-5. Go to [http://localhost:8080/welcome/](http://localhost:8080/welcome/) with your browser (data urls work with version >= 0.0.94)
-6. Go to [http://localhost:8080/logs/](http://localhost:8080/logs/) to watch the request logs
-7. Go to [http://localhost:8080/config/](http://localhost:8080/config/) to change the config in a web editor
-8. You can use the [http://localhost:8080/recorder/](recorder) to turn your proxy into a mock server. There is a user interface and also an API (documented [here](#recorder-api))
-9. From the web config editor, create a SSL keypair and start working with a self signed SSL certificate right away
-10. Your page will use /jquery-local/jquery.js instead of the CDN asset, and will serve the file from your hard drive
-11. Your server now proxies the mapping that you have configured
+5. Go to [http://localhost:8080/see-this-example](http://localhost:8080/see-this-example) or to [http://localhost:8080/yet-another-example](http://localhost:8080/yet-another-example) with your browser. Starting 0.0.89 and above, it supports regular expressions, and it is able to match them against the destination through string interpolation. Start with a double dollar sign (`$$`) followed by the index of the value in the [match array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/match#return_value)
+6. Go to [http://localhost:8080/welcome/](http://localhost:8080/welcome/) with your browser (data urls work with version >= 0.0.94)
+7. Go to [http://localhost:8080/logs/](http://localhost:8080/logs/) to watch the request logs
+8. Go to [http://localhost:8080/config/](http://localhost:8080/config/) to change the config in a web editor
+9. You can use the [http://localhost:8080/recorder/](recorder) to turn your proxy into a mock server. There is a user interface and also an API (documented [here](#recorder-api))
+10. From the web config editor, create a SSL keypair and start working with a self signed SSL certificate right away
+11. Your page will use /jquery-local/jquery.js instead of the CDN asset, and will serve the file from your hard drive
+12. Your server now proxies the mapping that you have configured
 
 ## usage
 
@@ -77,20 +79,6 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 1. Open `.local-traffic.json` while running it, or use the config web editor
 2. Edit the mapping keys and downstream urls
 3. See the status update in the terminal, that's it.
-
-## mapping string interpolations (>=0.0.89) 
-The `mapping` entries support regular expressions, and are able to match them against the destination through string interpolation. They match a double dollar sign (`$$`) followed by the index of the value in the [match array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/match#return_value).
-
-For example:
-```json
-{
-  "mappings": {
-    "/(example|test)": "http://example.com/$$1"
-  }
-}
-```
-
-Would map both "/example" and "/test" to "http://example.com/example" and "http://example.com/test" respectively.
 
 ## all the options
 
