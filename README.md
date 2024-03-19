@@ -30,7 +30,7 @@ npx local-traffic
   "mapping": {
     "/npm/": "https://www.npmjs.com/",
     "/my-static-webapp/": "file:///home/user/projects/my-static-webapp/",
-    "/welcome/": "data:text/html,<a href=\"https://mycdn.net/jquery/jquery-3.6.4.js\">See my hobby project</a>",
+    "/welcome/": "data:text/html,<a href=\"https://acme.com/acme.js\">See my hobby project</a>",
     "/config/": "config://",
     "/logs/": "logs://",
     "/recorder/": "recorder://",
