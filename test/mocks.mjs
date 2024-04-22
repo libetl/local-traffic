@@ -31,8 +31,9 @@ export const createSecureServer = mock.fn(
 );
 export const connect = mock.fn((targetUrl, _2, resolve) => {
   if (!targetUrl?.pathname?.includes("http1"))
-    process.nextTick(() => resolve({}, { alpnProtocol: true }));
+    process.nextTick(() => resolve({}, { alpnProtocol: 'h2c' }));
   return {
+    alpnProtocol: 'h2c',
     on: (event, callback) => {},
     request: http2OutboundRequest => {
       http2OutboundRequests.unshift(http2OutboundRequest);
@@ -134,8 +135,10 @@ export const setup = () => {
         Object.assign(response, {
           writeHead: (code, statusMessage, headers) => {
             response.code = code ?? 200;
-            response.statusMessage = statusMessage ?? "";
-            response.headers = headers ?? {};
+            response.statusMessage = typeof statusMessage === 'object' ? "" :
+            statusMessage ?? "";
+            response.headers = typeof statusMessage === 'object' ? statusMessage :
+            headers ?? {};
           },
           setHeader: (headerName, headerValue) => {
             response.headers = response.headers ?? {};
