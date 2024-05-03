@@ -1411,7 +1411,7 @@ const filePage = (
   } as unknown as ClientHttp2Session;
 };
 
-const httpPage = async (
+const http2Page = async (
   _proxyHostnameAndPort: string,
   state: State,
   mappingAttributes: { target: URL; url: URL },
@@ -1461,6 +1461,120 @@ const httpPage = async (
         ]);
   if (error) throw error;
   return http2IsSupported ? http2Connection : (null as any);
+};
+
+const http1Page = async (
+  target: URL,
+  url: URL,
+  targetUrl: URL,
+  fullPath: string,
+  inboundRequest: IncomingMessage | Http2ServerRequest,
+  outboundHeaders: OutgoingHttpHeaders,
+  requestBody: Buffer,
+  bufferedRequestBody: boolean,
+  mode: ServerMode
+): Promise<ClientHttp2Session> => {
+  const http1RequestOptions: RequestOptions = {
+    hostname: target.hostname,
+    path: fullPath,
+    port: target.port ? target.port : target.protocol === "https:" ? 443 : 80,
+    protocol: target.protocol,
+    rejectUnauthorized: false,
+    method: inboundRequest.method,
+    headers: {
+      ...Object.assign(
+        {},
+        ...Object.entries(outboundHeaders)
+          .filter(
+            ([h]) =>
+              !h.startsWith(":") && h.toLowerCase() !== "transfer-encoding",
+          )
+          .map(([key, value]) => ({ [key]: value })),
+      ),
+      host: target.hostname,
+    },
+  };
+  let error: Buffer | null = null;
+  const outboundHttp1Response: IncomingMessage | null = error
+    ? null
+    : [...specialProtocols].includes(target.protocol)
+        ? null
+        : await new Promise(resolve => {
+            const outboundHttp1Request: ClientRequest =
+              target.protocol === "https:"
+                ? httpsRequest(http1RequestOptions, resolve)
+                : httpRequest(http1RequestOptions, resolve);
+
+            outboundHttp1Request.on("error", thrown => {
+              error = Buffer.from(
+                errorPage(thrown, mode, "request", url, targetUrl),
+              );
+              resolve(null);
+            });
+            if (bufferedRequestBody) {
+              outboundHttp1Request.write(requestBody);
+              outboundHttp1Request.end();
+            }
+
+            if (!bufferedRequestBody) {
+              inboundRequest.on("data", chunk =>
+                outboundHttp1Request.write(chunk),
+              );
+              inboundRequest.on("end", () => outboundHttp1Request.end());
+            }
+          });
+  if(error) throw error;
+  return {
+    alpnProtocol: "h1",
+    error: null as unknown as Error,
+    data: null as unknown as MockResponseObject,
+    hasRun: false,
+    run: function () {
+      return this.hasRun
+        ? Promise.resolve()
+        : new Promise(promiseResolve => {
+            try {
+              this.data = JSON.parse(
+                Buffer.from(response, "base64").toString("utf-8"),
+              );
+            } catch (e) {
+              this.data = {};
+            }
+            promiseResolve(void 0);
+          });
+    },
+    events: {} as { [name: string]: (...any: any) => any },
+    on: function (name: string, action: (...any: any) => any) {
+      this.events[name] = action;
+      this.run().then(() => {
+        if (name === "response")
+          this.events["response"](
+            {
+              ...this.data.headers,
+              "X-LocalTraffic-Mock": "1",
+            },
+            this.data.status,
+          );
+        if (name === "data" && this.data) {
+          this.events["data"](Buffer.from(this.data.body ?? "", "base64"));
+          this.events["end"]();
+        }
+        if (name === "error" && this.error) {
+          this.events["error"](this.error);
+        }
+      });
+      return this;
+    },
+    end: function () {
+      return this;
+    },
+    request: function () {
+      return this;
+    },
+    write: function () {
+      return this;
+    },
+  } as unknown as ClientHttp2Session;
 };
 
 const specialPageMapping: Record<
@@ -2389,7 +2503,7 @@ const serve = async function (
   const randomId = randomBytes(20).toString("hex");
   let requestBody: Buffer | null = null;
   const bufferedRequestBody =
-    state.config.replaceRequestBodyUrls || state.logsListeners.length;
+    state.config.replaceRequestBodyUrls || !!state.logsListeners.length;
   const http1WithRequestBody = (inboundRequest as IncomingMessage)
     ?.readableLength;
   // sounds ridiculous, but yes, I need to wait until the HTTP/2 stream gets read
@@ -2573,10 +2687,17 @@ const serve = async function (
             inboundRequest,
             { target: targetUrl, proxyHostname, key },
           )
-        : await httpPage(proxyHostnameAndPort, state, {
+        : await http2Page(proxyHostnameAndPort, state, {
             target: targetUrl,
             url,
-          }).catch(e => {
+          })
+          .then(session => {
+            if (session) return session
+            return http1Page(target, url, targetUrl, fullPath, inboundRequest,
+              outboundHeaders, requestBody, bufferedRequestBody, state.mode
+            )
+          })
+          .catch(e => {
             error = e;
             return null;
           });
@@ -2645,56 +2766,6 @@ const serve = async function (
       );
     });
 
-  const http1RequestOptions: RequestOptions = {
-    hostname: target.hostname,
-    path: fullPath,
-    port: target.port ? target.port : target.protocol === "https:" ? 443 : 80,
-    protocol: target.protocol,
-    rejectUnauthorized: false,
-    method: inboundRequest.method,
-    headers: {
-      ...Object.assign(
-        {},
-        ...Object.entries(outboundHeaders)
-          .filter(
-            ([h]) =>
-              !h.startsWith(":") && h.toLowerCase() !== "transfer-encoding",
-          )
-          .map(([key, value]) => ({ [key]: value })),
-      ),
-      host: target.hostname,
-    },
-  };
-  const outboundHttp1Response: IncomingMessage | null = error
-    ? null
-    : protocol !== "HTTP1.1"
-      ? null
-      : [...specialProtocols].includes(target.protocol)
-        ? null
-        : await new Promise(resolve => {
-            const outboundHttp1Request: ClientRequest =
-              target.protocol === "https:"
-                ? httpsRequest(http1RequestOptions, resolve)
-                : httpRequest(http1RequestOptions, resolve);
-
-            outboundHttp1Request.on("error", thrown => {
-              error = Buffer.from(
-                errorPage(thrown, state.mode, "request", url, targetUrl),
-              );
-              resolve(null);
-            });
-            if (bufferedRequestBody) {
-              outboundHttp1Request.write(requestBody);
-              outboundHttp1Request.end();
-            }
-
-            if (!bufferedRequestBody) {
-              inboundRequest.on("data", chunk =>
-                outboundHttp1Request.write(chunk),
-              );
-              inboundRequest.on("end", () => outboundHttp1Request.end());
-            }
-          });
   // intriguingly, error is reset to "false" at this point, even if it was null
   if (error) {
     send(502, inboundResponse, error);
