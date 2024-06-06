@@ -2941,8 +2941,7 @@ const serve = async function (
   } catch (e) {
     // ERR_HTTP2_HEADERS_SENT
   }
-  const statusCode = outboundResponseHeaders[":status"];
-  200;
+  const statusCode = outboundResponseHeaders[":status"] ?? 200;
   try {
     if (state.config.ssl) {
       inboundResponse.writeHead(statusCode, responseHeaders);
