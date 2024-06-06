@@ -3187,7 +3187,10 @@ if (crashTest) {
       .on("error", error => resolve({ error, state }))
       .end();
 
-  update({ config: { ...defaultConfig, port }, configFileWatcher: null }, {})
+  update(
+    { config: { ...defaultConfig, port }, configFileWatcher: null },
+    { server: null },
+  )
     .then<{ state: State; response: IncomingMessage }>(
       state =>
         new Promise(resolve =>
