@@ -1417,7 +1417,9 @@ const http2Page = async (
   mappingAttributes: { target: URL; url: URL },
 ): Promise<ClientHttp2Session | null> => {
   let error: Buffer | null = null;
-  let http2IsSupported = !state.config.dontUseHttp2Downstream;
+  let http2IsSupported =
+    mappingAttributes?.target?.protocol === "https:" &&
+    !state.config.dontUseHttp2Downstream;
   const http2Connection = !http2IsSupported
     ? null
     : state.mode !== ServerMode.PROXY && state?.mockConfig?.strict
