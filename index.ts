@@ -3046,7 +3046,7 @@ const update = async (
     );
   }
 
-  if (newState?.server === null) {
+  if (newState?.server === null && currentState.server) {
     const stopped = await Promise.race([
       new Promise(resolve => currentState.server?.close(resolve)).then(
         () => true,
