@@ -47,7 +47,7 @@ const localTraffic = await (async () => {
         ? relative(tmpdir(), dirname(import.meta.url).replace(/file:\/\//, ''))
         : dirname(import.meta.url)}/mocks.mjs"`,
     )
-    .replace(/3000/g, "3");
+    .replace(/3000/g, "3").replace(/5000/g, "5");
 
   if (useTemporaryFile)
     await writeRealFile(temporaryFileLocation, javascriptWithMocks)

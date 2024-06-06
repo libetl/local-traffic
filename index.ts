@@ -1472,7 +1472,7 @@ const http1Page = async (
   outboundHeaders: OutgoingHttpHeaders,
   requestBody: Buffer,
   bufferedRequestBody: boolean,
-  mode: ServerMode
+  mode: ServerMode,
 ): Promise<ClientHttp2Session> => {
   const http1RequestOptions: RequestOptions = {
     hostname: target.hostname,
@@ -1498,72 +1498,46 @@ const http1Page = async (
   const outboundHttp1Response: IncomingMessage | null = error
     ? null
     : [...specialProtocols].includes(target.protocol)
-        ? null
-        : await new Promise(resolve => {
-            const outboundHttp1Request: ClientRequest =
-              target.protocol === "https:"
-                ? httpsRequest(http1RequestOptions, resolve)
-                : httpRequest(http1RequestOptions, resolve);
+      ? null
+      : await new Promise(resolve => {
+          const outboundHttp1Request: ClientRequest =
+            target.protocol === "https:"
+              ? httpsRequest(http1RequestOptions, resolve)
+              : httpRequest(http1RequestOptions, resolve);
 
-            outboundHttp1Request.on("error", thrown => {
-              error = Buffer.from(
-                errorPage(thrown, mode, "request", url, targetUrl),
-              );
-              resolve(null);
-            });
-            if (bufferedRequestBody) {
-              outboundHttp1Request.write(requestBody);
-              outboundHttp1Request.end();
-            }
-
-            if (!bufferedRequestBody) {
-              inboundRequest.on("data", chunk =>
-                outboundHttp1Request.write(chunk),
-              );
-              inboundRequest.on("end", () => outboundHttp1Request.end());
-            }
+          outboundHttp1Request.on("error", thrown => {
+            error = Buffer.from(
+              errorPage(thrown, mode, "request", url, targetUrl),
+            );
+            resolve(null);
           });
-  if(error) throw error;
+          if (bufferedRequestBody) {
+            outboundHttp1Request.write(requestBody);
+            outboundHttp1Request.end();
+          }
+
+          if (!bufferedRequestBody) {
+            inboundRequest.on("data", chunk =>
+              outboundHttp1Request.write(chunk),
+            );
+            inboundRequest.on("end", () => outboundHttp1Request.end());
+          }
+        });
+  if (error) throw error;
   return {
     alpnProtocol: "h1",
     error: null as unknown as Error,
     data: null as unknown as MockResponseObject,
     hasRun: false,
-    run: function () {
-      return this.hasRun
-        ? Promise.resolve()
-        : new Promise(promiseResolve => {
-            try {
-              this.data = JSON.parse(
-                Buffer.from(response, "base64").toString("utf-8"),
-              );
-            } catch (e) {
-              this.data = {};
-            }
-            promiseResolve(void 0);
-          });
-    },
     events: {} as { [name: string]: (...any: any) => any },
     on: function (name: string, action: (...any: any) => any) {
-      this.events[name] = action;
-      this.run().then(() => {
-        if (name === "response")
-          this.events["response"](
-            {
-              ...this.data.headers,
-              "X-LocalTraffic-Mock": "1",
-            },
-            this.data.status,
-          );
-        if (name === "data" && this.data) {
-          this.events["data"](Buffer.from(this.data.body ?? "", "base64"));
-          this.events["end"]();
-        }
-        if (name === "error" && this.error) {
-          this.events["error"](this.error);
-        }
-      });
-      return this;
+      if (name === "response")
+        return action?.({
+          ...outboundHttp1Response.headers,
+          [":status"]: outboundHttp1Response.statusCode,
+          [":statusmessage"]: outboundHttp1Response.statusMessage,
+        });
+      return outboundHttp1Response.on(name, action);
     },
     end: function () {
       return this;
@@ -2677,45 +2651,6 @@ const serve = async function (
   // phase: connection
   let error: Buffer | null = null;
   const startTime = instantTime();
-  const outboundRequest: ClientHttp2Session | null =
-    shouldMock && foundMock
-      ? mockRequest({ response: foundMock })
-      : targetUsesSpecialProtocol
-        ? specialPageMapping[target.protocol.replace(/:$/, "")](
-            proxyHostnameAndPort,
-            state,
-            inboundRequest,
-            { target: targetUrl, proxyHostname, key },
-          )
-        : await http2Page(proxyHostnameAndPort, state, {
-            target: targetUrl,
-            url,
-          })
-          .then(session => {
-            if (session) return session
-            return http1Page(target, url, targetUrl, fullPath, inboundRequest,
-              outboundHeaders, requestBody, bufferedRequestBody, state.mode
-            )
-          })
-          .catch(e => {
-            error = e;
-            return null;
-          });
-
-  const protocol = outboundRequest?.alpnProtocol?.startsWith?.("h2")
-    ? "HTTP/2"
-    : outboundRequest?.alpnProtocol ?? "HTTP1.1";
-  state.notifyLogsListeners({
-    level: "info",
-    protocol,
-    method: inboundRequest.method,
-    upstreamPath: path,
-    downstreamPath: targetUrl.href,
-    randomId,
-    uniqueHash,
-  });
-  if (!((error as any) instanceof Buffer)) error = null;
-
   const outboundHeaders: OutgoingHttpHeaders = {
     ...[...Object.entries(inboundRequest.headers)]
       // host, connection and keep-alive are forbidden in http/2
@@ -2739,17 +2674,63 @@ const serve = async function (
     ":path": fullPath,
     ":scheme": target.protocol.replace(":", ""),
   };
+  const outboundRequest: ClientHttp2Session | null =
+    shouldMock && foundMock
+      ? mockRequest({ response: foundMock })
+      : targetUsesSpecialProtocol
+        ? specialPageMapping[target.protocol.replace(/:$/, "")](
+            proxyHostnameAndPort,
+            state,
+            inboundRequest,
+            { target: targetUrl, proxyHostname, key },
+          )
+        : await http2Page(proxyHostnameAndPort, state, {
+            target: targetUrl,
+            url,
+          })
+            .then(session => {
+              if (session) return session;
+              return http1Page(
+                target,
+                url,
+                targetUrl,
+                fullPath,
+                inboundRequest,
+                outboundHeaders,
+                requestBody,
+                bufferedRequestBody,
+                state.mode,
+              );
+            })
+            .catch(e => {
+              error = e;
+              return null;
+            });
+
+  const protocol = outboundRequest?.alpnProtocol?.startsWith?.("h2")
+    ? "HTTP/2"
+    : outboundRequest?.alpnProtocol ?? "HTTP1.1";
+  state.notifyLogsListeners({
+    level: "info",
+    protocol,
+    method: inboundRequest.method,
+    upstreamPath: path,
+    downstreamPath: targetUrl.href,
+    randomId,
+    uniqueHash,
+  });
+  if (!((error as any) instanceof Buffer)) error = null;
+
   const outboundExchange =
-    outboundRequest &&
     !error &&
-    outboundRequest.request(outboundHeaders, {
+    outboundRequest?.request(outboundHeaders, {
       endStream: state.config.ssl
         ? !(http2WithRequestBody ?? true)
         : !http1WithRequestBody,
     });
 
   typeof outboundExchange === "object" &&
-    outboundExchange?.on("error", (thrown: Error) => {
+    outboundExchange?.on?.("error", (thrown: Error) => {
       const httpVersionSupported = (thrown as ErrorWithErrno).errno === -505;
       error = Buffer.from(
         errorPage(
@@ -2798,20 +2779,13 @@ const serve = async function (
   // phase : response headers
   const { outboundResponseHeaders } = await new Promise<{
     outboundResponseHeaders: IncomingHttpHeaders & IncomingHttpStatusHeader;
-  }>(resolve =>
-    outboundExchange
-      ? outboundExchange.on("response", headers => {
-          resolve({
-            outboundResponseHeaders: headers,
-          });
-        })
-      : !outboundExchange && outboundHttp1Response
-        ? resolve({
-            outboundResponseHeaders: outboundHttp1Response.headers,
-          })
-        : resolve({
-            outboundResponseHeaders: {},
-          }),
+  }>(
+    resolve =>
+      outboundExchange?.on?.("response", headers => {
+        resolve({
+          outboundResponseHeaders: headers,
+        });
+      }) ?? resolve({ outboundResponseHeaders: {} }),
   );
 
   let redirectUrl: URL | null = null;
@@ -2858,16 +2832,15 @@ const serve = async function (
         )}`;
 
   // phase : response body
-  const payloadSource = outboundExchange || outboundHttp1Response;
   const payload: Buffer =
     error ??
     (await new Promise<Buffer>(resolve => {
       let partialBody = Buffer.alloc(0);
-      if (!payloadSource) {
+      if (!outboundExchange) {
         resolve(partialBody);
         return;
       }
-      (payloadSource as ClientHttp2Stream | Duplex).on(
+      (outboundExchange as ClientHttp2Stream | Duplex)?.on?.(
         "data",
         (chunk: Buffer | string) =>
           (partialBody = Buffer.concat([
@@ -2877,7 +2850,7 @@ const serve = async function (
               : (chunk as Buffer),
           ])),
       );
-      (payloadSource as any).on("end", () => {
+      outboundExchange?.on?.("end", () => {
         resolve(partialBody);
       });
     }).then((payloadBuffer: Buffer) => {
@@ -2968,17 +2941,15 @@ const serve = async function (
   } catch (e) {
     // ERR_HTTP2_HEADERS_SENT
   }
-  const statusCode =
-    outboundResponseHeaders[":status"] ??
-    outboundHttp1Response?.statusCode ??
-    200;
+  const statusCode = outboundResponseHeaders[":status"];
+  200;
   try {
     if (state.config.ssl) {
       inboundResponse.writeHead(statusCode, responseHeaders);
     } else {
       inboundResponse.writeHead(
         statusCode,
-        outboundHttp1Response?.statusMessage ?? "",
+        outboundResponseHeaders[":statusmessage"]?.toString() ?? "",
         responseHeaders,
       );
     }
@@ -3030,7 +3001,7 @@ const errorListener = (state: State, err: Error) => {
 };
 
 const start = (config: LocalConfiguration): Promise<State> =>
-  update({ config: { ...defaultConfig, ...config } }, {});
+  update({ config: { ...defaultConfig, ...config } }, { server: null });
 
 const update = async (
   currentState: Partial<State>,
@@ -3139,8 +3110,7 @@ const update = async (
     notifyLogsListeners: notifyLogsListeners.bind(state),
     quickStatus: quickStatus.bind(state),
     server:
-      (newState?.server === null || !state.server) &&
-      !((newState?.config?.port ?? 0) < 0)
+      newState?.server === null && !((newState?.config?.port ?? 0) < 0)
         ? (
             (config?.ssl
               ? createSecureServer.bind(null, {
