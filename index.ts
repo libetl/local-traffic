@@ -2950,7 +2950,9 @@ const serve = async function (
     } else {
       inboundResponse.writeHead(
         statusCode,
-        outboundResponseHeaders[":statusmessage"]?.toString() ?? "",
+        protocol === "HTTP/2"
+          ? ""
+          : outboundResponseHeaders[":statusmessage"]?.toString() ?? "",
         responseHeaders,
       );
     }
