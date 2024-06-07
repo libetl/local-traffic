@@ -1527,7 +1527,7 @@ const http1Page = async (
         });
   if (error) throw error;
   return {
-    alpnProtocol: "h1",
+    alpnProtocol: "HTTP1.1",
     error: null as unknown as Error,
     data: null as unknown as MockResponseObject,
     hasRun: false,
