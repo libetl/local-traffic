@@ -29,7 +29,7 @@ npx local-traffic
 {
   "mapping": {
     "/npm/": "https://www.npmjs.com/",
-    "/my-static-webapp/": "file:///home/user/projects/my-static-webapp/",
+    "/my-static-webapp/(.*)": "file:///home/user/projects/my-static-webapp/$$1",
     "/welcome/": "data:text/html,<a href=\"https://ac.me/acme.js\">See my hobby project</a>",
     "/(see-this-example|yet-another-example)": "http://example.com/$$1",
     "/config/": "config://",
