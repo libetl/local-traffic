@@ -28,7 +28,7 @@ import {
 } from "./mocks.mjs";
 
 const temporaryFileLocation = `${tmpdir()}/local-traffic.mjs`;
-const useTemporaryFile = false
+const useTemporaryFile = true
 const localTraffic = await (async () => {
   const source = (
     await realReadFile(
@@ -47,7 +47,7 @@ const localTraffic = await (async () => {
         ? relative(tmpdir(), dirname(import.meta.url).replace(/file:\/\//, ''))
         : dirname(import.meta.url)}/mocks.mjs"`,
     )
-    .replace(/3000/g, "3");
+    .replace(/3000/g, "3").replace(/5000/g, "5");
 
   if (useTemporaryFile)
     await writeRealFile(temporaryFileLocation, javascriptWithMocks)
@@ -314,7 +314,7 @@ describe("server starter", async () => {
 
     buffers.unshift("watcher");
 
-    await new Promise(resolve => setTimeout(resolve, 2));
+    await new Promise(resolve => setTimeout(resolve, 10));
 
     assert.equal(createServer.mock.callCount(), 1);
     assert.equal(createSecureServer.mock.callCount(), 1);
