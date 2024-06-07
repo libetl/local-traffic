@@ -2327,10 +2327,8 @@ const websocketServe = function (
 
   const target = new URL(
     `${targetWithForcedPrefix?.protocol ?? "https"}//${targetWithForcedPrefix?.host ?? "localhost"}${
-      request.url?.endsWith("/_next/webpack-hmr")
-        ? request.url
-        : request.url
-            ?.replace(new RegExp(`^${key}`, "g"), "")
+      request.url
+            ?.replace(new RegExp(`^${key}`, "g"), path)
             ?.replace(/^\/*/, "/")
     }`,
   );
