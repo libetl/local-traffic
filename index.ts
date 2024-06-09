@@ -217,9 +217,7 @@ const log = async function (
       .replace(new RegExp(EMOJIS.COLORED, "g"), "colored")
       .replace(/\|+/g, "|"),
   );
-  const logTexts = elements.map(
-    e => `\u001b[48;5;${e.color}m${e.text}`,
-  );
+  const logTexts = elements.map(e => `\u001b[48;5;${e.color}m${e.text}`);
   if (state?.config?.simpleLogs)
     console.log(
       `${getCurrentTime(state?.config?.simpleLogs)} | ${simpleTexts.join(" | ")}`,
@@ -244,7 +242,7 @@ const log = async function (
       stdout.write(logTexts[i]);
       offset += (elements[i].length ?? 64) + 2;
     }
-    stdout.write('\u001b[0m')
+    stdout.write("\u001b[0m");
     console.log();
   }
   state?.notifyLogsListeners?.({
@@ -870,35 +868,41 @@ const recorderHandler = (
   const strictModeHasBeenChanged = !!strict !== !!state.mockConfig.strict;
   const mocksHaveBeenPurged = requestMethodIsDelete;
   if (modeHasBeenChangedToProxy) {
-    state.log([
-      {
-        text: `${EMOJIS.RULES} ${Object.keys(state.config.mapping ?? {})
-          .length.toString()
-          .padStart(5)} loaded mapping rules`,
-        color: LogLevel.INFO,
-      },
-    ]).then(() => state.quickStatus());
+    state
+      .log([
+        {
+          text: `${EMOJIS.RULES} ${Object.keys(state.config.mapping ?? {})
+            .length.toString()
+            .padStart(5)} loaded mapping rules`,
+          color: LogLevel.INFO,
+        },
+      ])
+      .then(() => state.quickStatus());
   }
   if (mocksConfigHasBeenChanged) {
-    state.log([
-      {
-        text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS} ${(
-          mocks ?? state.mockConfig.mocks
-        ).size
-          .toString()
-          .padStart(5)} loaded mocks`,
-        color: LogLevel.INFO,
-      },
-    ]).then(() => state.quickStatus());
+    state
+      .log([
+        {
+          text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS} ${(
+            mocks ?? state.mockConfig.mocks
+          ).size
+            .toString()
+            .padStart(5)} loaded mocks`,
+          color: LogLevel.INFO,
+        },
+      ])
+      .then(() => state.quickStatus());
   }
   if (strictModeHasBeenChanged) {
-    state.log([
-      {
-        text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS} 
+    state
+      .log([
+        {
+          text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS} 
       mocks strict mode : ${strict ?? state.mockConfig.strict}`,
-        color: LogLevel.INFO,
-      },
-    ]).then(() => state.quickStatus());
+          color: LogLevel.INFO,
+        },
+      ])
+      .then(() => state.quickStatus());
   }
   if (autoRecordModeHasBeenChanged) {
     state.log([
@@ -1700,160 +1704,131 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
 const onWatch = async function (state: State): Promise<Partial<State>> {
   const previousConfig = state.config;
   const config = await load(false);
-  const logElements: {text: string, color: number}[] = []
+  const logElements: { text: string; color: number }[] = [];
   if (
     isNaN(config?.port ?? NaN) ||
     (config?.port ?? -1) > 65535 ||
     (config?.port ?? -1) < 0
   ) {
-    logElements.push(
-      {
-        text: `${EMOJIS.PORT} port number invalid. Not refreshing`,
-        color: LogLevel.ERROR,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.PORT} port number invalid. Not refreshing`,
+      color: LogLevel.ERROR,
+    });
     return {};
   }
   if (!config?.mapping?.[""]) {
-    logElements.push(
-      {
-        text: `${EMOJIS.ERROR_3} default mapping "" not provided.`,
-        color: LogLevel.WARNING,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.ERROR_3} default mapping "" not provided.`,
+      color: LogLevel.WARNING,
+    });
   }
   if (typeof config.mapping !== "object") {
-    logElements.push(
-      {
-        text: `${EMOJIS.ERROR_5} mapping should be an object. Aborting`,
-        color: LogLevel.ERROR,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.ERROR_5} mapping should be an object. Aborting`,
+      color: LogLevel.ERROR,
+    });
     return {};
   }
   if (config.replaceRequestBodyUrls !== previousConfig.replaceRequestBodyUrls) {
-    logElements.push(
-      {
-        text: `${EMOJIS.REWRITE} request body url ${
-          !config.replaceRequestBodyUrls ? "NO " : ""
-        }rewriting`,
-        color: LogLevel.INFO,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.REWRITE} request body url ${
+        !config.replaceRequestBodyUrls ? "NO " : ""
+      }rewriting`,
+      color: LogLevel.INFO,
+    });
   }
   if (
     config.replaceResponseBodyUrls !== previousConfig.replaceResponseBodyUrls
   ) {
-    logElements.push(
-      {
-        text: `${EMOJIS.REWRITE} response body url ${
-          !config.replaceResponseBodyUrls ? "NO " : ""
-        }rewriting`,
-        color: LogLevel.INFO,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.REWRITE} response body url ${
+        !config.replaceResponseBodyUrls ? "NO " : ""
+      }rewriting`,
+      color: LogLevel.INFO,
+    });
   }
   if (
     config.dontTranslateLocationHeader !==
     previousConfig.dontTranslateLocationHeader
   ) {
-    logElements.push(
-      {
-        text: `${EMOJIS.REWRITE} response location header ${
-          config.dontTranslateLocationHeader ? "NO " : ""
-        }translation`,
-        color: LogLevel.INFO,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.REWRITE} response location header ${
+        config.dontTranslateLocationHeader ? "NO " : ""
+      }translation`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.dontUseHttp2Downstream !== previousConfig.dontUseHttp2Downstream) {
-    logElements.push(
-      {
-        text: `${EMOJIS.OUTBOUND} http/2 ${config.dontUseHttp2Downstream ? "de" : ""}activated downstream`,
-        color: LogLevel.INFO,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.OUTBOUND} http/2 ${config.dontUseHttp2Downstream ? "de" : ""}activated downstream`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.disableWebSecurity !== previousConfig.disableWebSecurity) {
-    logElements.push(
-      {
-        text: `${EMOJIS.SHIELD} web security ${config.disableWebSecurity ? "de" : ""}activated`,
-        color: LogLevel.INFO,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.SHIELD} web security ${config.disableWebSecurity ? "de" : ""}activated`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.websocket !== previousConfig.websocket) {
-    logElements.push(
-      {
-        text: `${EMOJIS.WEBSOCKET} websocket ${!config.websocket ? "de" : ""}activated`,
-        color: LogLevel.INFO,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.WEBSOCKET} websocket ${!config.websocket ? "de" : ""}activated`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.logAccessInTerminal !== previousConfig.logAccessInTerminal) {
-    logElements.push(
-      {
-        text: `${EMOJIS.LOGS} access terminal logging ${!config.logAccessInTerminal ? "off" : "on"}`,
-        color: LogLevel.INFO,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.LOGS} access terminal logging ${!config.logAccessInTerminal ? "off" : "on"}`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.simpleLogs !== previousConfig.simpleLogs) {
-    logElements.push(
-      {
-        text: `${EMOJIS.COLORED} simple logs ${!config.simpleLogs ? "off" : "on"}`,
-        color: LogLevel.INFO,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.COLORED} simple logs ${!config.simpleLogs ? "off" : "on"}`,
+      color: LogLevel.INFO,
+    });
   }
   if (
     Object.keys(config.mapping).join("\n") !==
     Object.keys(previousConfig.mapping ?? {}).join("\n")
   ) {
-    logElements.push(
-      {
-        text: `${EMOJIS.RULES} ${Object.keys(config.mapping)
-          .length.toString()
-          .padStart(5)} loaded mapping rules`,
-        color: LogLevel.INFO,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.RULES} ${Object.keys(config.mapping)
+        .length.toString()
+        .padStart(5)} loaded mapping rules`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.port !== previousConfig.port) {
-    logElements.push(
-      {
-        text: `${EMOJIS.PORT} port changed from ${previousConfig.port} to ${config.port}`,
-        color: LogLevel.INFO,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.PORT} port changed from ${previousConfig.port} to ${config.port}`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.ssl && !previousConfig.ssl) {
-    logElements.push(
-      {
-        text: `${EMOJIS.INBOUND} ssl configuration added`,
-        color: LogLevel.INFO,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.INBOUND} ssl configuration added`,
+      color: LogLevel.INFO,
+    });
   }
   if (!config.ssl && previousConfig.ssl) {
-    logElements.push(
-      {
-        text: `${EMOJIS.INBOUND} ssl configuration removed`,
-        color: LogLevel.INFO,
-      },
-    );
+    logElements.push({
+      text: `${EMOJIS.INBOUND} ssl configuration removed`,
+      color: LogLevel.INFO,
+    });
   }
   if (
     config.port !== previousConfig.port ||
     JSON.stringify(config.ssl) !== JSON.stringify(previousConfig.ssl)
   ) {
-    logElements.push(
-      { text: `${EMOJIS.RESTART} restarting server`, color: LogLevel.INFO },
-    );
+    logElements.push({
+      text: `${EMOJIS.RESTART} restarting server`,
+      color: LogLevel.INFO,
+    });
   }
 
   for (let logElement of logElements) {
-    await state.log([logElement])
+    await state.log([logElement]);
   }
   await quickStatus.apply({ ...state, config });
 
@@ -2675,8 +2650,10 @@ const serve = async function (
       },
       {
         color: 8,
-        text: targetUrl.pathname.toString().padStart(62 - (inboundRequest.method?.length ?? 3))
-        .substring(0, 62 - (inboundRequest.method?.length ?? 3)),
+        text: targetUrl.pathname
+          .toString()
+          .padStart(62 - (inboundRequest.method?.length ?? 3))
+          .substring(0, 62 - (inboundRequest.method?.length ?? 3)),
         length: 62 - (inboundRequest.method?.length ?? 3),
       },
     ]);
