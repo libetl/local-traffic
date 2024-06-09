@@ -877,7 +877,7 @@ const recorderHandler = (
           color: LogLevel.INFO,
         },
       ])
-      .then(() => state.quickStatus());
+      ?.then(() => state.quickStatus());
   }
   if (mocksConfigHasBeenChanged) {
     state
@@ -891,7 +891,7 @@ const recorderHandler = (
           color: LogLevel.INFO,
         },
       ])
-      .then(() => state.quickStatus());
+      ?.then(() => state.quickStatus());
   }
   if (strictModeHasBeenChanged) {
     state
@@ -902,7 +902,7 @@ const recorderHandler = (
           color: LogLevel.INFO,
         },
       ])
-      .then(() => state.quickStatus());
+      ?.then(() => state.quickStatus());
   }
   if (autoRecordModeHasBeenChanged) {
     state.log([
@@ -926,7 +926,7 @@ const recorderHandler = (
         strict,
         mocks: new Map<string, string>(),
       },
-    }).then(() => state.quickStatus());
+    })?.then(() => state.quickStatus());
   else
     update(state, {
       mode,
@@ -1826,9 +1826,9 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
       color: LogLevel.INFO,
     });
   }
-
+  
   for (let logElement of logElements) {
-    await state.log([logElement]);
+    state?.log?.([logElement]);
   }
   await quickStatus.apply({ ...state, config });
 
