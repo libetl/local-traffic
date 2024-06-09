@@ -98,7 +98,7 @@ export const readFile = mock.fn((path, callback) => {
 export const readdir = mock.fn((path, callback) => {
   process.nextTick(() => callback(null, ["file1.txt", "file2.txt"]));
 });
-export const stdout = { isTTY: true };
+export const stdout = { isTTY: true, moveCursor: () => {} };
 
 let interval = null;
 export const watchFile = mock.fn((filename, callback) => {
