@@ -314,7 +314,7 @@ describe("server starter", async () => {
 
     buffers.unshift("watcher");
 
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise(resolve => setTimeout(resolve, 2));
 
     assert.equal(createServer.mock.callCount(), 1);
     assert.equal(createSecureServer.mock.callCount(), 1);
