@@ -1707,7 +1707,7 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
           filename,
           JSON.stringify(defaultConfig, null, 2),
           fileWriteErr => {
-            if (fileWriteErr)
+            return (fileWriteErr ?
               log(null, [
                 [
                   {
@@ -1715,17 +1715,15 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
                     color: LogLevel.ERROR,
                   },
                 ],
-              ]);
-            else
-              log(null, [
+              ]) : log(null, [
                 [
                   {
                     text: `${EMOJIS.COLORED} config file created`,
                     color: LogLevel.INFO,
                   },
                 ],
-              ]);
-            resolve(config!);
+              ])
+            ).then(() => resolve(config!));
           },
         );
       } else resolve(config!);
