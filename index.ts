@@ -195,11 +195,8 @@ const log = async function (
   state: Partial<State> | null,
   logs: { color: number; text: string; length?: number }[][],
 ) {
-  const simpleTexts = logs.map(logLine => {
-    if(!logLine.map) throw new Error(JSON.stringify(logs))
-    return logLine.map(e => ({
-      ...e,
-      text: e.text
+  const simpleTexts = logs.map(logLine => 
+    logLine.map(e => e.text
         .replace(/⎸/g, "|")
         .replace(/⎹/g, "|")
         .replace(/\u001b\[[^m]*m/g, "")
@@ -218,12 +215,11 @@ const log = async function (
         .replace(new RegExp(EMOJIS.RESTART, "g"), "restart")
         .replace(new RegExp(EMOJIS.COLORED, "g"), "colored")
         .replace(/\|+/g, "|"),
-    }))
-});
+    ).join(" | "));
   if (state?.config?.simpleLogs)
     for (let simpleText of simpleTexts)
       console.log(
-        `${getCurrentTime(state?.config?.simpleLogs)} | ${simpleText.join(" | ")}`,
+        `${getCurrentTime(state?.config?.simpleLogs)} | ${simpleText}`,
       );
   else {
     for (let element of logs) {
@@ -248,8 +244,9 @@ const log = async function (
         offset += (element[i].length ?? 64) + 2;
       }
       console.log("\u001b[0m");
+    for (let simpleText of simpleTexts)
       state?.notifyLogsListeners?.({
-        event: simpleTexts.join(" | "),
+        event: simpleText,
         level: levelToString(element?.[0]?.color ?? LogLevel.INFO),
       });
     }
@@ -3372,10 +3369,10 @@ if (crashTest) {
           setTimeout(makeRequest.bind(null, state, resolve), 1000),
         ),
     )
-    .then(({ state, error }) =>
+    .then(({ error }) =>
       error?.code !== "ECONNREFUSED"
         ? Promise.reject("Server should have stopped")
-        : log(state, [
+        : log({config: {simpleLogs: true}}, [
             [
               {
                 text: `${EMOJIS.COLORED} Crash test successful`,
