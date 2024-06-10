@@ -150,12 +150,11 @@ interface State {
   mode: ServerMode;
   mockConfig: MockConfig;
   log: (
-    elements:
-      | [{ color: number; text: string }]
-      | { color: number; text: string; length: number }[],
+    logs: { color: number; text: string; length?: number }[][],
   ) => Promise<void>;
   notifyConfigListeners: (data: Record<string, unknown>) => void;
   notifyLogsListeners: (data: Record<string, unknown>) => void;
+  buildQuickStatus: () => { color: number; text: string; length: number }[];
   quickStatus: () => Promise<void>;
 }
 
@@ -194,61 +193,67 @@ const levelToString = (level?: number) =>
       : "info";
 const log = async function (
   state: Partial<State> | null,
-  elements: [{ text: string; color?: number; length?: number }],
+  logs: { color: number; text: string; length?: number }[][],
 ) {
-  const simpleTexts = elements.map(e =>
-    e.text
-      .replace(/⎸/g, "|")
-      .replace(/⎹/g, "|")
-      .replace(/\u001b\[[^m]*m/g, "")
-      .replace(new RegExp(EMOJIS.INBOUND, "g"), "inbound:")
-      .replace(new RegExp(EMOJIS.PORT, "g"), "port:")
-      .replace(new RegExp(EMOJIS.OUTBOUND, "g"), "outbound:")
-      .replace(new RegExp(EMOJIS.RULES, "g"), "rules:")
-      .replace(new RegExp(EMOJIS.NO, "g"), "")
-      .replace(new RegExp(EMOJIS.REWRITE, "g"), "+rewrite")
-      .replace(new RegExp(EMOJIS.WEBSOCKET, "g"), "websocket")
-      .replace(new RegExp(EMOJIS.SHIELD, "g"), "web-security")
-      .replace(new RegExp(EMOJIS.MOCKS, "g"), "mocks")
-      .replace(new RegExp(EMOJIS.STRICT_MOCKS, "g"), "mocks (strict)")
-      .replace(new RegExp(EMOJIS.AUTO_RECORD, "g"), "auto record")
-      .replace(new RegExp(EMOJIS.LOGS, "g"), "logs")
-      .replace(new RegExp(EMOJIS.RESTART, "g"), "restart")
-      .replace(new RegExp(EMOJIS.COLORED, "g"), "colored")
-      .replace(/\|+/g, "|"),
-  );
-  const logTexts = elements.map(e => `\u001b[48;5;${e.color}m${e.text}`);
+  const simpleTexts = logs.map(logLine => {
+    if(!logLine.map) throw new Error(JSON.stringify(logs))
+    return logLine.map(e => ({
+      ...e,
+      text: e.text
+        .replace(/⎸/g, "|")
+        .replace(/⎹/g, "|")
+        .replace(/\u001b\[[^m]*m/g, "")
+        .replace(new RegExp(EMOJIS.INBOUND, "g"), "inbound:")
+        .replace(new RegExp(EMOJIS.PORT, "g"), "port:")
+        .replace(new RegExp(EMOJIS.OUTBOUND, "g"), "outbound:")
+        .replace(new RegExp(EMOJIS.RULES, "g"), "rules:")
+        .replace(new RegExp(EMOJIS.NO, "g"), "")
+        .replace(new RegExp(EMOJIS.REWRITE, "g"), "+rewrite")
+        .replace(new RegExp(EMOJIS.WEBSOCKET, "g"), "websocket")
+        .replace(new RegExp(EMOJIS.SHIELD, "g"), "web-security")
+        .replace(new RegExp(EMOJIS.MOCKS, "g"), "mocks")
+        .replace(new RegExp(EMOJIS.STRICT_MOCKS, "g"), "mocks (strict)")
+        .replace(new RegExp(EMOJIS.AUTO_RECORD, "g"), "auto record")
+        .replace(new RegExp(EMOJIS.LOGS, "g"), "logs")
+        .replace(new RegExp(EMOJIS.RESTART, "g"), "restart")
+        .replace(new RegExp(EMOJIS.COLORED, "g"), "colored")
+        .replace(/\|+/g, "|"),
+    }))
+});
   if (state?.config?.simpleLogs)
-    console.log(
-      `${getCurrentTime(state?.config?.simpleLogs)} | ${simpleTexts.join(" | ")}`,
-    );
-  else {
-    console.log(
-      `${getCurrentTime(state?.config?.simpleLogs)}${elements
-        .map(e => `\u001b[48;5;${e.color}m${"".padEnd((e.length ?? 64) + 1)}`)
-        .join("▐")}\u001b[0m`,
-    );
-
-    await new Promise(resolve =>
-      stdout.moveCursor(-80, -1, () => resolve(void 0)),
-    );
-    let offset = 9;
-    for (let i = 0; i < logTexts.length; i++) {
-      await new Promise(resolve =>
-        stdout.moveCursor(-80, 0, () =>
-          stdout.moveCursor(offset, 0, () => resolve(void 0)),
-        ),
+    for (let simpleText of simpleTexts)
+      console.log(
+        `${getCurrentTime(state?.config?.simpleLogs)} | ${simpleText.join(" | ")}`,
       );
-      stdout.write(logTexts[i]);
-      offset += (elements[i].length ?? 64) + 2;
+  else {
+    for (let element of logs) {
+      const logTexts = element.map(e => `\u001b[48;5;${e.color}m${e.text}`);
+      console.log(
+        `${getCurrentTime(state?.config?.simpleLogs)}${element
+          .map(e => `\u001b[48;5;${e.color}m${"".padEnd((e.length ?? 64) + 1)}`)
+          .join("▐")}\u001b[0m`,
+      );
+
+      await new Promise(resolve =>
+        stdout.moveCursor(-1000, -1, () => resolve(void 0)),
+      );
+      let offset = 9;
+      for (let i = 0; i < logTexts.length; i++) {
+        await new Promise(resolve =>
+          stdout.moveCursor(-1000, 0, () =>
+            stdout.moveCursor(offset, 0, () => resolve(void 0)),
+          ),
+        );
+        stdout.write(logTexts[i]);
+        offset += (element[i].length ?? 64) + 2;
+      }
+      console.log("\u001b[0m");
+      state?.notifyLogsListeners?.({
+        event: simpleTexts.join(" | "),
+        level: levelToString(element?.[0]?.color ?? LogLevel.INFO),
+      });
     }
-    stdout.write("\u001b[0m");
-    console.log();
   }
-  state?.notifyLogsListeners?.({
-    event: simpleTexts.join(" | "),
-    level: levelToString(elements[0].color),
-  });
 };
 
 const createWebsocketBufferFrom = (
@@ -395,8 +400,8 @@ const notifyListeners = (
   });
 };
 
-const quickStatus = async function (this: State) {
-  this.log([
+const buildQuickStatus = function (this: State) {
+  return [
     {
       color: 52,
       text: `${EMOJIS.PORT} ${(this.config.port ?? "").toString()}`,
@@ -448,7 +453,11 @@ const quickStatus = async function (this: State) {
       text: `${this.config.disableWebSecurity ? EMOJIS.NO : EMOJIS.SHIELD}`,
       length: 4,
     },
-  ]);
+  ];
+};
+
+const quickStatus = async function (this: State) {
+  this.log([this.buildQuickStatus()]);
   this.notifyConfigListeners(this.config as Record<string, unknown>);
 };
 
@@ -831,10 +840,12 @@ const recorderHandler = (
     (!Array.isArray(mocksUpdate.mocks) && mocksUpdate.mocks !== undefined)
   ) {
     state.log([
-      {
-        text: `${EMOJIS.MOCKS} invalid mocks update received`,
-        color: LogLevel.WARNING,
-      },
+      [
+        {
+          text: `${EMOJIS.MOCKS} invalid mocks update received`,
+          color: LogLevel.WARNING,
+        },
+      ],
     ]);
     return;
   }
@@ -870,52 +881,60 @@ const recorderHandler = (
   if (modeHasBeenChangedToProxy) {
     state
       .log([
-        {
-          text: `${EMOJIS.RULES} ${Object.keys(state.config.mapping ?? {})
-            .length.toString()
-            .padStart(5)} loaded mapping rules`,
-          color: LogLevel.INFO,
-        },
+        [
+          {
+            text: `${EMOJIS.RULES} ${Object.keys(state.config.mapping ?? {})
+              .length.toString()
+              .padStart(5)} loaded mapping rules`,
+            color: LogLevel.INFO,
+          },
+        ],
       ])
       ?.then(() => state.quickStatus());
   }
   if (mocksConfigHasBeenChanged) {
     state
       .log([
-        {
-          text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS} ${(
-            mocks ?? state.mockConfig.mocks
-          ).size
-            .toString()
-            .padStart(5)} loaded mocks`,
-          color: LogLevel.INFO,
-        },
+        [
+          {
+            text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS} ${(
+              mocks ?? state.mockConfig.mocks
+            ).size
+              .toString()
+              .padStart(5)} loaded mocks`,
+            color: LogLevel.INFO,
+          },
+        ],
       ])
       ?.then(() => state.quickStatus());
   }
   if (strictModeHasBeenChanged) {
     state
       .log([
-        {
-          text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS} 
+        [
+          {
+            text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS} 
       mocks strict mode : ${strict ?? state.mockConfig.strict}`,
-          color: LogLevel.INFO,
-        },
+            color: LogLevel.INFO,
+          },
+        ],
       ])
       ?.then(() => state.quickStatus());
   }
   if (autoRecordModeHasBeenChanged) {
     state.log([
-      {
-        text: `${
-          mode === ServerMode.PROXY
-            ? EMOJIS.AUTO_RECORD
-            : strict
-              ? EMOJIS.STRICT_MOCKS
-              : EMOJIS.MOCKS
-        } mocks auto-record : ${autoRecord}`,
-        color: LogLevel.INFO,
-      },
+      [
+        {
+          text: `${
+            mode === ServerMode.PROXY
+              ? EMOJIS.AUTO_RECORD
+              : strict
+                ? EMOJIS.STRICT_MOCKS
+                : EMOJIS.MOCKS
+          } mocks auto-record : ${autoRecord}`,
+          color: LogLevel.INFO,
+        },
+      ],
     ]);
   }
   if (mocksHaveBeenPurged)
@@ -1646,10 +1665,12 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
     readFile(filename, (error, data) => {
       if (error && !firstTime) {
         log(null, [
-          {
-            text: `${EMOJIS.ERROR_1} config error. Using default value`,
-            color: LogLevel.ERROR,
-          },
+          [
+            {
+              text: `${EMOJIS.ERROR_1} config error. Using default value`,
+              color: LogLevel.ERROR,
+            },
+          ],
         ]);
       }
       let config: LocalConfiguration | null = null;
@@ -1660,15 +1681,16 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
           JSON.parse((data ?? "{}").toString()),
         );
       } catch (e) {
-        log({ config: undefined }, [
-          {
-            text: `${EMOJIS.ERROR_2} config syntax incorrect, aborting`,
-            color: LogLevel.ERROR,
-          },
-        ]);
+        process.nextTick(() => log({ config: undefined }, [
+          [
+            {
+              text: `${EMOJIS.ERROR_2} config syntax incorrect, aborting`,
+              color: LogLevel.ERROR,
+            },
+          ],
+        ]));
         config = config ?? { ...defaultConfig };
-        resolve(config);
-        return;
+        return resolve(config);
       }
       if (
         error &&
@@ -1682,17 +1704,21 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
           fileWriteErr => {
             if (fileWriteErr)
               log(null, [
-                {
-                  text: `${EMOJIS.ERROR_4} config file NOT created`,
-                  color: LogLevel.ERROR,
-                },
+                [
+                  {
+                    text: `${EMOJIS.ERROR_4} config file NOT created`,
+                    color: LogLevel.ERROR,
+                  },
+                ],
               ]);
             else
               log(null, [
-                {
-                  text: `${EMOJIS.COLORED} config file created`,
-                  color: LogLevel.INFO,
-                },
+                [
+                  {
+                    text: `${EMOJIS.COLORED} config file created`,
+                    color: LogLevel.INFO,
+                  },
+                ],
               ]);
             resolve(config!);
           },
@@ -1704,141 +1730,171 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
 const onWatch = async function (state: State): Promise<Partial<State>> {
   const previousConfig = state.config;
   const config = await load(false);
-  const logElements: { text: string; color: number }[] = [];
+  const logElements: { text: string; color: number }[][] = [];
   if (
     isNaN(config?.port ?? NaN) ||
     (config?.port ?? -1) > 65535 ||
     (config?.port ?? -1) < 0
   ) {
-    logElements.push({
-      text: `${EMOJIS.PORT} port number invalid. Not refreshing`,
-      color: LogLevel.ERROR,
-    });
+    state.log([
+      [
+        {
+          text: `${EMOJIS.PORT} port number invalid. Not refreshing`,
+          color: LogLevel.ERROR,
+        },
+      ],
+    ]);
     return {};
   }
   if (!config?.mapping?.[""]) {
-    logElements.push({
-      text: `${EMOJIS.ERROR_3} default mapping "" not provided.`,
-      color: LogLevel.WARNING,
-    });
+    logElements.push([
+      {
+        text: `${EMOJIS.ERROR_3} default mapping "" not provided.`,
+        color: LogLevel.WARNING,
+      },
+    ]);
   }
   if (typeof config.mapping !== "object") {
-    logElements.push({
-      text: `${EMOJIS.ERROR_5} mapping should be an object. Aborting`,
-      color: LogLevel.ERROR,
-    });
+    state.log([
+      [
+        {
+          text: `${EMOJIS.ERROR_5} mapping should be an object. Aborting`,
+          color: LogLevel.ERROR,
+        },
+      ],
+    ]);
     return {};
   }
   if (config.replaceRequestBodyUrls !== previousConfig.replaceRequestBodyUrls) {
-    logElements.push({
-      text: `${EMOJIS.REWRITE} request body url ${
-        !config.replaceRequestBodyUrls ? "NO " : ""
-      }rewriting`,
-      color: LogLevel.INFO,
-    });
+    logElements.push([
+      {
+        text: `${EMOJIS.REWRITE} request body url ${
+          !config.replaceRequestBodyUrls ? "NO " : ""
+        }rewriting`,
+        color: LogLevel.INFO,
+      },
+    ]);
   }
   if (
     config.replaceResponseBodyUrls !== previousConfig.replaceResponseBodyUrls
   ) {
-    logElements.push({
-      text: `${EMOJIS.REWRITE} response body url ${
-        !config.replaceResponseBodyUrls ? "NO " : ""
-      }rewriting`,
-      color: LogLevel.INFO,
-    });
+    logElements.push([
+      {
+        text: `${EMOJIS.REWRITE} response body url ${
+          !config.replaceResponseBodyUrls ? "NO " : ""
+        }rewriting`,
+        color: LogLevel.INFO,
+      },
+    ]);
   }
   if (
     config.dontTranslateLocationHeader !==
     previousConfig.dontTranslateLocationHeader
   ) {
-    logElements.push({
-      text: `${EMOJIS.REWRITE} response location header ${
-        config.dontTranslateLocationHeader ? "NO " : ""
-      }translation`,
-      color: LogLevel.INFO,
-    });
+    logElements.push([
+      {
+        text: `${EMOJIS.REWRITE} response location header ${
+          config.dontTranslateLocationHeader ? "NO " : ""
+        }translation`,
+        color: LogLevel.INFO,
+      },
+    ]);
   }
   if (config.dontUseHttp2Downstream !== previousConfig.dontUseHttp2Downstream) {
-    logElements.push({
-      text: `${EMOJIS.OUTBOUND} http/2 ${config.dontUseHttp2Downstream ? "de" : ""}activated downstream`,
-      color: LogLevel.INFO,
-    });
+    logElements.push([
+      {
+        text: `${EMOJIS.OUTBOUND} http/2 ${config.dontUseHttp2Downstream ? "de" : ""}activated downstream`,
+        color: LogLevel.INFO,
+      },
+    ]);
   }
   if (config.disableWebSecurity !== previousConfig.disableWebSecurity) {
-    logElements.push({
-      text: `${EMOJIS.SHIELD} web security ${config.disableWebSecurity ? "de" : ""}activated`,
-      color: LogLevel.INFO,
-    });
+    logElements.push([
+      {
+        text: `${EMOJIS.SHIELD} web security ${config.disableWebSecurity ? "de" : ""}activated`,
+        color: LogLevel.INFO,
+      },
+    ]);
   }
   if (config.websocket !== previousConfig.websocket) {
-    logElements.push({
-      text: `${EMOJIS.WEBSOCKET} websocket ${!config.websocket ? "de" : ""}activated`,
-      color: LogLevel.INFO,
-    });
+    logElements.push([
+      {
+        text: `${EMOJIS.WEBSOCKET} websocket ${!config.websocket ? "de" : ""}activated`,
+        color: LogLevel.INFO,
+      },
+    ]);
   }
   if (config.logAccessInTerminal !== previousConfig.logAccessInTerminal) {
-    logElements.push({
-      text: `${EMOJIS.LOGS} access terminal logging ${!config.logAccessInTerminal ? "off" : "on"}`,
-      color: LogLevel.INFO,
-    });
+    logElements.push([
+      {
+        text: `${EMOJIS.LOGS} access terminal logging ${!config.logAccessInTerminal ? "off" : "on"}`,
+        color: LogLevel.INFO,
+      },
+    ]);
   }
   if (config.simpleLogs !== previousConfig.simpleLogs) {
-    logElements.push({
-      text: `${EMOJIS.COLORED} simple logs ${!config.simpleLogs ? "off" : "on"}`,
-      color: LogLevel.INFO,
-    });
+    logElements.push([
+      {
+        text: `${EMOJIS.COLORED} simple logs ${!config.simpleLogs ? "off" : "on"}`,
+        color: LogLevel.INFO,
+      },
+    ]);
   }
   if (
     Object.keys(config.mapping).join("\n") !==
     Object.keys(previousConfig.mapping ?? {}).join("\n")
   ) {
-    logElements.push({
-      text: `${EMOJIS.RULES} ${Object.keys(config.mapping)
-        .length.toString()
-        .padStart(5)} loaded mapping rules`,
-      color: LogLevel.INFO,
-    });
+    logElements.push([
+      {
+        text: `${EMOJIS.RULES} ${Object.keys(config.mapping)
+          .length.toString()
+          .padStart(5)} loaded mapping rules`,
+        color: LogLevel.INFO,
+      },
+    ]);
   }
   if (config.port !== previousConfig.port) {
-    logElements.push({
-      text: `${EMOJIS.PORT} port changed from ${previousConfig.port} to ${config.port}`,
-      color: LogLevel.INFO,
-    });
+    logElements.push([
+      {
+        text: `${EMOJIS.PORT} port changed from ${previousConfig.port} to ${config.port}`,
+        color: LogLevel.INFO,
+      },
+    ]);
   }
   if (config.ssl && !previousConfig.ssl) {
-    logElements.push({
-      text: `${EMOJIS.INBOUND} ssl configuration added`,
-      color: LogLevel.INFO,
-    });
+    logElements.push([
+      {
+        text: `${EMOJIS.INBOUND} ssl configuration added`,
+        color: LogLevel.INFO,
+      },
+    ]);
   }
   if (!config.ssl && previousConfig.ssl) {
-    logElements.push({
-      text: `${EMOJIS.INBOUND} ssl configuration removed`,
-      color: LogLevel.INFO,
-    });
+    logElements.push([
+      {
+        text: `${EMOJIS.INBOUND} ssl configuration removed`,
+        color: LogLevel.INFO,
+      },
+    ]);
   }
-  if (
+  const shouldRestartServer =
     config.port !== previousConfig.port ||
-    JSON.stringify(config.ssl) !== JSON.stringify(previousConfig.ssl)
-  ) {
-    logElements.push({
-      text: `${EMOJIS.RESTART} restarting server`,
-      color: LogLevel.INFO,
-    });
-  }
-  
-  for (let logElement of logElements) {
-    state?.log?.([logElement]);
-  }
-  await quickStatus.apply({ ...state, config });
+    JSON.stringify(config.ssl) !== JSON.stringify(previousConfig.ssl);
 
-  if (
-    config.port !== previousConfig.port ||
-    JSON.stringify(config.ssl) !== JSON.stringify(previousConfig.ssl)
-  ) {
-    return { config, server: null };
+  if (shouldRestartServer) {
+    logElements.push([
+      {
+        text: `${EMOJIS.RESTART} restarting server`,
+        color: LogLevel.INFO,
+      },
+    ]);
   }
-  return { config };
+  process.nextTick(() =>
+    state?.log(
+      logElements.concat([buildQuickStatus.apply({ ...state, config })]),
+    ),
+  );
+  return { config, server: shouldRestartServer ? null : undefined };
 };
 
 const unixNorm = (path: string) =>
@@ -2310,10 +2366,12 @@ const websocketServe = function (
 ): Partial<State> {
   upstreamSocket.on("error", () => {
     state.log([
-      {
-        text: `${EMOJIS.WEBSOCKET} websocket connection reset`,
-        color: LogLevel.WARNING,
-      },
+      [
+        {
+          text: `${EMOJIS.WEBSOCKET} websocket connection reset`,
+          color: LogLevel.WARNING,
+        },
+      ],
     ]);
   });
 
@@ -2369,10 +2427,12 @@ const websocketServe = function (
           newConfig = JSON.parse(read.body);
         } catch (e) {
           state.log([
-            {
-              text: `${EMOJIS.ERROR_4} config file NOT read, try again later`,
-              color: LogLevel.WARNING,
-            },
+            [
+              {
+                text: `${EMOJIS.ERROR_4} config file NOT read, try again later`,
+                color: LogLevel.WARNING,
+              },
+            ],
           ]);
           return {};
         }
@@ -2412,14 +2472,16 @@ const websocketServe = function (
   downstreamRequest.end();
   downstreamRequest.on("error", error => {
     state.log([
-      {
-        text: `${EMOJIS.WEBSOCKET} websocket request has errored ${
-          (error as ErrorWithErrno).errno
-            ? `(${(error as ErrorWithErrno).errno})`
-            : ""
-        }`,
-        color: LogLevel.WARNING,
-      },
+      [
+        {
+          text: `${EMOJIS.WEBSOCKET} websocket request has errored ${
+            (error as ErrorWithErrno).errno
+              ? `(${(error as ErrorWithErrno).errno})`
+              : ""
+          }`,
+          color: LogLevel.WARNING,
+        },
+      ],
     ]);
   });
   downstreamRequest.on("upgrade", (response, downstreamSocket) => {
@@ -2441,26 +2503,30 @@ const websocketServe = function (
     upstreamSocket.on("data", data => downstreamSocket.write(data));
     downstreamSocket.on("error", error => {
       state.log([
-        {
-          text: `${EMOJIS.WEBSOCKET} downstream socket has errored ${
-            (error as ErrorWithErrno).errno
-              ? `(${(error as ErrorWithErrno).errno})`
-              : ""
-          }`,
-          color: LogLevel.WARNING,
-        },
+        [
+          {
+            text: `${EMOJIS.WEBSOCKET} downstream socket has errored ${
+              (error as ErrorWithErrno).errno
+                ? `(${(error as ErrorWithErrno).errno})`
+                : ""
+            }`,
+            color: LogLevel.WARNING,
+          },
+        ],
       ]);
     });
     upstreamSocket.on("error", error => {
       state.log([
-        {
-          text: `${EMOJIS.WEBSOCKET} upstream socket has errored ${
-            (error as ErrorWithErrno).errno
-              ? `(${(error as ErrorWithErrno).errno})`
-              : ""
-          }`,
-          color: LogLevel.WARNING,
-        },
+        [
+          {
+            text: `${EMOJIS.WEBSOCKET} upstream socket has errored ${
+              (error as ErrorWithErrno).errno
+                ? `(${(error as ErrorWithErrno).errno})`
+                : ""
+            }`,
+            color: LogLevel.WARNING,
+          },
+        ],
       ]);
     });
   });
@@ -2580,10 +2646,12 @@ const serve = async function (
     ]);
     if (requestBodyExpected && !requestBodyBuffer.length)
       await state.log([
-        {
-          text: `${EMOJIS.ERROR_4} body replacement error ${path.slice(-17)}`,
-          color: LogLevel.WARNING,
-        },
+        [
+          {
+            text: `${EMOJIS.ERROR_4} body replacement error ${path.slice(-17)}`,
+            color: LogLevel.WARNING,
+          },
+        ],
       ]);
     requestBody = !state.config.replaceRequestBodyUrls
       ? requestBodyBuffer
@@ -2624,38 +2692,40 @@ const serve = async function (
     !targetUrl.pathname.startsWith("/:/")
   ) {
     await state.log([
-      {
-        color:
-          inboundRequest.method === "GET"
-            ? 22
-            : inboundRequest.method === "POST"
-              ? 52
-              : inboundRequest.method === "PUT"
-                ? 94
-                : inboundRequest.method === "DELETE"
-                  ? 244
-                  : inboundRequest.method === "OPTIONS"
-                    ? 19
-                    : inboundRequest.method === "PATCH"
-                      ? 162
-                      : inboundRequest.method === "HEAD"
-                        ? 53
-                        : inboundRequest.method === "TRACE"
-                          ? 6
-                          : inboundRequest.method === "CONNECT"
-                            ? 2
-                            : 0,
-        text: (inboundRequest.method ?? "GET").toString(),
-        length: inboundRequest.method?.length,
-      },
-      {
-        color: 8,
-        text: targetUrl.pathname
-          .toString()
-          .padStart(62 - (inboundRequest.method?.length ?? 3))
-          .substring(0, 62 - (inboundRequest.method?.length ?? 3)),
-        length: 62 - (inboundRequest.method?.length ?? 3),
-      },
+      [
+        {
+          color:
+            inboundRequest.method === "GET"
+              ? 22
+              : inboundRequest.method === "POST"
+                ? 52
+                : inboundRequest.method === "PUT"
+                  ? 94
+                  : inboundRequest.method === "DELETE"
+                    ? 244
+                    : inboundRequest.method === "OPTIONS"
+                      ? 19
+                      : inboundRequest.method === "PATCH"
+                        ? 162
+                        : inboundRequest.method === "HEAD"
+                          ? 53
+                          : inboundRequest.method === "TRACE"
+                            ? 6
+                            : inboundRequest.method === "CONNECT"
+                              ? 2
+                              : 0,
+          text: (inboundRequest.method ?? "GET").toString(),
+          length: inboundRequest.method?.length,
+        },
+        {
+          color: 8,
+          text: targetUrl.pathname
+            .toString()
+            .padStart(62 - (inboundRequest.method?.length ?? 3))
+            .substring(0, 62 - (inboundRequest.method?.length ?? 3)),
+          length: 62 - (inboundRequest.method?.length ?? 3),
+        },
+      ],
     ]);
   }
 
@@ -2873,12 +2943,14 @@ const serve = async function (
       );
   } catch (e) {
     await state.log([
-      {
-        text: `${EMOJIS.ERROR_4} location replacement error ${(
-          outboundResponseHeaders["location"] ?? ""
-        ).slice(-13)}`,
-        color: LogLevel.WARNING,
-      },
+      [
+        {
+          text: `${EMOJIS.ERROR_4} location replacement error ${(
+            outboundResponseHeaders["location"] ?? ""
+          ).slice(-13)}`,
+          color: LogLevel.WARNING,
+        },
+      ],
     ]);
   }
 
@@ -3056,6 +3128,7 @@ const serve = async function (
     !state.config.logAccessInTerminal &&
     !targetUsesSpecialProtocol
   ) {
+    console.log("bou")
     state.mockConfig.mocks.set(uniqueHash, response);
     stdout.moveCursor(0, -1, () => stdout.clearLine(-1, state.quickStatus));
   }
@@ -3064,17 +3137,21 @@ const serve = async function (
 const errorListener = (state: State, err: Error) => {
   if ((err as ErrorWithErrno).code === "EACCES")
     state.log([
-      {
-        text: `${EMOJIS.NO} permission denied for this port`,
-        color: LogLevel.ERROR,
-      },
+      [
+        {
+          text: `${EMOJIS.NO} permission denied for this port`,
+          color: LogLevel.ERROR,
+        },
+      ],
     ]);
   if ((err as ErrorWithErrno).code === "EADDRINUSE")
     state.log([
-      {
-        text: `${EMOJIS.ERROR_6} port is already used. NOT started`,
-        color: LogLevel.ERROR,
-      },
+      [
+        {
+          text: `${EMOJIS.ERROR_6} port is already used. NOT started`,
+          color: LogLevel.ERROR,
+        },
+      ],
     ]);
 };
 
@@ -3094,17 +3171,21 @@ const update = async (
       fileWriteErr => {
         if (fileWriteErr)
           currentState.log?.([
-            {
-              text: `${EMOJIS.ERROR_4} config file NOT saved`,
-              color: LogLevel.ERROR,
-            },
+            [
+              {
+                text: `${EMOJIS.ERROR_4} config file NOT saved`,
+                color: LogLevel.ERROR,
+              },
+            ],
           ]);
         else
           currentState.log?.([
-            {
-              text: `${EMOJIS.COLORED} config file saved... will reload`,
-              color: LogLevel.INFO,
-            },
+            [
+              {
+                text: `${EMOJIS.COLORED} config file saved... will reload`,
+                color: LogLevel.INFO,
+              },
+            ],
           ]);
       },
     );
@@ -3135,10 +3216,12 @@ const update = async (
     ]);
     if (!stopped) {
       await currentState.log?.([
-        {
-          text: `${EMOJIS.RESTART} error during restart (websockets ?)`,
-          color: LogLevel.WARNING,
-        },
+        [
+          {
+            text: `${EMOJIS.RESTART} error during restart (websockets ?)`,
+            color: LogLevel.WARNING,
+          },
+        ],
       ]);
     }
   }
@@ -3189,6 +3272,7 @@ const update = async (
     log: log.bind(state, state),
     notifyConfigListeners: notifyConfigListeners.bind(state),
     notifyLogsListeners: notifyLogsListeners.bind(state),
+    buildQuickStatus: buildQuickStatus.bind(state),
     quickStatus: quickStatus.bind(state),
     server:
       newState?.server === null && !((newState?.config?.port ?? 0) < 0)
@@ -3206,7 +3290,6 @@ const update = async (
             ) as Server
           )
             .addListener("error", (error: Error) => errorListener(state, error))
-            .addListener("listening", () => state.quickStatus())
             .on("upgrade", (request, socket) =>
               update(state, websocketServe(state, request, socket)),
             )
@@ -3293,10 +3376,12 @@ if (crashTest) {
       error?.code !== "ECONNREFUSED"
         ? Promise.reject("Server should have stopped")
         : log(state, [
-            {
-              text: `${EMOJIS.COLORED} Crash test successful`,
-              color: LogLevel.INFO,
-            },
+            [
+              {
+                text: `${EMOJIS.COLORED} Crash test successful`,
+                color: LogLevel.INFO,
+              },
+            ],
           ]),
     )
     .then(() => exit(0))
@@ -3304,7 +3389,7 @@ if (crashTest) {
 }
 
 if (!crashTest && runAsMainProgram) {
-  load().then(start);
+  load().then(start).then((state) => state.quickStatus());
 }
 
 export {
