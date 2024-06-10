@@ -59,7 +59,7 @@ enum EMOJIS {
   OUTBOUND = "↗️ ",
   RULES = "🔗",
   MOCKS = "🌐",
-  STRICT_MOCKS = "🕸️\b ",
+  STRICT_MOCKS = "🕸️",
   AUTO_RECORD = "📼",
   REWRITE = "✒️ ",
   LOGS = "📝",
@@ -879,65 +879,6 @@ const recorderHandler = (
   const mode = newMode ?? state.mode;
   const strictModeHasBeenChanged = !!strict !== !!state.mockConfig.strict;
   const mocksHaveBeenPurged = requestMethodIsDelete;
-  if (modeHasBeenChangedToProxy) {
-    state
-      .log([
-        [
-          {
-            text: `${EMOJIS.RULES} ${Object.keys(state.config.mapping ?? {})
-              .length.toString()
-              .padStart(5)} loaded mapping rules`,
-            color: LogLevel.INFO,
-          },
-        ],
-      ])
-      ?.then(() => state.quickStatus());
-  }
-  if (mocksConfigHasBeenChanged) {
-    state
-      .log([
-        [
-          {
-            text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS} ${(
-              mocks ?? state.mockConfig.mocks
-            ).size
-              .toString()
-              .padStart(5)} loaded mocks`,
-            color: LogLevel.INFO,
-          },
-        ],
-      ])
-      ?.then(() => state.quickStatus());
-  }
-  if (strictModeHasBeenChanged) {
-    state
-      .log([
-        [
-          {
-            text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS} 
-      mocks strict mode : ${strict ?? state.mockConfig.strict}`,
-            color: LogLevel.INFO,
-          },
-        ],
-      ])
-      ?.then(() => state.quickStatus());
-  }
-  if (autoRecordModeHasBeenChanged) {
-    state.log([
-      [
-        {
-          text: `${
-            mode === ServerMode.PROXY
-              ? EMOJIS.AUTO_RECORD
-              : strict
-                ? EMOJIS.STRICT_MOCKS
-                : EMOJIS.MOCKS
-          } mocks auto-record : ${autoRecord}`,
-          color: LogLevel.INFO,
-        },
-      ],
-    ]);
-  }
   if (mocksHaveBeenPurged)
     update(state, {
       mode,
@@ -946,7 +887,7 @@ const recorderHandler = (
         strict,
         mocks: new Map<string, string>(),
       },
-    })?.then(() => state.quickStatus());
+    });
   else
     update(state, {
       mode,
@@ -956,6 +897,63 @@ const recorderHandler = (
         mocks: mocks ?? state.mockConfig.mocks,
       },
     });
+
+  setTimeout(() => state.log(
+    [
+      modeHasBeenChangedToProxy
+        ? [
+            {
+              text: `${EMOJIS.RULES} ${Object.keys(state.config.mapping ?? {})
+                .length.toString()
+                .padStart(5)} loaded mapping rules`,
+              color: LogLevel.INFO,
+            },
+          ]
+        : null,
+      mocksConfigHasBeenChanged
+        ? [
+            {
+              text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS} ${(
+                mocks ?? state.mockConfig.mocks
+              ).size
+                .toString()
+                .padStart(5)} loaded mocks`,
+              color: LogLevel.INFO,
+            },
+          ]
+        : null,
+      strictModeHasBeenChanged
+        ? [
+            {
+              text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS
+              } mocks strict mode : ${strict ?? state.mockConfig.strict}`,
+              color: LogLevel.INFO,
+            },
+          ]
+        : null,
+      autoRecordModeHasBeenChanged
+        ? [
+            {
+              text: `${
+                mode === ServerMode.PROXY
+                  ? EMOJIS.AUTO_RECORD
+                  : strict
+                    ? EMOJIS.STRICT_MOCKS
+                    : EMOJIS.MOCKS
+              } mocks auto-record : ${autoRecord}`,
+              color: LogLevel.INFO,
+            },
+          ]
+        : null,
+      modeHasBeenChangedToProxy ||
+      mocksConfigHasBeenChanged ||
+      autoRecordModeHasBeenChanged ||
+      strictModeHasBeenChanged ||
+      mocksHaveBeenPurged
+        ? state.buildQuickStatus()
+        : null,
+    ].filter(e => e),
+  ), 1);
 };
 
 const dataPage = (
@@ -3131,7 +3129,6 @@ const serve = async function (
     !state.config.logAccessInTerminal &&
     !targetUsesSpecialProtocol
   ) {
-    console.log("bou");
     state.mockConfig.mocks.set(uniqueHash, response);
     stdout.moveCursor(0, -1, () => stdout.clearLine(-1, state.quickStatus));
   }
