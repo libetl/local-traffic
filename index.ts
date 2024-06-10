@@ -1890,10 +1890,12 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
       },
     ]);
   }
-  process.nextTick(() =>
-    state?.log(
-      logElements.concat([buildQuickStatus.apply({ ...state, config })]),
-    ),
+  setTimeout(
+    () =>
+      state?.log(
+        logElements.concat([buildQuickStatus.apply({ ...state, config })]),
+      ),
+    1,
   );
   return { config, server: shouldRestartServer ? null : undefined };
 };
@@ -3137,23 +3139,31 @@ const serve = async function (
 
 const errorListener = (state: State, err: Error) => {
   if ((err as ErrorWithErrno).code === "EACCES")
-    state.log([
-      [
-        {
-          text: `${EMOJIS.NO} permission denied for this port`,
-          color: LogLevel.ERROR,
-        },
-      ],
-    ]);
+    setTimeout(
+      () =>
+        state.log([
+          [
+            {
+              text: `${EMOJIS.NO} permission denied for this port`,
+              color: LogLevel.ERROR,
+            },
+          ],
+        ]),
+      10,
+    );
   if ((err as ErrorWithErrno).code === "EADDRINUSE")
-    state.log([
-      [
-        {
-          text: `${EMOJIS.ERROR_6} port is already used. NOT started`,
-          color: LogLevel.ERROR,
-        },
-      ],
-    ]);
+    setTimeout(
+      () =>
+        state.log([
+          [
+            {
+              text: `${EMOJIS.ERROR_6} port is already used. NOT started`,
+              color: LogLevel.ERROR,
+            },
+          ],
+        ]),
+      10,
+    );
 };
 
 const start = (config: LocalConfiguration): Promise<State> =>
