@@ -195,27 +195,31 @@ const log = async function (
   state: Partial<State> | null,
   logs: { color: number; text: string; length?: number }[][],
 ) {
-  const simpleTexts = logs.map(logLine => 
-    logLine.map(e => e.text
-        .replace(/⎸/g, "|")
-        .replace(/⎹/g, "|")
-        .replace(/\u001b\[[^m]*m/g, "")
-        .replace(new RegExp(EMOJIS.INBOUND, "g"), "inbound:")
-        .replace(new RegExp(EMOJIS.PORT, "g"), "port:")
-        .replace(new RegExp(EMOJIS.OUTBOUND, "g"), "outbound:")
-        .replace(new RegExp(EMOJIS.RULES, "g"), "rules:")
-        .replace(new RegExp(EMOJIS.NO, "g"), "")
-        .replace(new RegExp(EMOJIS.REWRITE, "g"), "+rewrite")
-        .replace(new RegExp(EMOJIS.WEBSOCKET, "g"), "websocket")
-        .replace(new RegExp(EMOJIS.SHIELD, "g"), "web-security")
-        .replace(new RegExp(EMOJIS.MOCKS, "g"), "mocks")
-        .replace(new RegExp(EMOJIS.STRICT_MOCKS, "g"), "mocks (strict)")
-        .replace(new RegExp(EMOJIS.AUTO_RECORD, "g"), "auto record")
-        .replace(new RegExp(EMOJIS.LOGS, "g"), "logs")
-        .replace(new RegExp(EMOJIS.RESTART, "g"), "restart")
-        .replace(new RegExp(EMOJIS.COLORED, "g"), "colored")
-        .replace(/\|+/g, "|"),
-    ).join(" | "));
+  const simpleTexts = logs.map(logLine =>
+    logLine
+      .map(e =>
+        e.text
+          .replace(/⎸/g, "|")
+          .replace(/⎹/g, "|")
+          .replace(/\u001b\[[^m]*m/g, "")
+          .replace(new RegExp(EMOJIS.INBOUND, "g"), "inbound:")
+          .replace(new RegExp(EMOJIS.PORT, "g"), "port:")
+          .replace(new RegExp(EMOJIS.OUTBOUND, "g"), "outbound:")
+          .replace(new RegExp(EMOJIS.RULES, "g"), "rules:")
+          .replace(new RegExp(EMOJIS.NO, "g"), "")
+          .replace(new RegExp(EMOJIS.REWRITE, "g"), "+rewrite")
+          .replace(new RegExp(EMOJIS.WEBSOCKET, "g"), "websocket")
+          .replace(new RegExp(EMOJIS.SHIELD, "g"), "web-security")
+          .replace(new RegExp(EMOJIS.MOCKS, "g"), "mocks")
+          .replace(new RegExp(EMOJIS.STRICT_MOCKS, "g"), "mocks (strict)")
+          .replace(new RegExp(EMOJIS.AUTO_RECORD, "g"), "auto record")
+          .replace(new RegExp(EMOJIS.LOGS, "g"), "logs")
+          .replace(new RegExp(EMOJIS.RESTART, "g"), "restart")
+          .replace(new RegExp(EMOJIS.COLORED, "g"), "colored")
+          .replace(/\|+/g, "|"),
+      )
+      .join(" | "),
+  );
   if (state?.config?.simpleLogs)
     for (let simpleText of simpleTexts)
       console.log(
@@ -244,11 +248,11 @@ const log = async function (
         offset += (element[i].length ?? 64) + 2;
       }
       console.log("\u001b[0m");
-    for (let simpleText of simpleTexts)
-      state?.notifyLogsListeners?.({
-        event: simpleText,
-        level: levelToString(element?.[0]?.color ?? LogLevel.INFO),
-      });
+      for (let simpleText of simpleTexts)
+        state?.notifyLogsListeners?.({
+          event: simpleText,
+          level: levelToString(element?.[0]?.color ?? LogLevel.INFO),
+        });
     }
   }
 };
@@ -1678,16 +1682,15 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
           JSON.parse((data ?? "{}").toString()),
         );
       } catch (e) {
-        process.nextTick(() => log({ config: undefined }, [
+        config = config ?? { ...defaultConfig };
+        return log({ config: undefined }, [
           [
             {
-              text: `${EMOJIS.ERROR_2} config syntax incorrect, aborting`,
+              text: `${EMOJIS.ERROR_2} config syntax incorrect, ignoring`,
               color: LogLevel.ERROR,
             },
           ],
-        ]));
-        config = config ?? { ...defaultConfig };
-        return resolve(config);
+        ]).then(() => resolve(config));
       }
       if (
         error &&
@@ -1728,12 +1731,13 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
   const previousConfig = state.config;
   const config = await load(false);
   const logElements: { text: string; color: number }[][] = [];
+  if (!config) return {};
   if (
     isNaN(config?.port ?? NaN) ||
     (config?.port ?? -1) > 65535 ||
     (config?.port ?? -1) < 0
   ) {
-    state.log([
+    await state.log([
       [
         {
           text: `${EMOJIS.PORT} port number invalid. Not refreshing`,
@@ -3125,7 +3129,7 @@ const serve = async function (
     !state.config.logAccessInTerminal &&
     !targetUsesSpecialProtocol
   ) {
-    console.log("bou")
+    console.log("bou");
     state.mockConfig.mocks.set(uniqueHash, response);
     stdout.moveCursor(0, -1, () => stdout.clearLine(-1, state.quickStatus));
   }
@@ -3372,7 +3376,7 @@ if (crashTest) {
     .then(({ error }) =>
       error?.code !== "ECONNREFUSED"
         ? Promise.reject("Server should have stopped")
-        : log({config: {simpleLogs: true}}, [
+        : log({ config: { simpleLogs: true } }, [
             [
               {
                 text: `${EMOJIS.COLORED} Crash test successful`,
@@ -3386,7 +3390,9 @@ if (crashTest) {
 }
 
 if (!crashTest && runAsMainProgram) {
-  load().then(start).then((state) => state.quickStatus());
+  load()
+    .then(start)
+    .then(state => state.quickStatus());
 }
 
 export {
