@@ -898,62 +898,69 @@ const recorderHandler = (
       },
     });
 
-  setTimeout(() => state.log(
-    [
-      modeHasBeenChangedToProxy
-        ? [
-            {
-              text: `${EMOJIS.RULES} ${Object.keys(state.config.mapping ?? {})
-                .length.toString()
-                .padStart(5)} loaded mapping rules`,
-              color: LogLevel.INFO,
-            },
-          ]
-        : null,
-      mocksConfigHasBeenChanged
-        ? [
-            {
-              text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS} ${(
-                mocks ?? state.mockConfig.mocks
-              ).size
-                .toString()
-                .padStart(5)} loaded mocks`,
-              color: LogLevel.INFO,
-            },
-          ]
-        : null,
-      strictModeHasBeenChanged
-        ? [
-            {
-              text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS
-              } mocks strict mode : ${strict ?? state.mockConfig.strict}`,
-              color: LogLevel.INFO,
-            },
-          ]
-        : null,
-      autoRecordModeHasBeenChanged
-        ? [
-            {
-              text: `${
-                mode === ServerMode.PROXY
-                  ? EMOJIS.AUTO_RECORD
-                  : strict
-                    ? EMOJIS.STRICT_MOCKS
-                    : EMOJIS.MOCKS
-              } mocks auto-record : ${autoRecord}`,
-              color: LogLevel.INFO,
-            },
-          ]
-        : null,
-      modeHasBeenChangedToProxy ||
-      mocksConfigHasBeenChanged ||
-      autoRecordModeHasBeenChanged ||
-      strictModeHasBeenChanged ||
-      mocksHaveBeenPurged
-        ? state.buildQuickStatus()
-        : null,
-    ].filter(e => e),
-  ), 1);
+  setTimeout(
+    () =>
+      state.log(
+        [
+          modeHasBeenChangedToProxy
+            ? [
+                {
+                  text: `${EMOJIS.RULES} ${Object.keys(
+                    state.config.mapping ?? {},
+                  )
+                    .length.toString()
+                    .padStart(5)} loaded mapping rules`,
+                  color: LogLevel.INFO,
+                },
+              ]
+            : null,
+          mocksConfigHasBeenChanged
+            ? [
+                {
+                  text: `${strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS} ${(
+                    mocks ?? state.mockConfig.mocks
+                  ).size
+                    .toString()
+                    .padStart(5)} loaded mocks`,
+                  color: LogLevel.INFO,
+                },
+              ]
+            : null,
+          strictModeHasBeenChanged
+            ? [
+                {
+                  text: `${
+                    strict ? EMOJIS.STRICT_MOCKS : EMOJIS.MOCKS
+                  } mocks strict mode : ${strict ?? state.mockConfig.strict}`,
+                  color: LogLevel.INFO,
+                },
+              ]
+            : null,
+          autoRecordModeHasBeenChanged
+            ? [
+                {
+                  text: `${
+                    mode === ServerMode.PROXY
+                      ? EMOJIS.AUTO_RECORD
+                      : strict
+                        ? EMOJIS.STRICT_MOCKS
+                        : EMOJIS.MOCKS
+                  } mocks auto-record : ${autoRecord}`,
+                  color: LogLevel.INFO,
+                },
+              ]
+            : null,
+          modeHasBeenChangedToProxy ||
+          mocksConfigHasBeenChanged ||
+          autoRecordModeHasBeenChanged ||
+          strictModeHasBeenChanged ||
+          mocksHaveBeenPurged
+            ? state.buildQuickStatus()
+            : null,
+        ].filter(e => e),
+      ),
+    1,
+  );
 };
 
 const dataPage = (
