@@ -2459,7 +2459,7 @@ const websocketServe = function (
 
   const target = new URL(
     `${targetWithForcedPrefix?.protocol ?? "https"}//${targetWithForcedPrefix?.host ?? "localhost"}${request.url
-      ?.replace(new RegExp(`^${key}`, "g"), path)
+      ?.replace(new RegExp(`^${key}`, "g"), targetWithForcedPrefix.pathname)
       ?.replace(/^\/*/, "/")}`,
   );
   const downstreamRequestOptions: RequestOptions = {
@@ -2469,7 +2469,11 @@ const websocketServe = function (
     protocol: target.protocol,
     rejectUnauthorized: false,
     method: request.method,
-    headers: request.headers,
+    headers: {
+      ...request.headers,
+      host: target.hostname,
+      origin: target.origin,
+    },
     host: target.hostname,
   };
 
