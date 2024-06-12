@@ -108,6 +108,7 @@ describe("config load", async () => {
       simpleLogs: false,
       logAccessInTerminal: false,
       websocket: true,
+      unwantedHeaderNamesInMocks: [],
       disableWebSecurity: false,
     });
   });
@@ -135,6 +136,7 @@ describe("config load", async () => {
       dontTranslateLocationHeader: false,
       simpleLogs: false,
       logAccessInTerminal: false,
+      unwantedHeaderNamesInMocks: [],
       websocket: true,
       disableWebSecurity: false,
     });
@@ -161,6 +163,7 @@ describe("config load", async () => {
       simpleLogs: false,
       logAccessInTerminal: false,
       websocket: true,
+      unwantedHeaderNamesInMocks: [],
       disableWebSecurity: false,
     });
   });
@@ -192,6 +195,7 @@ describe("config load", async () => {
       dontTranslateLocationHeader: false,
       simpleLogs: false,
       logAccessInTerminal: false,
+      unwantedHeaderNamesInMocks: [],
       websocket: true,
       disableWebSecurity: false,
     });
@@ -244,6 +248,7 @@ describe("config load", async () => {
       simpleLogs: true,
       logAccessInTerminal: true,
       websocket: false,
+      unwantedHeaderNamesInMocks: [],
       disableWebSecurity: true,
     });
   });
@@ -871,6 +876,51 @@ describe('Mock server matcher', () => {
       url: '/',
       headers: {
         'X-My-Header': 'My-Value',
+        host: 'example.com'
+      },
+      readableLength: 0,
+    }, {
+      writeHead: () => { },
+      end: (payload) => {
+        body = payload.toString("ascii")
+      }
+    })
+    assert.equal(body, "matched a mock");
+  })
+
+  it('should match when the request uses a header that is different but unwanted', async () => {
+    let body = ''
+    await serve({
+      config: {
+        port: 1337,
+        mapping: {},
+        unwantedHeaderNamesInMocks: ['X-My-Excluded-Header']
+      },
+      mockConfig: {
+        autoRecord: true,
+        strict: true,
+        mocks: new Map([[
+          Buffer.from(JSON.stringify({
+            method: "GET",
+            url: "/",
+            headers: { host: 'example.com', 'X-My-Excluded-Header': 'Value-1' },
+            body: ""
+          })).toString("base64"),
+          Buffer.from(JSON.stringify({
+            body:
+              Buffer.from("matched a mock").toString('base64')
+          })).toString("base64")
+        ]])
+      },
+      logsListeners: [],
+      mode: 'mock',
+      log: () => { },
+      notifyLogsListeners: () => { }
+    }, {
+      method: 'GET',
+      url: '/',
+      headers: {
+        'X-My-Excluded-Header': 'Value-2',
         host: 'example.com'
       },
       readableLength: 0,
