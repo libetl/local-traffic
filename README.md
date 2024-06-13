@@ -99,6 +99,7 @@ All boolean settings default to false when unspecified.
 - `disableWebSecurity`: (`boolean`) true for easygoing values in cross origin requests or content security policy headers
 - `connectTimeout`: (`number`) max time before aborting the connection (defaults to 3000ms)
 - `socketTimeout`: (`number`) max time waiting for a response (defaults to 3000ms)
+- `unwantedHeaderNamesInMocks`: (`string[]`) header names that won't get added to the mock request matchers
 
 ## recorder API
 

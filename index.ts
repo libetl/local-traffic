@@ -100,6 +100,7 @@ interface LocalConfiguration {
   mapping?: Mapping;
   ssl?: SecureServerOptions;
   port?: number;
+  unwantedHeaderNamesInMocks?: string[];
   replaceRequestBodyUrls?: boolean;
   replaceResponseBodyUrls?: boolean;
   dontUseHttp2Downstream?: boolean;
@@ -728,15 +729,17 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
         ${Object.entries({ ...defaultConfig, ssl: { cert: "", key: "" } })
           .map(
             ([property, exampleValue]) =>
-              `${property}: {type: "${
-                typeof exampleValue === "number"
-                  ? "integer"
-                  : typeof exampleValue === "string"
-                    ? "string"
-                    : typeof exampleValue === "boolean"
-                      ? "boolean"
-                      : "object"
-              }"}`,
+              `${property}: {type: ${
+                property === "unwantedHeaderNamesInMocks"
+                  ? '"array","items": {"type":"string"}'
+                  : typeof exampleValue === "number"
+                    ? '"integer"'
+                    : typeof exampleValue === "string"
+                      ? '"string"'
+                      : typeof exampleValue === "boolean"
+                        ? '"boolean"'
+                        : '"object"'
+              }}`,
           )
           .join(",\n          ")}
       },
@@ -860,7 +863,7 @@ const recorderHandler = (
     ? null
     : new Map<string, string>(
         mocksArray.map(({ response, uniqueHash }) => [
-          cleanEntropy(uniqueHash),
+          cleanEntropy(state.config, uniqueHash),
           response,
         ]),
       );
@@ -1665,6 +1668,7 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   disableWebSecurity: false,
   connectTimeout: 3000,
   socketTimeout: 3000,
+  unwantedHeaderNamesInMocks: [],
 };
 const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
   new Promise<LocalConfiguration>(resolve =>
@@ -1707,22 +1711,24 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
           filename,
           JSON.stringify(defaultConfig, null, 2),
           fileWriteErr => {
-            return (fileWriteErr ?
-              log(null, [
-                [
-                  {
-                    text: `${EMOJIS.ERROR_4} config file NOT created`,
-                    color: LogLevel.ERROR,
-                  },
-                ],
-              ]) : log(null, [
-                [
-                  {
-                    text: `${EMOJIS.COLORED} config file created`,
-                    color: LogLevel.INFO,
-                  },
-                ],
-              ])
+            return (
+              fileWriteErr
+                ? log(null, [
+                    [
+                      {
+                        text: `${EMOJIS.ERROR_4} config file NOT created`,
+                        color: LogLevel.ERROR,
+                      },
+                    ],
+                  ])
+                : log(null, [
+                    [
+                      {
+                        text: `${EMOJIS.COLORED} config file created`,
+                        color: LogLevel.INFO,
+                      },
+                    ],
+                  ])
             ).then(() => resolve(config!));
           },
         );
@@ -2225,7 +2231,10 @@ const replaceTextUsingMapping = (
     .split(`${proxyHostnameAndPort}/:`)
     .join(`${proxyHostnameAndPort}:`);
 
-const cleanEntropy = (requestObject: string | RequestStruct) => {
+const cleanEntropy = (
+  config: LocalConfiguration,
+  requestObject: string | RequestStruct,
+) => {
   try {
     const request =
       typeof requestObject === "object"
@@ -2267,6 +2276,9 @@ const cleanEntropy = (requestObject: string | RequestStruct) => {
       // disable unwanted security check
       "user-agent",
       // no user agent comparison
+      ...(Array.isArray(config.unwantedHeaderNamesInMocks)
+        ? config.unwantedHeaderNamesInMocks
+        : []),
     ].forEach(header => {
       delete request?.headers?.[header];
     });
@@ -2619,15 +2631,19 @@ const serve = async function (
   let requestBody: Buffer | null = null;
   const bufferedRequestBody =
     state.config.replaceRequestBodyUrls || !!state.logsListeners.length;
-  const http1WithRequestBody = (inboundRequest as IncomingMessage)
-    ?.readableLength;
   // sounds ridiculous, but yes, I need to wait until the HTTP/2 stream gets read
   if (state.config.ssl) await new Promise(resolve => setTimeout(resolve, 1));
-  const http2WithRequestBody = (inboundRequest as Http2ServerRequest)?.stream
-    ?.readableLength;
+  const hasImmediateOrDeferredRequestBody =
+    parseInt(inboundRequest.headers["content-length"] ?? "0") > 0;
+  const http1WithRequestBody =
+    !!(inboundRequest as IncomingMessage)?.readableLength ||
+    hasImmediateOrDeferredRequestBody;
+  const http2WithRequestBody =
+    !!(inboundRequest as Http2ServerRequest)?.stream &&
+    hasImmediateOrDeferredRequestBody;
   const requestBodyExpected = !(
-    ((state.config.ssl && http2WithRequestBody === 0) ||
-      (!state.config.ssl && http1WithRequestBody === 0)) &&
+    ((state.config.ssl && http2WithRequestBody === false) ||
+      (!state.config.ssl && http1WithRequestBody === false)) &&
     (inboundRequest.headers["content-length"] === "0" ||
       inboundRequest.headers["content-length"] === undefined)
   );
@@ -2680,7 +2696,7 @@ const serve = async function (
   );
   const autoRecordModeEnabled =
     state.mockConfig.autoRecord && state.mode === ServerMode.PROXY;
-  const uniqueHash = cleanEntropy({
+  const uniqueHash = cleanEntropy(state.config, {
     method: inboundRequest.method ?? "GET",
     url: inboundRequest.url ?? "",
     headers: Object.assign(
@@ -2760,7 +2776,9 @@ const serve = async function (
               mockRequestObject.body === requestObject.body) &&
             Object.entries(mockRequestObject.headers ?? {}).every(
               ([name, value]) =>
-                !value || requestObject.headers?.[name] === value,
+                !value ||
+                state.config?.unwantedHeaderNamesInMocks?.includes?.(name) ||
+                requestObject.headers?.[name] === value,
             )
           );
         })
