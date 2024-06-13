@@ -560,6 +560,7 @@ describe("server cruise", async () => {
       `request=${JSON.stringify({
         method: "GET",
         headers: {
+          "content-length": "83",
           host: "localhost",
         },
         url: "/foo/bar",

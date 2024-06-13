@@ -2631,15 +2631,19 @@ const serve = async function (
   let requestBody: Buffer | null = null;
   const bufferedRequestBody =
     state.config.replaceRequestBodyUrls || !!state.logsListeners.length;
-  const http1WithRequestBody = (inboundRequest as IncomingMessage)
-    ?.readableLength;
   // sounds ridiculous, but yes, I need to wait until the HTTP/2 stream gets read
   if (state.config.ssl) await new Promise(resolve => setTimeout(resolve, 1));
-  const http2WithRequestBody = (inboundRequest as Http2ServerRequest)?.stream
-    ?.readableLength;
+  const hasImmediateOrDeferredRequestBody =
+    parseInt(inboundRequest.headers["content-length"] ?? "0") > 0;
+  const http1WithRequestBody =
+    !!(inboundRequest as IncomingMessage)?.readableLength ||
+    hasImmediateOrDeferredRequestBody;
+  const http2WithRequestBody =
+    !!(inboundRequest as Http2ServerRequest)?.stream &&
+    hasImmediateOrDeferredRequestBody;
   const requestBodyExpected = !(
-    ((state.config.ssl && http2WithRequestBody === 0) ||
-      (!state.config.ssl && http1WithRequestBody === 0)) &&
+    ((state.config.ssl && http2WithRequestBody === false) ||
+      (!state.config.ssl && http1WithRequestBody === false)) &&
     (inboundRequest.headers["content-length"] === "0" ||
       inboundRequest.headers["content-length"] === undefined)
   );
