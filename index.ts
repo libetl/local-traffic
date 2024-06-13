@@ -2641,6 +2641,8 @@ const serve = async function (
   const http2WithRequestBody =
     !!(inboundRequest as Http2ServerRequest)?.stream &&
     hasImmediateOrDeferredRequestBody;
+  const serverSentEvents =
+    !!inboundRequest.headers?.accept?.includes("text/event-stream");
   const requestBodyExpected = !(
     ((state.config.ssl && http2WithRequestBody === false) ||
       (!state.config.ssl && http1WithRequestBody === false)) &&
@@ -3013,13 +3015,15 @@ const serve = async function (
       }
       (outboundExchange as ClientHttp2Stream | Duplex)?.on?.(
         "data",
-        (chunk: Buffer | string) =>
-          (partialBody = Buffer.concat([
+        (chunk: Buffer | string) => {
+          partialBody = Buffer.concat([
             partialBody,
             typeof chunk === "string"
               ? Buffer.from(chunk as string)
               : (chunk as Buffer),
-          ])),
+          ]);
+          if (serverSentEvents) resolve(partialBody);
+        },
       );
       outboundExchange?.on?.("end", () => {
         resolve(partialBody);
@@ -3052,7 +3056,7 @@ const serve = async function (
   const responseHeaders = {
     ...Object.entries({
       ...outboundResponseHeaders,
-      ...(state.config.replaceResponseBodyUrls
+      ...(state.config.replaceResponseBodyUrls && !serverSentEvents
         ? { ["content-length"]: `${payload.byteLength}` }
         : {}),
       ...(state.config.disableWebSecurity
@@ -3061,6 +3065,12 @@ const serve = async function (
             ["access-control-allow-headers"]: "*",
             ["access-control-allow-method"]: "*",
             ["access-control-allow-origin"]: "*",
+          }
+        : {}),
+      ...(serverSentEvents
+        ? {
+            ["cache-control"]: "no-cache",
+            ["x-accel-buffering"]: "no",
           }
         : {}),
     })
@@ -3126,7 +3136,13 @@ const serve = async function (
       );
     }
   } catch (e) {}
-  if (payload) inboundResponse.end(payload);
+  if (serverSentEvents) {
+    inboundResponse.write(payload);
+    (outboundExchange as ClientHttp2Stream | Duplex)?.on?.(
+      "data",
+      (chunk: Buffer | string) => inboundResponse.write(chunk),
+    );
+  } else if (payload) inboundResponse.end(payload);
   else inboundResponse.end();
   const endTime = instantTime();
 
