@@ -221,6 +221,7 @@ const log = async function (
       )
       .join(" | "),
   );
+  if (true) return;
   if (state?.config?.simpleLogs)
     for (let simpleText of simpleTexts)
       console.log(
@@ -3478,7 +3479,7 @@ const square = async (
     await new Promise(resolve1 => stdout.write("║", () => resolve1(void 0)));
   }
   await new Promise(resolve1 =>
-    stdout.moveCursor(-width + 1, -height + 1, () => resolve1(void 0)),
+    stdout.moveCursor(-width, -height + 1, () => resolve1(void 0)),
   );
 };
 
@@ -3491,8 +3492,8 @@ if (!crashTest && runAsMainProgram) {
         stdout.getWindowSize()[1] - 20,
         {
           topRight: "╦",
-          bottomLeft: "╠"
-        }
+          bottomLeft: "╠",
+        },
       ),
     )
     .then(() => load())
