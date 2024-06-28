@@ -39,7 +39,7 @@ import {
   brotliCompress,
   brotliDecompress,
 } from "zlib";
-import { resolve, normalize } from "path";
+import { resolve, normalize, sep } from "path";
 import { createHash, randomBytes } from "crypto";
 import { argv, cwd, exit, hrtime, stdout } from "process";
 import { homedir } from "os";
@@ -1763,7 +1763,7 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
                     ? `${replaceBody?.replace(/\/*$/g, "")}/$$${matchersCount + 1}`
                     : replaceBody;
                   const replacedDownstreamUrl = isDirectory
-                    ? `${downstreamUrl.replace(/\/*$/g, "")}/$$${matchersCount + 1}`
+                    ? `${downstreamUrl.replace(/\/*$/g, "")}${sep}$$${matchersCount + 1}`
                     : downstreamUrl;
                   return resolve(
                     !replaceBody
