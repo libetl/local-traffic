@@ -459,8 +459,10 @@ const buildQuickStatus = function (this: State) {
 };
 
 const quickStatus = async function (this: State) {
-  this.log([this.buildQuickStatus()]);
-  this.notifyConfigListeners(this.config as Record<string, unknown>);
+  this.log([this.buildQuickStatus()])
+  .then(() => 
+    this.notifyConfigListeners(this.config as Record<string, unknown>)
+  );
 };
 
 const errorPage = (
@@ -539,15 +541,30 @@ const logsView = (
   <tbody id="proxy">
   </tbody>
 </table>
+<div class="alert alert-warning" role="alert"
+style="display:none;left:20%;right:20%;top:20%;position:absolute;z-index:1;"
+id="websocket-disconnected">
+<p>&#x24D8;&nbsp;Websocket connection is not available at this moment.</p>
+<ul><li>Is local-traffic running ?</li><li>Are websockets enabled ?</li>
+<li>Are you running a network protection tool that disallows websockets ?</li></ul>
+</div>
 <script type="text/javascript">
+    let socket = null;
     function start() {
       document.getElementById('table-access').style.height =
         (document.documentElement.clientHeight - 150) + 'px';
-      const socket = new WebSocket("ws${
+      if (socket !== null) return;
+      socket = new WebSocket("ws${
         config.ssl ? "s" : ""
       }://${proxyHostnameAndPort}/local-traffic-logs${
         options.captureResponseBody ? "?wantsResponseMessage=true" : ""
       }");
+      socket.onopen = function(event) {
+        document.getElementById('websocket-disconnected').style.display = 'none';
+        document.getElementById('table-access').style.filter = null;
+        (document.getElementsByTagName('nav')[0]||{style:{}}).style.filter = null;
+        (document.getElementsByTagName('form')[0]||{style:{}}).style.filter = null;
+      }
       socket.onmessage = function(event) {
         let data = event.data
         let uniqueHash;
@@ -598,8 +615,20 @@ const logsView = (
         cleanup();
       };
       socket.onerror = function(error) {
-        setTimeout(start, 5000);
+        socket = null;
+        setTimeout(start, 1000);
+        if (error.target.readyState === 3) {
+          document.getElementById('websocket-disconnected').style.display = 'block';
+          document.getElementById('table-access').style.filter = 'blur(8px)';
+          (document.getElementsByTagName('nav')[0]||{style:{}}).style.filter = 'blur(8px)';
+          (document.getElementsByTagName('form')[0]||{style:{}}).style.filter = 'blur(8px)';
+          return;
+        }
         throw new Error(\`[error] \${JSON.stringify(error)}\`);
+      };
+      socket.onclose = function(error) {
+        socket = null;
+        setTimeout(start, 1000);
       };
     };
     function show(id) {
@@ -779,7 +808,7 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
     }
 
     const editor = new JSONEditor(container, options);
-    let socket;
+    let socket = null;
     const initialJson = ${JSON.stringify(state.config)}
     editor.set(initialJson)
     editor.validate();
@@ -788,7 +817,28 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
       bindKey: {win: 'Ctrl-S',  mac: 'Command-S'},
       exec: save,
     });
-
+    function startSocket() {
+      if (socket != null) return;
+      socket = new WebSocket("ws${
+        state.config.ssl ? "s" : ""
+      }://${proxyHostnameAndPort}/local-traffic-config");
+      socket.onmessage = function(event) {
+        editor.set(JSON.parse(event.data))
+        editor.validate()
+      }
+      socket.onerror = function(error) {
+        socket = null;
+        setTimeout(startSocket, 1000);
+        if (error.target.readyState === 3) {
+          return;
+        }
+        throw new Error(\`[error] \${JSON.stringify(error)}\`);
+      };
+      socket.onclose = function(error) {
+        socket = null;
+        setTimeout(startSocket, 1000);
+      };
+    }
     window.addEventListener("DOMContentLoaded", function() {
       document.getElementById('jsoneditor').style.height =
         (document.documentElement.clientHeight - 150) + 'px';
@@ -811,13 +861,7 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
       saveButton.innerHTML="&#x1F4BE;";
       document.querySelector('.jsoneditor-menu')
               .appendChild(saveButton);
-      socket = new WebSocket("ws${
-        state.config.ssl ? "s" : ""
-      }://${proxyHostnameAndPort}/local-traffic-config");
-      socket.onmessage = function(event) {
-        editor.set(JSON.parse(event.data))
-        editor.validate()
-      }
+      startSocket();
     });
     </script>
   </body></html>`);
@@ -1950,10 +1994,7 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
     ]);
   }
   setTimeout(
-    () =>
-      state?.log(
-        logElements.concat([buildQuickStatus.apply({ ...state, config })]),
-      ),
+    () => quickStatus.apply({ ...state, config }),
     1,
   );
   return { config, server: shouldRestartServer ? null : undefined };
