@@ -223,16 +223,16 @@ const log = async function (
   );
   if (state?.config?.simpleLogs)
     for (let simpleText of simpleTexts)
-      console.log(
-        `${getCurrentTime(state?.config?.simpleLogs)} | ${simpleText}`,
+      stdout.write(
+        `${getCurrentTime(state?.config?.simpleLogs)} | ${simpleText}\n`,
       );
   else {
     for (let element of logs) {
       const logTexts = element.map(e => `\u001b[48;5;${e.color}m${e.text}`);
-      console.log(
+      stdout.write(
         `${getCurrentTime(state?.config?.simpleLogs)}${element
           .map(e => `\u001b[48;5;${e.color}m${"".padEnd((e.length ?? 64) + 1)}`)
-          .join("▐")}\u001b[0m`,
+          .join("▐")}\u001b[0m\n`,
       );
 
       await new Promise(resolve =>
@@ -248,7 +248,7 @@ const log = async function (
         stdout.write(logTexts[i]);
         offset += (element[i].length ?? 64) + 2;
       }
-      console.log("\u001b[0m");
+      stdout.write("\u001b[0m\n");
       for (let simpleText of simpleTexts)
         state?.notifyLogsListeners?.({
           event: simpleText,
@@ -598,8 +598,8 @@ const logsView = (
         cleanup();
       };
       socket.onerror = function(error) {
-        console.log(\`[error] \${JSON.stringify(error)}\`);
         setTimeout(start, 5000);
+        throw new Error(\`[error] \${JSON.stringify(error)}\`);
       };
     };
     function show(id) {
@@ -1681,7 +1681,8 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
               color: LogLevel.ERROR,
             },
           ],
-        ]);
+        ]).then(() => resolve({ ...defaultConfig }));
+        return;
       }
       let config: LocalConfiguration | null = null;
       try {
@@ -1734,6 +1735,55 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
         );
       } else resolve(config!);
     }),
+  ).then(
+    async (readConfig: LocalConfiguration) =>
+      await Promise.all(
+        Object.entries(readConfig.mapping).map(
+          ([key, mapping]) =>
+            new Promise<[keyof Mapping, typeof mapping]>(resolve => {
+              const replaceBody =
+                typeof mapping === "string" ? null : mapping.replaceBody;
+              const downstreamUrl =
+                typeof mapping === "string" ? mapping : mapping.downstreamUrl;
+              if (!downstreamUrl.startsWith("file:") || key.endsWith("(.*)"))
+                return resolve([key, mapping]);
+              const matchersCount = downstreamUrl
+                .split("")
+                .map((c, i) => c + downstreamUrl.charAt(i + 1))
+                .filter(m => m === "$$").length;
+              return lstat(
+                new URL(downstreamUrl.replace(/\$\$[0-9]+/g, "")).pathname,
+                (e, stats) => {
+                  if (e) return resolve([key, mapping]);
+                  const isDirectory = stats.isDirectory();
+                  const replacedKey = isDirectory
+                    ? `${key?.replace(/\/*$/g, "")}/(.*)`
+                    : key;
+                  const replacedReplaceBody = isDirectory
+                    ? `${replaceBody?.replace(/\/*$/g, "")}/$$${matchersCount + 1}`
+                    : replaceBody;
+                  const replacedDownstreamUrl = isDirectory
+                    ? `${downstreamUrl.replace(/\/*$/g, "")}/$$${matchersCount + 1}`
+                    : downstreamUrl;
+                  return resolve(
+                    !replaceBody
+                      ? [replacedKey, replacedDownstreamUrl]
+                      : [
+                          replacedKey,
+                          {
+                            replaceBody: replacedReplaceBody,
+                            downstreamUrl: replacedDownstreamUrl,
+                          },
+                        ],
+                  );
+                },
+              );
+            }),
+        ),
+      ).then(interpretedMapping => ({
+        ...readConfig,
+        mapping: Object.fromEntries(interpretedMapping),
+      })),
   );
 
 const onWatch = async function (state: State): Promise<Partial<State>> {
@@ -2202,29 +2252,49 @@ const replaceTextUsingMapping = (
       typeof value === "string" ? value : value.replaceBody,
     ])
     .reduce((inProgress, [path, value]) => {
+      const pathRegexes = path
+        .split("")
+        .filter(e => ["(", ")"].includes(e))
+        .join("")
+        .match(/^(\(\))*$/)
+        ? path
+            .split("(")
+            .flatMap(e => e.split(")"))
+            .filter((_, i) => i % 2 === 1)
+        : [];
+      let replacementCounter = 0;
       return specialProtocols.some(protocol => value.startsWith(protocol)) ||
-        (path !== "" && !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
+        (path !== "" &&
+          !(
+            path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/) || pathRegexes.length
+          ))
         ? inProgress
         : direction === REPLACEMENT_DIRECTION.INBOUND
           ? inProgress.replace(
               new RegExp(
                 value
                   .replace(new RegExp(`^(${specialPages.join("|")}):\/\/`), "")
-                  .replace(/[*+?^${}()|[\]\\]/g, "")
-                  .replace(/^https/, "https?") + "/*",
+                  .replace(
+                    /\$\$(\d+)/g,
+                    (_, index) =>
+                      "(" + (pathRegexes![parseInt(index) - 1] ?? "") + ")",
+                  )
+                  .replace(/\.\*/g, "[-a-zA-Z0-9()@:%_+.~#?&//=]*")
+                  .replace(pathRegexes.length ? "" : /[*+?^${}()|[\]\\]/g, "")
+                  .replace(/^https/, "https?") +
+                  (pathRegexes.length ? "" : "/*"),
                 "ig",
               ),
-              `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path.replace(
-                /\/+$/,
-                "",
-              )}/`,
+              `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path
+                .replace(/\([^)]+\)/g, () => `$${++replacementCounter}`)
+                .replace(/\/+$/, "/")
+                .replace(/^(?![^/])$/, "/")}`,
             )
           : inProgress
               .split(
-                `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path.replace(
-                  /\/+$/,
-                  "",
-                )}`,
+                `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path
+                  .replace(/\/+$/, "")
+                  .replace(/^(?![^/])$/, "/")}`,
               )
               .join(value);
     }, text)
@@ -2351,10 +2421,14 @@ const determineMapping = (
       ...Object.entries(parameters.mapping ?? {}).map(([key, entry]) => {
         const value =
           typeof entry === "string" ? entry : entry?.downstreamUrl ?? "";
+        const matchedKey =
+          typeof entry === "string" ? key : entry?.replaceBody ?? "";
+        const url = new URL(
+          value?.startsWith?.("data:") ? value : unixNorm(value),
+        );
         return {
-          [key]: new URL(
-            value?.startsWith?.("data:") ? value : unixNorm(value),
-          ),
+          [matchedKey]: url,
+          [key]: url,
         };
       }),
     ),
@@ -2371,7 +2445,7 @@ const determineMapping = (
       : new URL(
           rawTarget.href.replace(
             /\$\$(\d+)/g,
-            (_, index) => match![parseInt(index)],
+            (_, index) => match![parseInt(index)] ?? "",
           ),
         );
   return { proxyHostname, proxyHostnameAndPort, url, path, key, target };
