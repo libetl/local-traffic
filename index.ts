@@ -459,9 +459,8 @@ const buildQuickStatus = function (this: State) {
 };
 
 const quickStatus = async function (this: State) {
-  this.log([this.buildQuickStatus()])
-  .then(() => 
-    this.notifyConfigListeners(this.config as Record<string, unknown>)
+  this.log([this.buildQuickStatus()]).then(() =>
+    this.notifyConfigListeners(this.config as Record<string, unknown>),
   );
 };
 
@@ -1993,10 +1992,7 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
       },
     ]);
   }
-  setTimeout(
-    () => quickStatus.apply({ ...state, config }),
-    1,
-  );
+  setTimeout(() => quickStatus.apply({ ...state, config }), 1);
   return { config, server: shouldRestartServer ? null : undefined };
 };
 
