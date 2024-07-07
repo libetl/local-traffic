@@ -21,8 +21,8 @@ const Server = class {
 
 export const argv = ["test-runner", "local-traffic"];
 export const cwd = mock.fn(() => "/home/user/fake-dir");
-export const exit = mock.fn(() => {})
-export const homedir = mock.fn(() => "/home/user")
+export const exit = mock.fn(() => {});
+export const homedir = mock.fn(() => "/home/user");
 export const createServer = mock.fn(
   requestListener => new Server(requestListener),
 );
@@ -31,9 +31,9 @@ export const createSecureServer = mock.fn(
 );
 export const connect = mock.fn((targetUrl, _2, resolve) => {
   if (!targetUrl?.pathname?.includes("http1"))
-    process.nextTick(() => resolve({}, { alpnProtocol: 'h2c' }));
+    process.nextTick(() => resolve({}, { alpnProtocol: "h2c" }));
   return {
-    alpnProtocol: 'h2c',
+    alpnProtocol: "h2c",
     on: (event, callback) => {},
     request: http2OutboundRequest => {
       http2OutboundRequests.unshift(http2OutboundRequest);
@@ -81,7 +81,10 @@ export const request = mock.fn((http1Request, resolve) => {
 });
 export const lstat = mock.fn((path, callback) => {
   process.nextTick(() =>
-    callback(null, { isDirectory: () => false, isFile: () => true }),
+    callback(null, {
+      isDirectory: () => path.includes("i/am/a/folder"),
+      isFile: () => true,
+    }),
   );
 });
 export const readFile = mock.fn((path, callback) => {
@@ -98,10 +101,12 @@ export const readFile = mock.fn((path, callback) => {
 export const readdir = mock.fn((path, callback) => {
   process.nextTick(() => callback(null, ["file1.txt", "file2.txt"]));
 });
-export const stdout = { 
-  isTTY: true, 
-  moveCursor: (_x, _y, resolve) => {resolve()},
-  write: () => {}
+export const stdout = {
+  isTTY: true,
+  moveCursor: (_x, _y, resolve) => {
+    resolve();
+  },
+  write: () => {},
 };
 
 let interval = null;
@@ -139,10 +144,10 @@ export const setup = () => {
         Object.assign(response, {
           writeHead: (code, statusMessage, headers) => {
             response.code = code ?? 200;
-            response.statusMessage = typeof statusMessage === 'object' ? "" :
-            statusMessage ?? "";
-            response.headers = typeof statusMessage === 'object' ? statusMessage :
-            headers ?? {};
+            response.statusMessage =
+              typeof statusMessage === "object" ? "" : statusMessage ?? "";
+            response.headers =
+              typeof statusMessage === "object" ? statusMessage : headers ?? {};
           },
           setHeader: (headerName, headerValue) => {
             response.headers = response.headers ?? {};

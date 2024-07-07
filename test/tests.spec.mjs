@@ -2,7 +2,10 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert";
 import { dirname, resolve, relative } from "node:path";
 import typescript from "typescript";
-import { readFile as realReadFile, writeFile as writeRealFile } from "node:fs/promises";
+import {
+  readFile as realReadFile,
+  writeFile as writeRealFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
   gzip,
@@ -27,13 +30,21 @@ import {
   responses,
 } from "./mocks.mjs";
 
-const temporaryFileLocation = `${tmpdir()}/local-traffic.mjs`;
-const useTemporaryFile = true
+const useTemporaryFile = true;
+// /private/var to stay compatible with the inconsistent MacOS file system.
+const temporaryDirectory = tmpdir().replace(/^\/var\//, "/private/var/");
+const temporaryFileLocation = `${temporaryDirectory}/local-traffic.mjs`;
+const projectDirectory = new URL(dirname(import.meta.url)).pathname.replace(
+  /(.*)\/local-traffic.*/,
+  "$1/local-traffic",
+);
+const fromTemporaryDirectoryToProject = useTemporaryFile
+  ? relative(temporaryDirectory, projectDirectory)
+  : `file://${projectDirectory}`;
+
 const localTraffic = await (async () => {
   const source = (
-    await realReadFile(
-      resolve(new URL(dirname(import.meta.url)).pathname, "..", "index.ts"),
-    )
+    await realReadFile(resolve(projectDirectory, "index.ts"))
   ).toString();
   const javascript = typescript.transpileModule(source, {
     compilerOptions: {
@@ -42,21 +53,20 @@ const localTraffic = await (async () => {
   }).outputText;
   const javascriptWithMocks = javascript
     .replace(
-      /from "(http|http2|https|fs|os|process)"/g,
-      `from "${useTemporaryFile
-        ? relative(tmpdir(), dirname(import.meta.url).replace(/file:\/\//, ''))
-        : dirname(import.meta.url)}/mocks.mjs"`,
+      /from "(http|http2|https|fs|os|process|console)"/g,
+      `from "${fromTemporaryDirectoryToProject}/test/mocks.mjs"`,
     )
-    .replace(/3000/g, "3").replace(/5000/g, "5");
+    .replace(/3000/g, "3")
+    .replace(/5000/g, "5");
 
   if (useTemporaryFile)
-    await writeRealFile(temporaryFileLocation, javascriptWithMocks)
+    await writeRealFile(temporaryFileLocation, javascriptWithMocks);
 
   const base64Module = useTemporaryFile
     ? temporaryFileLocation
-    : `data:text/javascript;base64,${Buffer.from(
-      javascriptWithMocks,
-    ).toString("base64url")}`;
+    : `data:text/javascript;base64,${Buffer.from(javascriptWithMocks).toString(
+        "base64url",
+      )}`;
   return await import(base64Module);
 })();
 
@@ -231,6 +241,174 @@ describe("config load", async () => {
 
     assert.deepEqual(config, {
       mapping: {
+        "/home/": "https://localhost:12345/home/",
+        "": "https://acme.com",
+      },
+      ssl: {
+        key: "key",
+        cert: "cert",
+      },
+      connectTimeout: 3,
+      socketTimeout: 3,
+      port: 443,
+      replaceRequestBodyUrls: true,
+      replaceResponseBodyUrls: true,
+      dontUseHttp2Downstream: true,
+      dontTranslateLocationHeader: true,
+      simpleLogs: true,
+      logAccessInTerminal: true,
+      websocket: false,
+      unwantedHeaderNamesInMocks: [],
+      disableWebSecurity: true,
+    });
+  });
+
+  it("should interpret a folder within a replaceBody block as needing a wildcard mask", async () => {
+    buffers.push(
+      JSON.stringify({
+        mapping: {
+          "/static-webapp": {
+            replaceBody: "https://mycdn.org/js/my-js-dir/",
+            downstreamUrl: "file://home/User/i/am/a/folder",
+          },
+          "/home/": "https://localhost:12345/home/",
+          "": "https://acme.com",
+        },
+        ssl: {
+          key: "key",
+          cert: "cert",
+        },
+        connectTimeout: 3,
+        socketTimeout: 3,
+        port: 443,
+        replaceRequestBodyUrls: true,
+        replaceResponseBodyUrls: true,
+        dontUseHttp2Downstream: true,
+        dontTranslateLocationHeader: true,
+        simpleLogs: true,
+        logAccessInTerminal: true,
+        websocket: false,
+        disableWebSecurity: true,
+      }),
+    );
+    const config = await load();
+
+    assert.equal(readFile.mock.callCount(), 1);
+
+    assert.deepEqual(config, {
+      mapping: {
+        "/static-webapp/(.*)": {
+          downstreamUrl: "file://home/User/i/am/a/folder/$$1",
+          replaceBody: "https://mycdn.org/js/my-js-dir/$$1",
+        },
+        "/home/": "https://localhost:12345/home/",
+        "": "https://acme.com",
+      },
+      ssl: {
+        key: "key",
+        cert: "cert",
+      },
+      connectTimeout: 3,
+      socketTimeout: 3,
+      port: 443,
+      replaceRequestBodyUrls: true,
+      replaceResponseBodyUrls: true,
+      dontUseHttp2Downstream: true,
+      dontTranslateLocationHeader: true,
+      simpleLogs: true,
+      logAccessInTerminal: true,
+      websocket: false,
+      unwantedHeaderNamesInMocks: [],
+      disableWebSecurity: true,
+    });
+  });
+
+  it("should interpret a folder as needing a wildcard mask", async () => {
+    buffers.push(
+      JSON.stringify({
+        mapping: {
+          "/static-webapp": "file://home/User/i/am/a/folder",
+          "/home/": "https://localhost:12345/home/",
+          "": "https://acme.com",
+        },
+        ssl: {
+          key: "key",
+          cert: "cert",
+        },
+        connectTimeout: 3,
+        socketTimeout: 3,
+        port: 443,
+        replaceRequestBodyUrls: true,
+        replaceResponseBodyUrls: true,
+        dontUseHttp2Downstream: true,
+        dontTranslateLocationHeader: true,
+        simpleLogs: true,
+        logAccessInTerminal: true,
+        websocket: false,
+        disableWebSecurity: true,
+      }),
+    );
+    const config = await load();
+
+    assert.equal(readFile.mock.callCount(), 1);
+
+    assert.deepEqual(config, {
+      mapping: {
+        "/static-webapp/(.*)": "file://home/User/i/am/a/folder/$$1",
+        "/home/": "https://localhost:12345/home/",
+        "": "https://acme.com",
+      },
+      ssl: {
+        key: "key",
+        cert: "cert",
+      },
+      connectTimeout: 3,
+      socketTimeout: 3,
+      port: 443,
+      replaceRequestBodyUrls: true,
+      replaceResponseBodyUrls: true,
+      dontUseHttp2Downstream: true,
+      dontTranslateLocationHeader: true,
+      simpleLogs: true,
+      logAccessInTerminal: true,
+      websocket: false,
+      unwantedHeaderNamesInMocks: [],
+      disableWebSecurity: true,
+    });
+  });
+
+  it("should interpret a file without extension as not needing a wildcard mask", async () => {
+    buffers.push(
+      JSON.stringify({
+        mapping: {
+          "/static-webapp": "file://home/User/i/am/not/a/folder",
+          "/home/": "https://localhost:12345/home/",
+          "": "https://acme.com",
+        },
+        ssl: {
+          key: "key",
+          cert: "cert",
+        },
+        connectTimeout: 3,
+        socketTimeout: 3,
+        port: 443,
+        replaceRequestBodyUrls: true,
+        replaceResponseBodyUrls: true,
+        dontUseHttp2Downstream: true,
+        dontTranslateLocationHeader: true,
+        simpleLogs: true,
+        logAccessInTerminal: true,
+        websocket: false,
+        disableWebSecurity: true,
+      }),
+    );
+    const config = await load();
+
+    assert.equal(readFile.mock.callCount(), 1);
+
+    assert.deepEqual(config, {
+      mapping: {
+        "/static-webapp": "file://home/User/i/am/not/a/folder",
         "/home/": "https://localhost:12345/home/",
         "": "https://acme.com",
       },
@@ -698,13 +876,15 @@ describe("server cruise", async () => {
       simpleLogs: false,
       replaceResponseBodyUrls: true,
       mapping: {
-        "/test.html": "data:text/html,Hello, this is the value you've been looking for: https://acme.com/data-service/v1/companies/59884/data/27/values",
+        "/test.html":
+          "data:text/html,Hello, this is the value you've been looking for: https://acme.com/data-service/v1/companies/59884/data/27/values",
         "/other-data-service/v1/companies/59884/data/27/values": {
-          "replaceBody":"https://acme.com/data-service/v1/companies/59884/data/27/values",
-          "downstreamUrl": "file:///Users/me/Projects/tmp/data-service/27.json"
+          replaceBody:
+            "https://acme.com/data-service/v1/companies/59884/data/27/values",
+          downstreamUrl: "file:///Users/me/Projects/tmp/data-service/27.json",
         },
-        "": "https://www.acme.com"
-      }
+        "": "https://www.acme.com",
+      },
     });
 
     buffers.unshift(
@@ -720,351 +900,549 @@ describe("server cruise", async () => {
 
     const response = responses.shift();
     assert.equal(response.code, 200);
-    assert.equal(response.body.toString('utf8'), 
-    "Hello, this is the value you've been looking for: http://localhost:8080/other-data-service/v1/companies/59884/data/27/values/");
-  })
+    assert.equal(
+      response.body.toString("utf8"),
+      "Hello, this is the value you've been looking for: http://localhost:8080/other-data-service/v1/companies/59884/data/27/values",
+    );
+  });
 });
 
-describe('Internal features of the server', () => {
-  describe('Finding downstream URLs in mapping', () => {
+describe("Internal features of the server", () => {
+  describe("Finding downstream URLs in mapping", () => {
     it("should match a standard route with string interpolation", () => {
-      const {
-        key,
-        target,
-        path,
-        url,
-      } = determineMapping({
-        headers: {
-          host: "localhost"
+      const { key, target, path, url } = determineMapping(
+        {
+          headers: {
+            host: "localhost",
+          },
+          url: "/github-profile/mdbell/",
         },
-        url: "/github-profile/mdbell/"
-      }, {
-        port: 443,
+        {
+          port: 443,
+          ssl: true,
+          mapping: {
+            "/github-profile/(.*)/": "https://github.com/$$1/",
+          },
+        },
+      );
+      assert.equal(key, "/github-profile/(.*)/");
+      assert.equal(path, "/github-profile/mdbell/");
+      assert.equal(url.href, "https://localhost/github-profile/mdbell/");
+      assert.equal(target.href, "https://github.com/mdbell/");
+    });
+  });
+
+  describe("Replacing body from responses", () => {
+    it("should replace any simple url that is referenced in the mapping", () => {
+      const result = replaceTextUsingMapping(
+        "<a href='https://www.this-is-a-remote-link.org/where-you-at/just-tell-me.html'>go to my other site</a>",
+        {
+          direction: "INBOUND",
+          proxyHostnameAndPort: "localhost:443",
+          ssl: true,
+          mapping: {
+            "/where-you-at/":
+              "https://www.this-is-a-remote-link.org/where-you-at/",
+          },
+        },
+      );
+      assert(
+        result.includes(
+          "<a href='https://localhost:443/where-you-at/just-tell-me.html'>",
+        ),
+      );
+    });
+
+    it("should use the first mapping in the keys order for replacement", () => {
+      const result = replaceTextUsingMapping(
+        "<a href='https://www.this-is-a-remote-link.org/where-you-at/just-tell-me.html'>go to my other site</a>",
+        {
+          direction: "INBOUND",
+          proxyHostnameAndPort: "localhost:443",
+          ssl: true,
+          mapping: {
+            "/where-you-at/":
+              "https://www.this-is-a-remote-link.org/where-you-at/",
+            "/where-you-not-at/":
+              "https://www.this-is-a-remote-link.org/where-you-at/",
+          },
+        },
+      );
+      assert(
+        result.includes(
+          "<a href='https://localhost:443/where-you-at/just-tell-me.html'>",
+        ),
+      );
+    });
+
+    it("should use the regular expressions to match urls", () => {
+      const result = replaceTextUsingMapping(
+        "<a href='https://www.this-is-a-remote-link.org/where-you-at/just-tell-me.html'>go to my other site</a>",
+        {
+          direction: "INBOUND",
+          proxyHostnameAndPort: "localhost:443",
+          ssl: true,
+          mapping: {
+            "/where-(.*)-at/":
+              "https://www.this-is-a-remote-link.org/where-$$1-at/",
+          },
+        },
+      );
+      assert(
+        result.includes(
+          "<a href='https://localhost:443/where-you-at/just-tell-me.html'>",
+        ),
+      );
+    });
+
+    it("should be able to read the replaceBody regular expressions to match urls", () => {
+      const result = replaceTextUsingMapping(
+        "<a href='https://some-cdn.js/js/big-project/v15.1/big-module.js'>go to my other site</a>",
+        {
+          direction: "INBOUND",
+          proxyHostnameAndPort: "localhost:443",
+          ssl: true,
+          mapping: {
+            "/the-entire-cdn-on-my-hard-drive/(.*)": {
+              replaceBody: "https://some-cdn.js/$$1",
+              downstreamUrl: "file:///Users/me/my-big-directory/$$1",
+            },
+          },
+        },
+      );
+      assert(
+        result.includes(
+          "<a href='https://localhost:443/the-entire-cdn-on-my-hard-drive/js/big-project/v15.1/big-module.js'>",
+        ),
+      );
+    });
+
+    it("should be able to read the replaceBody even when multiple regular expressions are being used", () => {
+      const result = replaceTextUsingMapping(
+        "<a href='https://some-cdn.js/js/big-package/v15.1/big-module.js'>go to my other site</a>",
+        {
+          direction: "INBOUND",
+          proxyHostnameAndPort: "localhost:443",
+          ssl: true,
+          mapping: {
+            "/the-entire-cdn-on-my-hard-drive/js/([a-z-]+)/v([0-9.]+)/([A-Z0-9a-z_-]+).js":
+              {
+                replaceBody: "https://some-cdn.js/js/$$1/v$$2/$$3.js",
+                downstreamUrl:
+                  "file:///Users/me/my-big-directory/js/$$1/v$$2/$$3.js",
+              },
+          },
+        },
+      );
+      assert(
+        result.includes(
+          "<a href='https://localhost:443/the-entire-cdn-on-my-hard-drive/js/big-package/v15.1/big-module.js'>",
+        ),
+      );
+    });
+  });
+
+  it("should ignore mapping containing invalid regular expressions matchers", () => {
+    const result = replaceTextUsingMapping(
+      "<a href='https://some-cdn.js/js/big-package/v15.1/big-module.js'>go to my other site</a>",
+      {
+        direction: "INBOUND",
+        proxyHostnameAndPort: "localhost:443",
         ssl: true,
         mapping: {
-          "/github-profile/(.*)/": "https://github.com/$$1/"
-        }
-      })
-      assert.equal(key, "/github-profile/(.*)/")
-      assert.equal(path, "/github-profile/mdbell/")
-      assert.equal(url.href, "https://localhost/github-profile/mdbell/")
-      assert.equal(target.href, "https://github.com/mdbell/")
-    })
-  })
+          // there are two right-paren instead of one, so we cannot build a successful pattern here
+          "/the-entire-cdn-on-my-hard-drive/js/([a-z-]+))/v([0-9.]+)/([A-Z0-9a-z_-]+).js":
+            {
+              replaceBody: "https://some-cdn.js/js/$$1/v$$2/$$3.js",
+              downstreamUrl:
+                "file:///Users/me/my-big-directory/js/$$1/v$$2/$$3.js",
+            },
+        },
+      },
+    );
+    assert(
+      result.includes(
+        "<a href='https://some-cdn.js/js/big-package/v15.1/big-module.js'>",
+      ),
+    );
+  });
 });
 
-describe('Websocket feature', () => {
+describe("Websocket feature", () => {
   it("should send a payload of 123278 bytes with the payload length set to 0x1E18E", () => {
     const samplePayload = Array(123278)
       .fill(0)
-      .map(_ => 'abcdefghijklmnopqrstuvwxyz'.charAt(Math.random() * 26))
+      .map(_ => "abcdefghijklmnopqrstuvwxyz".charAt(Math.random() * 26))
       .join("");
-    const buffer = createWebsocketBufferFrom(samplePayload, true)
+    const buffer = createWebsocketBufferFrom(samplePayload, true);
     const hexPayloadLengthBuffer = Buffer.allocUnsafe(10);
     buffer.copy(hexPayloadLengthBuffer, 0, 0, 10);
     const hexPayloadLength = hexPayloadLengthBuffer.toString("hex");
-    assert.equal(hexPayloadLength, "81ff000000000001e18e")
-  })
+    assert.equal(hexPayloadLength, "81ff000000000001e18e");
+  });
 });
 
-describe('Recorder switches logic', () => {
-  it("should disable auto-record when switching back to proxy mode", () => {
+describe("Recorder switches logic", () => {
+  it("should disable auto-record when switching back to proxy mode", async () => {
     const state = {
-      config: {
-        port: 1337,
-        mapping: {}
-      },
-      mockConfig: {
-        autoRecord: true
-      },
-      log: () => { },
-    }
-    recorderHandler(state, Buffer.from('{"mode":"proxy"}'), false);
-    assert.equal(state.mode, "proxy");
-    assert.equal(state.mockConfig.autoRecord, false);
-  })
-
-  it("should allow to keep auto-record when switching back to proxy mode", () => {
-    const state = {
-      config: {
-        port: 1337,
-        mapping: {}
-      },
-      mockConfig: {
-        autoRecord: true
-      },
-      log: () => { },
-    }
-    recorderHandler(state, Buffer.from('{"autoRecord":true,"mode":"proxy"}'), false);
-    assert.equal(state.mode, "proxy");
-    assert.equal(state.mockConfig.autoRecord, true);
-  })
-});
-
-describe('Mock server matcher', () => {
-  it('should work when there is an exact match', async () => {
-    let body = ''
-    await serve({
-      config: {
-        port: 1337,
-        mapping: {}
-      },
-      mockConfig: {
-        autoRecord: true,
-        strict: true,
-        mocks: new Map([[
-          Buffer.from(JSON.stringify({
-            method: "GET",
-            url: "/",
-            headers: { host: 'example.com' },
-            body: ""
-          })).toString("base64"),
-          Buffer.from(JSON.stringify({
-            body:
-              Buffer.from("matched a mock").toString('base64')
-          })).toString("base64")
-        ]])
-      },
-      logsListeners: [],
-      mode: 'mock',
-      log: () => { },
-      notifyLogsListeners: () => { }
-    }, {
-      method: 'GET',
-      url: '/',
-      headers: {
-        host: 'example.com'
-      },
-      readableLength: 0,
-    }, {
-      writeHead: () => { },
-      end: (payload) => {
-        body = payload.toString("ascii")
-      }
-    })
-    assert.equal(body, "matched a mock");
-  })
-
-  it('should match when the request has more headers than the mock', async () => {
-    let body = ''
-    await serve({
-      config: {
-        port: 1337,
-        mapping: {}
-      },
-      mockConfig: {
-        autoRecord: true,
-        strict: true,
-        mocks: new Map([[
-          Buffer.from(JSON.stringify({
-            method: "GET",
-            url: "/",
-            headers: { host: 'example.com' },
-            body: ""
-          })).toString("base64"),
-          Buffer.from(JSON.stringify({
-            body:
-              Buffer.from("matched a mock").toString('base64')
-          })).toString("base64")
-        ]])
-      },
-      logsListeners: [],
-      mode: 'mock',
-      log: () => { },
-      notifyLogsListeners: () => { }
-    }, {
-      method: 'GET',
-      url: '/',
-      headers: {
-        'X-My-Header': 'My-Value',
-        host: 'example.com'
-      },
-      readableLength: 0,
-    }, {
-      writeHead: () => { },
-      end: (payload) => {
-        body = payload.toString("ascii")
-      }
-    })
-    assert.equal(body, "matched a mock");
-  })
-
-  it('should match when the request uses a header that is different but unwanted', async () => {
-    let body = ''
-    await serve({
       config: {
         port: 1337,
         mapping: {},
-        unwantedHeaderNamesInMocks: ['X-My-Excluded-Header']
       },
       mockConfig: {
         autoRecord: true,
-        strict: true,
-        mocks: new Map([[
-          Buffer.from(JSON.stringify({
-            method: "GET",
-            url: "/",
-            headers: { host: 'example.com', 'X-My-Excluded-Header': 'Value-1' },
-            body: ""
-          })).toString("base64"),
-          Buffer.from(JSON.stringify({
-            body:
-              Buffer.from("matched a mock").toString('base64')
-          })).toString("base64")
-        ]])
       },
-      logsListeners: [],
-      mode: 'mock',
-      log: () => { },
-      notifyLogsListeners: () => { }
-    }, {
-      method: 'GET',
-      url: '/',
-      headers: {
-        'X-My-Excluded-Header': 'Value-2',
-        host: 'example.com'
+      log: () => {},
+    };
+    recorderHandler(state, Buffer.from('{"mode":"proxy"}'), false);
+
+    await new Promise(resolve => setTimeout(resolve, 5));
+
+    assert.equal(state.mode, "proxy");
+    assert.equal(state.mockConfig.autoRecord, false);
+  });
+
+  it("should allow to keep auto-record when switching back to proxy mode", async () => {
+    const state = {
+      config: {
+        port: 1337,
+        mapping: {},
       },
-      readableLength: 0,
-    }, {
-      writeHead: () => { },
-      end: (payload) => {
-        body = payload.toString("ascii")
-      }
-    })
+      mockConfig: {
+        autoRecord: true,
+      },
+      log: () => {},
+    };
+    recorderHandler(
+      state,
+      Buffer.from('{"autoRecord":true,"mode":"proxy"}'),
+      false,
+    );
+
+    await new Promise(resolve => setTimeout(resolve, 5));
+
+    assert.equal(state.mode, "proxy");
+    assert.equal(state.mockConfig.autoRecord, true);
+  });
+});
+
+describe("Mock server matcher", () => {
+  it("should work when there is an exact match", async () => {
+    let body = "";
+    await serve(
+      {
+        config: {
+          port: 1337,
+          mapping: {},
+        },
+        mockConfig: {
+          autoRecord: true,
+          strict: true,
+          mocks: new Map([
+            [
+              Buffer.from(
+                JSON.stringify({
+                  method: "GET",
+                  url: "/",
+                  headers: { host: "example.com" },
+                  body: "",
+                }),
+              ).toString("base64"),
+              Buffer.from(
+                JSON.stringify({
+                  body: Buffer.from("matched a mock").toString("base64"),
+                }),
+              ).toString("base64"),
+            ],
+          ]),
+        },
+        logsListeners: [],
+        mode: "mock",
+        log: () => {},
+        notifyLogsListeners: () => {},
+      },
+      {
+        method: "GET",
+        url: "/",
+        headers: {
+          host: "example.com",
+        },
+        readableLength: 0,
+      },
+      {
+        writeHead: () => {},
+        end: payload => {
+          body = payload.toString("ascii");
+        },
+      },
+    );
     assert.equal(body, "matched a mock");
-  })
+  });
 
-  it('should match when the most accurate mock when more than one mock match the request', async () => {
-    let body = ''
-    await serve({
-      config: {
-        port: 1337,
-        mapping: {}
+  it("should match when the request has more headers than the mock", async () => {
+    let body = "";
+    await serve(
+      {
+        config: {
+          port: 1337,
+          mapping: {},
+        },
+        mockConfig: {
+          autoRecord: true,
+          strict: true,
+          mocks: new Map([
+            [
+              Buffer.from(
+                JSON.stringify({
+                  method: "GET",
+                  url: "/",
+                  headers: { host: "example.com" },
+                  body: "",
+                }),
+              ).toString("base64"),
+              Buffer.from(
+                JSON.stringify({
+                  body: Buffer.from("matched a mock").toString("base64"),
+                }),
+              ).toString("base64"),
+            ],
+          ]),
+        },
+        logsListeners: [],
+        mode: "mock",
+        log: () => {},
+        notifyLogsListeners: () => {},
       },
-      mockConfig: {
-        autoRecord: true,
-        strict: true,
-        mocks: new Map([
-        [
-          Buffer.from(JSON.stringify({
-            method: "GET",
-            url: "/",
-            headers: {
-              host: 'example.com',
-              'X-My-Header1': 'My-Value1',
-              'X-My-Header2': 'My-Value2',
-              'X-My-Header3': 'My-Value3',
-            },
-            body: ""
-          })).toString("base64"),
-          Buffer.from(JSON.stringify({
-            body:
-              Buffer.from("matched mock#1").toString('base64')
-          })).toString("base64")
-        ],
-        [
-          Buffer.from(JSON.stringify({
-            method: "GET",
-            url: "/",
-            headers: {
-              host: 'example.com',
-              'X-My-Header1': 'My-Value1',
-              'X-My-Header2': 'My-Value2',
-              'X-My-Header3': 'My-Value3',
-              'X-My-Header4': 'My-Value5',
-            },
-            body: ""
-          })).toString("base64"),
-          Buffer.from(JSON.stringify({
-            body:
-              Buffer.from("matched mock#2").toString('base64')
-          })).toString("base64")
-        ],
-        [
-          Buffer.from(JSON.stringify({
-            method: "GET",
-            url: "/",
-            headers: {
-              host: 'example.com',
-              'X-My-Header1': 'My-Value1',
-              'X-My-Header2': 'My-Value2',
-              'X-My-Header3': 'My-Value3',
-            },
-            body: ""
-          })).toString("base64"),
-          Buffer.from(JSON.stringify({
-            body:
-              Buffer.from("matched mock#3").toString('base64')
-          })).toString("base64")
-        ]])
+      {
+        method: "GET",
+        url: "/",
+        headers: {
+          "X-My-Header": "My-Value",
+          host: "example.com",
+        },
+        readableLength: 0,
       },
-      logsListeners: [],
-      mode: 'mock',
-      log: () => { },
-      notifyLogsListeners: () => { }
-    }, {
-      method: 'GET',
-      url: '/',
-      headers: {
-        host: 'example.com',
-        'X-My-Header1': 'My-Value1',
-        'X-My-Header2': 'My-Value2',
-        'X-My-Header3': 'My-Value3',
-        'X-My-Header4': 'My-Value4',
+      {
+        writeHead: () => {},
+        end: payload => {
+          body = payload.toString("ascii");
+        },
       },
-      readableLength: 0,
-    }, {
-      writeHead: () => { },
-      end: (payload) => {
-        body = payload.toString("ascii")
-      }
-    })
+    );
+    assert.equal(body, "matched a mock");
+  });
+
+  it("should match when the request uses a header that is different but unwanted", async () => {
+    let body = "";
+    await serve(
+      {
+        config: {
+          port: 1337,
+          mapping: {},
+          unwantedHeaderNamesInMocks: ["X-My-Excluded-Header"],
+        },
+        mockConfig: {
+          autoRecord: true,
+          strict: true,
+          mocks: new Map([
+            [
+              Buffer.from(
+                JSON.stringify({
+                  method: "GET",
+                  url: "/",
+                  headers: {
+                    host: "example.com",
+                    "X-My-Excluded-Header": "Value-1",
+                  },
+                  body: "",
+                }),
+              ).toString("base64"),
+              Buffer.from(
+                JSON.stringify({
+                  body: Buffer.from("matched a mock").toString("base64"),
+                }),
+              ).toString("base64"),
+            ],
+          ]),
+        },
+        logsListeners: [],
+        mode: "mock",
+        log: () => {},
+        notifyLogsListeners: () => {},
+      },
+      {
+        method: "GET",
+        url: "/",
+        headers: {
+          "X-My-Excluded-Header": "Value-2",
+          host: "example.com",
+        },
+        readableLength: 0,
+      },
+      {
+        writeHead: () => {},
+        end: payload => {
+          body = payload.toString("ascii");
+        },
+      },
+    );
+    assert.equal(body, "matched a mock");
+  });
+
+  it("should match when the most accurate mock when more than one mock match the request", async () => {
+    let body = "";
+    await serve(
+      {
+        config: {
+          port: 1337,
+          mapping: {},
+        },
+        mockConfig: {
+          autoRecord: true,
+          strict: true,
+          mocks: new Map([
+            [
+              Buffer.from(
+                JSON.stringify({
+                  method: "GET",
+                  url: "/",
+                  headers: {
+                    host: "example.com",
+                    "X-My-Header1": "My-Value1",
+                    "X-My-Header2": "My-Value2",
+                    "X-My-Header3": "My-Value3",
+                  },
+                  body: "",
+                }),
+              ).toString("base64"),
+              Buffer.from(
+                JSON.stringify({
+                  body: Buffer.from("matched mock#1").toString("base64"),
+                }),
+              ).toString("base64"),
+            ],
+            [
+              Buffer.from(
+                JSON.stringify({
+                  method: "GET",
+                  url: "/",
+                  headers: {
+                    host: "example.com",
+                    "X-My-Header1": "My-Value1",
+                    "X-My-Header2": "My-Value2",
+                    "X-My-Header3": "My-Value3",
+                    "X-My-Header4": "My-Value5",
+                  },
+                  body: "",
+                }),
+              ).toString("base64"),
+              Buffer.from(
+                JSON.stringify({
+                  body: Buffer.from("matched mock#2").toString("base64"),
+                }),
+              ).toString("base64"),
+            ],
+            [
+              Buffer.from(
+                JSON.stringify({
+                  method: "GET",
+                  url: "/",
+                  headers: {
+                    host: "example.com",
+                    "X-My-Header1": "My-Value1",
+                    "X-My-Header2": "My-Value2",
+                    "X-My-Header3": "My-Value3",
+                  },
+                  body: "",
+                }),
+              ).toString("base64"),
+              Buffer.from(
+                JSON.stringify({
+                  body: Buffer.from("matched mock#3").toString("base64"),
+                }),
+              ).toString("base64"),
+            ],
+          ]),
+        },
+        logsListeners: [],
+        mode: "mock",
+        log: () => {},
+        notifyLogsListeners: () => {},
+      },
+      {
+        method: "GET",
+        url: "/",
+        headers: {
+          host: "example.com",
+          "X-My-Header1": "My-Value1",
+          "X-My-Header2": "My-Value2",
+          "X-My-Header3": "My-Value3",
+          "X-My-Header4": "My-Value4",
+        },
+        readableLength: 0,
+      },
+      {
+        writeHead: () => {},
+        end: payload => {
+          body = payload.toString("ascii");
+        },
+      },
+    );
     assert.equal(body, "matched mock#3");
-  })
+  });
 
-  it('should not match when the mock has more headers than the request', async () => {
-    let body = ''
-    await serve({
-      config: {
-        port: 1337,
-        mapping: {}
+  it("should not match when the mock has more headers than the request", async () => {
+    let body = "";
+    await serve(
+      {
+        config: {
+          port: 1337,
+          mapping: {},
+        },
+        mockConfig: {
+          autoRecord: true,
+          strict: true,
+          mocks: new Map([
+            [
+              Buffer.from(
+                JSON.stringify({
+                  method: "GET",
+                  url: "/",
+                  headers: {
+                    host: "example.com",
+                    "X-My-Header": "My-Value",
+                  },
+                  body: "",
+                }),
+              ).toString("base64"),
+              Buffer.from(
+                JSON.stringify({
+                  body: Buffer.from("matched a mock").toString("base64"),
+                }),
+              ).toString("base64"),
+            ],
+          ]),
+        },
+        logsListeners: [],
+        mode: "mock",
+        log: () => {},
+        notifyLogsListeners: () => {},
       },
-      mockConfig: {
-        autoRecord: true,
-        strict: true,
-        mocks: new Map([[
-          Buffer.from(JSON.stringify({
-            method: "GET",
-            url: "/",
-            headers: {
-              host: 'example.com',
-              'X-My-Header': 'My-Value',
-            },
-            body: ""
-          })).toString("base64"),
-          Buffer.from(JSON.stringify({
-            body:
-              Buffer.from("matched a mock").toString('base64')
-          })).toString("base64")
-        ]])
+      {
+        method: "GET",
+        url: "/",
+        headers: {
+          host: "example.com",
+        },
+        readableLength: 0,
       },
-      logsListeners: [],
-      mode: 'mock',
-      log: () => { },
-      notifyLogsListeners: () => { }
-    }, {
-      method: 'GET',
-      url: '/',
-      headers: {
-        host: 'example.com'
+      {
+        writeHead: () => {},
+        end: payload => {
+          body = payload.toString("ascii");
+        },
       },
-      readableLength: 0,
-    }, {
-      writeHead: () => { },
-      end: (payload) => {
-        body = payload.toString("ascii")
-      }
-    })
+    );
     assert.match(body, /No corresponding mock found in the server\./);
-  })
+  });
 });

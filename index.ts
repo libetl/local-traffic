@@ -39,7 +39,7 @@ import {
   brotliCompress,
   brotliDecompress,
 } from "zlib";
-import { resolve, normalize } from "path";
+import { resolve, normalize, sep } from "path";
 import { createHash, randomBytes } from "crypto";
 import { argv, cwd, exit, hrtime, stdout } from "process";
 import { homedir } from "os";
@@ -223,16 +223,16 @@ const log = async function (
   );
   if (state?.config?.simpleLogs)
     for (let simpleText of simpleTexts)
-      console.log(
-        `${getCurrentTime(state?.config?.simpleLogs)} | ${simpleText}`,
+      stdout.write(
+        `${getCurrentTime(state?.config?.simpleLogs)} | ${simpleText}\n`,
       );
   else {
     for (let element of logs) {
       const logTexts = element.map(e => `\u001b[48;5;${e.color}m${e.text}`);
-      console.log(
+      stdout.write(
         `${getCurrentTime(state?.config?.simpleLogs)}${element
           .map(e => `\u001b[48;5;${e.color}m${"".padEnd((e.length ?? 64) + 1)}`)
-          .join("▐")}\u001b[0m`,
+          .join("▐")}\u001b[0m\n`,
       );
 
       await new Promise(resolve =>
@@ -248,7 +248,7 @@ const log = async function (
         stdout.write(logTexts[i]);
         offset += (element[i].length ?? 64) + 2;
       }
-      console.log("\u001b[0m");
+      stdout.write("\u001b[0m\n");
       for (let simpleText of simpleTexts)
         state?.notifyLogsListeners?.({
           event: simpleText,
@@ -459,8 +459,9 @@ const buildQuickStatus = function (this: State) {
 };
 
 const quickStatus = async function (this: State) {
-  this.log([this.buildQuickStatus()]);
-  this.notifyConfigListeners(this.config as Record<string, unknown>);
+  this.log([this.buildQuickStatus()]).then(() =>
+    this.notifyConfigListeners(this.config as Record<string, unknown>),
+  );
 };
 
 const errorPage = (
@@ -539,15 +540,30 @@ const logsView = (
   <tbody id="proxy">
   </tbody>
 </table>
+<div class="alert alert-warning" role="alert"
+style="display:none;left:20%;right:20%;top:20%;position:absolute;z-index:1;"
+id="websocket-disconnected">
+<p>&#x24D8;&nbsp;Websocket connection is not available at this moment.</p>
+<ul><li>Is local-traffic running ?</li><li>Are websockets enabled ?</li>
+<li>Are you running a network protection tool that disallows websockets ?</li></ul>
+</div>
 <script type="text/javascript">
+    let socket = null;
     function start() {
       document.getElementById('table-access').style.height =
         (document.documentElement.clientHeight - 150) + 'px';
-      const socket = new WebSocket("ws${
+      if (socket !== null) return;
+      socket = new WebSocket("ws${
         config.ssl ? "s" : ""
       }://${proxyHostnameAndPort}/local-traffic-logs${
         options.captureResponseBody ? "?wantsResponseMessage=true" : ""
       }");
+      socket.onopen = function(event) {
+        document.getElementById('websocket-disconnected').style.display = 'none';
+        document.getElementById('table-access').style.filter = null;
+        (document.getElementsByTagName('nav')[0]||{style:{}}).style.filter = null;
+        (document.getElementsByTagName('form')[0]||{style:{}}).style.filter = null;
+      }
       socket.onmessage = function(event) {
         let data = event.data
         let uniqueHash;
@@ -598,8 +614,20 @@ const logsView = (
         cleanup();
       };
       socket.onerror = function(error) {
-        console.log(\`[error] \${JSON.stringify(error)}\`);
-        setTimeout(start, 5000);
+        socket = null;
+        setTimeout(start, 1000);
+        if (error.target.readyState === 3) {
+          document.getElementById('websocket-disconnected').style.display = 'block';
+          document.getElementById('table-access').style.filter = 'blur(8px)';
+          (document.getElementsByTagName('nav')[0]||{style:{}}).style.filter = 'blur(8px)';
+          (document.getElementsByTagName('form')[0]||{style:{}}).style.filter = 'blur(8px)';
+          return;
+        }
+        throw new Error(\`[error] \${JSON.stringify(error)}\`);
+      };
+      socket.onclose = function(error) {
+        socket = null;
+        setTimeout(start, 1000);
       };
     };
     function show(id) {
@@ -779,7 +807,7 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
     }
 
     const editor = new JSONEditor(container, options);
-    let socket;
+    let socket = null;
     const initialJson = ${JSON.stringify(state.config)}
     editor.set(initialJson)
     editor.validate();
@@ -788,7 +816,28 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
       bindKey: {win: 'Ctrl-S',  mac: 'Command-S'},
       exec: save,
     });
-
+    function startSocket() {
+      if (socket != null) return;
+      socket = new WebSocket("ws${
+        state.config.ssl ? "s" : ""
+      }://${proxyHostnameAndPort}/local-traffic-config");
+      socket.onmessage = function(event) {
+        editor.set(JSON.parse(event.data))
+        editor.validate()
+      }
+      socket.onerror = function(error) {
+        socket = null;
+        setTimeout(startSocket, 1000);
+        if (error.target.readyState === 3) {
+          return;
+        }
+        throw new Error(\`[error] \${JSON.stringify(error)}\`);
+      };
+      socket.onclose = function(error) {
+        socket = null;
+        setTimeout(startSocket, 1000);
+      };
+    }
     window.addEventListener("DOMContentLoaded", function() {
       document.getElementById('jsoneditor').style.height =
         (document.documentElement.clientHeight - 150) + 'px';
@@ -811,13 +860,7 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
       saveButton.innerHTML="&#x1F4BE;";
       document.querySelector('.jsoneditor-menu')
               .appendChild(saveButton);
-      socket = new WebSocket("ws${
-        state.config.ssl ? "s" : ""
-      }://${proxyHostnameAndPort}/local-traffic-config");
-      socket.onmessage = function(event) {
-        editor.set(JSON.parse(event.data))
-        editor.validate()
-      }
+      startSocket();
     });
     </script>
   </body></html>`);
@@ -1681,7 +1724,8 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
               color: LogLevel.ERROR,
             },
           ],
-        ]);
+        ]).then(() => resolve({ ...defaultConfig }));
+        return;
       }
       let config: LocalConfiguration | null = null;
       try {
@@ -1734,6 +1778,55 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
         );
       } else resolve(config!);
     }),
+  ).then(
+    async (readConfig: LocalConfiguration) =>
+      await Promise.all(
+        Object.entries(readConfig.mapping).map(
+          ([key, mapping]) =>
+            new Promise<[keyof Mapping, typeof mapping]>(resolve => {
+              const replaceBody =
+                typeof mapping === "string" ? null : mapping.replaceBody;
+              const downstreamUrl =
+                typeof mapping === "string" ? mapping : mapping.downstreamUrl;
+              if (!downstreamUrl.startsWith("file:") || key.endsWith("(.*)"))
+                return resolve([key, mapping]);
+              const matchersCount = downstreamUrl
+                .split("")
+                .map((c, i) => c + downstreamUrl.charAt(i + 1))
+                .filter(m => m === "$$").length;
+              return lstat(
+                new URL(downstreamUrl.replace(/\$\$[0-9]+/g, "")).pathname,
+                (e, stats) => {
+                  if (e) return resolve([key, mapping]);
+                  const isDirectory = stats.isDirectory();
+                  const replacedKey = isDirectory
+                    ? `${key?.replace(/\/*$/g, "")}/(.*)`
+                    : key;
+                  const replacedReplaceBody = isDirectory
+                    ? `${replaceBody?.replace(/\/*$/g, "")}/$$${matchersCount + 1}`
+                    : replaceBody;
+                  const replacedDownstreamUrl = isDirectory
+                    ? `${downstreamUrl.replace(/\/*$/g, "")}${sep}$$${matchersCount + 1}`
+                    : downstreamUrl;
+                  return resolve(
+                    !replaceBody
+                      ? [replacedKey, replacedDownstreamUrl]
+                      : [
+                          replacedKey,
+                          {
+                            replaceBody: replacedReplaceBody,
+                            downstreamUrl: replacedDownstreamUrl,
+                          },
+                        ],
+                  );
+                },
+              );
+            }),
+        ),
+      ).then(interpretedMapping => ({
+        ...readConfig,
+        mapping: Object.fromEntries(interpretedMapping),
+      })),
   );
 
 const onWatch = async function (state: State): Promise<Partial<State>> {
@@ -1899,13 +1992,7 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
       },
     ]);
   }
-  setTimeout(
-    () =>
-      state?.log(
-        logElements.concat([buildQuickStatus.apply({ ...state, config })]),
-      ),
-    1,
-  );
+  setTimeout(() => quickStatus.apply({ ...state, config }), 1);
   return { config, server: shouldRestartServer ? null : undefined };
 };
 
@@ -2202,29 +2289,49 @@ const replaceTextUsingMapping = (
       typeof value === "string" ? value : value.replaceBody,
     ])
     .reduce((inProgress, [path, value]) => {
+      const pathRegexes = path
+        .split("")
+        .filter(e => ["(", ")"].includes(e))
+        .join("")
+        .match(/^(\(\))*$/)
+        ? path
+            .split("(")
+            .flatMap(e => e.split(")"))
+            .filter((_, i) => i % 2 === 1)
+        : [];
+      let replacementCounter = 0;
       return specialProtocols.some(protocol => value.startsWith(protocol)) ||
-        (path !== "" && !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
+        (path !== "" &&
+          !(
+            path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/) || pathRegexes.length
+          ))
         ? inProgress
         : direction === REPLACEMENT_DIRECTION.INBOUND
           ? inProgress.replace(
               new RegExp(
                 value
                   .replace(new RegExp(`^(${specialPages.join("|")}):\/\/`), "")
-                  .replace(/[*+?^${}()|[\]\\]/g, "")
-                  .replace(/^https/, "https?") + "/*",
+                  .replace(
+                    /\$\$(\d+)/g,
+                    (_, index) =>
+                      "(" + (pathRegexes![parseInt(index) - 1] ?? "") + ")",
+                  )
+                  .replace(/\.\*/g, "[-a-zA-Z0-9()@:%_+.~#?&//=]*")
+                  .replace(pathRegexes.length ? "" : /[*+?^${}()|[\]\\]/g, "")
+                  .replace(/^https/, "https?") +
+                  (pathRegexes.length ? "" : "/*"),
                 "ig",
               ),
-              `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path.replace(
-                /\/+$/,
-                "",
-              )}/`,
+              `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path
+                .replace(/\([^)]+\)/g, () => `$${++replacementCounter}`)
+                .replace(/\/+$/, "/")
+                .replace(/^(?![^/])$/, "/")}`,
             )
           : inProgress
               .split(
-                `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path.replace(
-                  /\/+$/,
-                  "",
-                )}`,
+                `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path
+                  .replace(/\/+$/, "")
+                  .replace(/^(?![^/])$/, "/")}`,
               )
               .join(value);
     }, text)
@@ -2351,10 +2458,14 @@ const determineMapping = (
       ...Object.entries(parameters.mapping ?? {}).map(([key, entry]) => {
         const value =
           typeof entry === "string" ? entry : entry?.downstreamUrl ?? "";
+        const matchedKey =
+          typeof entry === "string" ? key : entry?.replaceBody ?? "";
+        const url = new URL(
+          value?.startsWith?.("data:") ? value : unixNorm(value),
+        );
         return {
-          [key]: new URL(
-            value?.startsWith?.("data:") ? value : unixNorm(value),
-          ),
+          [matchedKey]: url,
+          [key]: url,
         };
       }),
     ),
@@ -2371,7 +2482,7 @@ const determineMapping = (
       : new URL(
           rawTarget.href.replace(
             /\$\$(\d+)/g,
-            (_, index) => match![parseInt(index)],
+            (_, index) => match![parseInt(index)] ?? "",
           ),
         );
   return { proxyHostname, proxyHostnameAndPort, url, path, key, target };
