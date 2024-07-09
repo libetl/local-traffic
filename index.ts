@@ -796,7 +796,7 @@ const configPage = (
         state.configFileWatcher?.once?.("change", () => {
           setTimeout(() => {
             // state.config has mutated (maybe) in function 'update'
-            resolve(Buffer.from(JSON.stringify({...state.config, newConfig})));
+            resolve(Buffer.from(JSON.stringify({...state.config, ...newConfig})));
           }, 10);
         });
         update(state, { pendingConfigSave: newConfig });
@@ -811,9 +811,7 @@ const configPage = (
     request.headers?.["accept"]?.includes("application/json")
   ) {
     return staticResponse(
-      JSON.stringify({
-        ...state.config,
-      }),
+      JSON.stringify(state.config),
       {
         contentType: "application/json; charset=utf-8",
       },
