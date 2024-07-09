@@ -50,7 +50,7 @@ npx local-traffic
 2. Go to [http://localhost:8080/prettier](http://localhost:8080/prettier) with your browser
 3. Go to [http://localhost:8080/npm/](http://localhost:8080/npm) with your browser
 4. Go to [http://localhost:8080/my-static-webapp/index.html](http://localhost:8080/my-static-webapp/index.html) to test your webapp
-5. Go to [http://localhost:8080/my-non-existing-webapp/admin/permissions](http://localhost:8080/my-non-existing-webapp/admin/permissions) to test your 404 page
+5. Go to [http://localhost:8080/my-non-existing-webapp/admin/permissions](http://localhost:8080/my-non-existing-webapp/admin/permissions) to test your 404 page (>= 0.1.1)
 6. Go to [http://localhost:8080/see-this-example](http://localhost:8080/see-this-example) or to [http://localhost:8080/yet-another-example](http://localhost:8080/yet-another-example) with your browser. Starting 0.0.89 and above, it supports regular expressions, and it is able to match them against the destination through string interpolation. Start with a double dollar sign (`$$`) followed by the index of the value in the [match array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/match#return_value)
 7. Go to [http://localhost:8080/welcome/](http://localhost:8080/welcome/) with your browser (data urls work with version >= 0.0.95)
 8. Go to [http://localhost:8080/logs/](http://localhost:8080/logs/) to watch the request logs
