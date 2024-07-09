@@ -172,7 +172,10 @@ const mainProgram =
             !arg.match(/_npx/),
         ),
     )[0] ?? "";
-const filename = !mainProgram
+const runAsMainProgram =
+  mainProgram.toLowerCase().replace(/[-_]/g, "").includes("localtraffic") &&
+  !mainProgram.match(/(.|-)?(test|spec)\.m?[jt]sx?$/);
+const filename = !runAsMainProgram
   ? `${tmpdir()}${sep}local-traffic-temporary-config-${randomBytes(6).toString("hex")}.json`
   : resolve(
       cwd(),
@@ -1808,14 +1811,16 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   socketTimeout: 3000,
   unwantedHeaderNamesInMocks: [],
 };
-const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
+const load = async (
+  firstTime: boolean = true,
+): Promise<LocalConfiguration | null> =>
   new Promise<LocalConfiguration>(resolve =>
     readFile(filename, (error, data) => {
       if (error) {
         log(null, [
           [
             {
-              text: `${EMOJIS.ERROR_1} config error. Using default value`,
+              text: `${EMOJIS.ERROR_1} config error. Using previous value`,
               color: LogLevel.ERROR,
             },
           ],
@@ -1868,55 +1873,56 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
         );
       } else resolve(config!);
     }),
-  ).then(
-    async (readConfig: LocalConfiguration) =>
-      await Promise.all(
-        Object.entries(readConfig.mapping).map(
-          ([key, mapping]) =>
-            new Promise<[keyof Mapping, typeof mapping]>(resolve => {
-              const replaceBody =
-                typeof mapping === "string" ? null : mapping.replaceBody;
-              const downstreamUrl =
-                typeof mapping === "string" ? mapping : mapping.downstreamUrl;
-              if (!downstreamUrl.startsWith("file:") || key.endsWith("(.*)"))
-                return resolve([key, mapping]);
-              const matchersCount = downstreamUrl
-                .split("")
-                .map((c, i) => c + downstreamUrl.charAt(i + 1))
-                .filter(m => m === "$$").length;
-              return lstat(
-                new URL(downstreamUrl.replace(/\$\$[0-9]+/g, "")).pathname,
-                (e, stats) => {
-                  if (e) return resolve([key, mapping]);
-                  const isDirectory = stats.isDirectory();
-                  const replacedKey = isDirectory
-                    ? `${key?.replace(/\/*$/g, "")}/(.*)`
-                    : key;
-                  const replacedReplaceBody = isDirectory
-                    ? `${replaceBody?.replace(/\/*$/g, "")}/$$${matchersCount + 1}`
-                    : replaceBody;
-                  const replacedDownstreamUrl = isDirectory
-                    ? `${downstreamUrl.replace(/\/*$/g, "")}${sep}$$${matchersCount + 1}`
-                    : downstreamUrl;
-                  return resolve(
-                    !replaceBody
-                      ? [replacedKey, replacedDownstreamUrl]
-                      : [
-                          replacedKey,
-                          {
-                            replaceBody: replacedReplaceBody,
-                            downstreamUrl: replacedDownstreamUrl,
-                          },
-                        ],
-                  );
-                },
-              );
-            }),
-        ),
-      ).then(interpretedMapping => ({
-        ...readConfig,
-        mapping: Object.fromEntries(interpretedMapping),
-      })),
+  ).then(async (readConfig: LocalConfiguration) =>
+    !readConfig
+      ? readConfig
+      : await Promise.all(
+          Object.entries(readConfig.mapping).map(
+            ([key, mapping]) =>
+              new Promise<[keyof Mapping, typeof mapping]>(resolve => {
+                const replaceBody =
+                  typeof mapping === "string" ? null : mapping.replaceBody;
+                const downstreamUrl =
+                  typeof mapping === "string" ? mapping : mapping.downstreamUrl;
+                if (!downstreamUrl.startsWith("file:") || key.endsWith("(.*)"))
+                  return resolve([key, mapping]);
+                const matchersCount = downstreamUrl
+                  .split("")
+                  .map((c, i) => c + downstreamUrl.charAt(i + 1))
+                  .filter(m => m === "$$").length;
+                return lstat(
+                  new URL(downstreamUrl.replace(/\$\$[0-9]+/g, "")).pathname,
+                  (e, stats) => {
+                    if (e) return resolve([key, mapping]);
+                    const isDirectory = stats.isDirectory();
+                    const replacedKey = isDirectory
+                      ? `${key?.replace(/\/*$/g, "")}/(.*)`
+                      : key;
+                    const replacedReplaceBody = isDirectory
+                      ? `${replaceBody?.replace(/\/*$/g, "")}/$$${matchersCount + 1}`
+                      : replaceBody;
+                    const replacedDownstreamUrl = isDirectory
+                      ? `${downstreamUrl.replace(/\/*$/g, "")}${sep}$$${matchersCount + 1}`
+                      : downstreamUrl;
+                    return resolve(
+                      !replaceBody
+                        ? [replacedKey, replacedDownstreamUrl]
+                        : [
+                            replacedKey,
+                            {
+                              replaceBody: replacedReplaceBody,
+                              downstreamUrl: replacedDownstreamUrl,
+                            },
+                          ],
+                    );
+                  },
+                );
+              }),
+          ),
+        ).then(interpretedMapping => ({
+          ...readConfig,
+          mapping: Object.fromEntries(interpretedMapping),
+        })),
   );
 
 const onWatch = async function (state: State): Promise<Partial<State>> {
@@ -3493,7 +3499,12 @@ const update = async (
     },
     configFileWatcher:
       state.configFileWatcher === undefined
-        ? watchFile(filename, async () => update(state, await onWatch(state)))
+        ? watchFile(filename, async (stats: Stats) => {
+            update(
+              state,
+              stats.isFile() ? await onWatch(state) : { server: null },
+            );
+          })
         : state.configFileWatcher,
     log: log.bind(state, state),
     notifyConfigListeners: notifyConfigListeners.bind(state),
@@ -3526,10 +3537,6 @@ const update = async (
   });
   return state;
 };
-
-const runAsMainProgram =
-  mainProgram.toLowerCase().replace(/[-_]/g, "").includes("localtraffic") &&
-  !mainProgram.match(/(.|-)?(test|spec)\.m?[jt]sx?$/);
 
 if (crashTest) {
   const port = Math.floor(40151 + Math.random() * 9000);

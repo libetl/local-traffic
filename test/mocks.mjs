@@ -120,8 +120,10 @@ export const watchFile = mock.fn((filename, callback) => {
 export const writeFile = mock.fn((filename, content, callback) =>
   process.nextTick(() => {
     callback();
-    watchFileCallbacks.forEach(callback => callback());
-    watchOnceFileCallbacks.forEach(callback => callback());
+    watchFileCallbacks.forEach(callback => callback({ isFile: () => true }));
+    watchOnceFileCallbacks.forEach(callback =>
+      callback({ isFile: () => true }),
+    );
     watchOnceFileCallbacks.splice(0, watchOnceFileCallbacks.length);
   }),
 );
@@ -133,7 +135,7 @@ export const setup = () => {
       buffers.shift();
       process.nextTick(() => {
         const callback = watchFileCallbacks.shift();
-        callback();
+        callback({ isFile: () => true });
       });
     }
     if (buffers[0]?.toString()?.startsWith("request=")) {
