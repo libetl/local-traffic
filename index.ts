@@ -810,12 +810,9 @@ const configPage = (
     ["GET", "HEAD"].includes(request.method) &&
     request.headers?.["accept"]?.includes("application/json")
   ) {
-    return staticResponse(
-      JSON.stringify(state.config),
-      {
-        contentType: "application/json; charset=utf-8",
-      },
-    );
+    return staticResponse(JSON.stringify(state.config), {
+      contentType: "application/json; charset=utf-8",
+    });
   }
   return staticResponse(`${header(0x1f39b, "config", "")}
     <link href="${cdn}jsoneditor/dist/jsoneditor.min.css" rel="stylesheet" type="text/css">
