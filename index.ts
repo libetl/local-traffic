@@ -1845,7 +1845,6 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
           filename,
           JSON.stringify(defaultConfig, null, 2),
           fileWriteErr => {
-            const temporary = filename.includes(tmpdir());
             return (
               fileWriteErr
                 ? log(null, [
@@ -1859,9 +1858,7 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
                 : log(null, [
                     [
                       {
-                        text: `${EMOJIS.COLORED} ${
-                          temporary ? "(temporary) " : ""
-                        }config file created`,
+                        text: `${EMOJIS.COLORED} config file created`,
                         color: LogLevel.INFO,
                       },
                     ],
