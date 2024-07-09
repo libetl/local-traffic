@@ -42,7 +42,7 @@ import {
 import { resolve, normalize, sep } from "path";
 import { createHash, randomBytes } from "crypto";
 import { argv, cwd, exit, hrtime, stdout } from "process";
-import { homedir } from "os";
+import { homedir, tmpdir } from "os";
 import type { Duplex, Readable } from "stream";
 
 type ErrorWithErrno = NodeJS.ErrnoException;
@@ -159,11 +159,28 @@ interface State {
   quickStatus: (otherLogElements?: LogElement[][]) => Promise<void>;
 }
 
-const userHomeConfigFile = resolve(homedir(), ".local-traffic.json");
-const filename = resolve(
-  cwd(),
-  argv.slice(-1)[0].endsWith(".json") ? argv.slice(-1)[0] : userHomeConfigFile,
-);
+const mainProgram =
+  argv
+    .map(arg => arg.trim())
+    .filter(
+      arg =>
+        arg &&
+        !["ts-node", "node", "npx", "npm", "exec"].some(
+          pattern =>
+            arg.includes(pattern) &&
+            !arg.match(/npm-cache/) &&
+            !arg.match(/_npx/),
+        ),
+    )[0] ?? "";
+const filename = !mainProgram
+  ? `${tmpdir()}${sep}local-traffic-temporary-config-${randomBytes(6).toString("hex")}.json`
+  : resolve(
+      cwd(),
+      argv.slice(-1)[0].endsWith(".json")
+        ? argv.slice(-1)[0]
+        : resolve(homedir(), ".local-traffic.json"),
+    );
+const crashTest = argv.some(arg => arg === "--crash-test");
 
 const instantTime = (): bigint => {
   return (
@@ -1794,7 +1811,7 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
 const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
   new Promise<LocalConfiguration>(resolve =>
     readFile(filename, (error, data) => {
-      if (error && !firstTime) {
+      if (error) {
         log(null, [
           [
             {
@@ -1803,7 +1820,7 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
             },
           ],
         ]).then(() => resolve({ ...defaultConfig }));
-        return;
+        if (error.code !== "ENOENT") return;
       }
       let config: LocalConfiguration | null = null;
       try {
@@ -1823,16 +1840,12 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
           ],
         ]).then(() => resolve(config));
       }
-      if (
-        error &&
-        error.code === "ENOENT" &&
-        firstTime &&
-        filename === userHomeConfigFile
-      ) {
+      if (error?.code === "ENOENT" && firstTime) {
         writeFile(
           filename,
           JSON.stringify(defaultConfig, null, 2),
           fileWriteErr => {
+            const temporary = filename.includes(tmpdir());
             return (
               fileWriteErr
                 ? log(null, [
@@ -1846,7 +1859,9 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
                 : log(null, [
                     [
                       {
-                        text: `${EMOJIS.COLORED} config file created`,
+                        text: `${EMOJIS.COLORED} ${
+                          temporary ? "(temporary) " : ""
+                        }config file created`,
                         color: LogLevel.INFO,
                       },
                     ],
@@ -3515,25 +3530,9 @@ const update = async (
   return state;
 };
 
-const mainProgram =
-  argv
-    .map(arg => arg.trim())
-    .filter(
-      arg =>
-        arg &&
-        !["ts-node", "node", "npx", "npm", "exec"].some(
-          pattern =>
-            arg.includes(pattern) &&
-            !arg.match(/npm-cache/) &&
-            !arg.match(/_npx/),
-        ),
-    )[0] ?? "";
-
 const runAsMainProgram =
   mainProgram.toLowerCase().replace(/[-_]/g, "").includes("localtraffic") &&
   !mainProgram.match(/(.|-)?(test|spec)\.m?[jt]sx?$/);
-
-const crashTest = argv.some(arg => arg === "--crash-test");
 
 if (crashTest) {
   const port = Math.floor(40151 + Math.random() * 9000);

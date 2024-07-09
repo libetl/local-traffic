@@ -125,7 +125,7 @@ export const writeFile = mock.fn((filename, content, callback) =>
     watchOnceFileCallbacks.splice(0, watchOnceFileCallbacks.length);
   }),
 );
-
+export const tmpdir = () => "/tmp/";
 export const setup = () => {
   if (interval) return;
   interval = setInterval(() => {
