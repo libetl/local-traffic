@@ -136,6 +136,8 @@ enum ServerMode {
   MOCK = "mock",
 }
 
+type LogElement = { color: number; text: string; length?: number };
+
 interface MockConfig {
   mocks: Mocks;
   strict: boolean;
@@ -150,13 +152,11 @@ interface State {
   configFileWatcher: StatWatcher | null;
   mode: ServerMode;
   mockConfig: MockConfig;
-  log: (
-    logs: { color: number; text: string; length?: number }[][],
-  ) => Promise<void>;
+  log: (logs: LogElement[][]) => Promise<void>;
   notifyConfigListeners: (data: Record<string, unknown>) => void;
   notifyLogsListeners: (data: Record<string, unknown>) => void;
-  buildQuickStatus: () => { color: number; text: string; length: number }[];
-  quickStatus: () => Promise<void>;
+  buildQuickStatus: () => LogElement[];
+  quickStatus: (otherLogElements?: LogElement[][]) => Promise<void>;
 }
 
 const userHomeConfigFile = resolve(homedir(), ".local-traffic.json");
@@ -194,7 +194,7 @@ const levelToString = (level?: number) =>
       : "info";
 const log = async function (
   state: Partial<State> | null,
-  logs: { color: number; text: string; length?: number }[][],
+  logs: LogElement[][],
 ) {
   const simpleTexts = logs.map(logLine =>
     logLine
@@ -458,8 +458,11 @@ const buildQuickStatus = function (this: State) {
   ];
 };
 
-const quickStatus = async function (this: State) {
-  this.log([this.buildQuickStatus()]).then(() =>
+const quickStatus = async function (
+  this: State,
+  otherLogElements?: LogElement[][],
+) {
+  this.log([...(otherLogElements ?? []), this.buildQuickStatus()]).then(() =>
     this.notifyConfigListeners(this.config as Record<string, unknown>),
   );
 };
@@ -730,8 +733,73 @@ const logsPage = (proxyHostnameAndPort: string, state: State) =>
 ${logsView(proxyHostnameAndPort, state.config, { captureResponseBody: false })}
 </body></html>`);
 
-const configPage = (proxyHostnameAndPort: string, state: State) =>
-  staticResponse(`${header(0x1f39b, "config", "")}
+const configPage = (
+  proxyHostnameAndPort: string,
+  state: State,
+  request: Http2ServerRequest | IncomingMessage,
+  mappingAttributes: {
+    requestBody: Buffer;
+    target: URL;
+    url: URL;
+  },
+) => {
+  if (["POST", "PUT"].includes(request.method)) {
+    let newConfig: LocalConfiguration;
+    try {
+      newConfig = JSON.parse(
+        mappingAttributes?.requestBody?.toString("ascii") ?? "{}",
+      );
+    } catch (e) {
+      setTimeout(
+        () =>
+          state.log([
+            [
+              {
+                text: `${EMOJIS.ERROR_4} config update could not be read`,
+                color: LogLevel.WARNING,
+              },
+            ],
+          ]),
+        1,
+      );
+      return staticResponse(
+        `{"error":"config update could not be read","stack":"${e.stack
+          ?.replace?.(/"/g, '\\"')
+          .replace(/[\s]+/g, " ")}"}`,
+        {
+          contentType: "application/json; charset=utf-8",
+        },
+      );
+    }
+    return staticResponse(
+      new Promise(resolve => {
+        state.configFileWatcher?.once?.("change", () => {
+          setTimeout(() => {
+            // state.config has mutated in function 'update'
+            resolve(Buffer.from(JSON.stringify(state.config)));
+          }, 10);
+        });
+        update(state, { pendingConfigSave: newConfig });
+      }),
+      {
+        contentType: "application/json; charset=utf-8",
+      },
+    );
+  }
+  if (
+    ["GET", "HEAD"].includes(request.method) &&
+    request.headers?.["accept"]?.includes("application/json")
+  ) {
+    return staticResponse(
+      JSON.stringify({
+        ...state.config,
+      }),
+      {
+        contentType: "application/json; charset=utf-8",
+      },
+    );
+  }
+  return staticResponse(`${header(0x1f39b, "config", "")}
     <link href="${cdn}jsoneditor/dist/jsoneditor.min.css" rel="stylesheet" type="text/css">
     <script src="${cdn}jsoneditor/dist/jsoneditor.min.js"></script>
     <script src="${cdn}node-forge/dist/forge.min.js"></script>
@@ -749,7 +817,7 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
     </div>
     <div id="jsoneditor" style="width: 400px; height: 400px;"></div>
     <script>
-    // create the editor
+    let socket = null;
     const container = document.getElementById("jsoneditor")
     const options = {mode: "code", allowSchemaSuggestions: true, schema: {
       type: "object",
@@ -776,7 +844,15 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
     }}
 
     function save() {
-      socket.send(JSON.stringify(editor.get()));
+      if (!socket || socket.readyState !== 1) {
+        fetch(window.location.href, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify(editor.get())
+        })
+      } else socket.send(JSON.stringify(editor.get()));
     }
 
     function generateSslCertificate() {
@@ -807,7 +883,6 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
     }
 
     const editor = new JSONEditor(container, options);
-    let socket = null;
     const initialJson = ${JSON.stringify(state.config)}
     editor.set(initialJson)
     editor.validate();
@@ -864,6 +939,7 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
     });
     </script>
   </body></html>`);
+};
 
 const recorderHandler = (
   state: State,
@@ -1679,8 +1755,10 @@ const specialPageMapping: Record<
     request: Http2ServerRequest | IncomingMessage,
     mappingAttributes: {
       target: URL;
+      url: URL;
       proxyHostname: string;
       key: string;
+      requestBody: Buffer;
     },
   ) => ClientHttp2Session
 > = {
@@ -1832,7 +1910,7 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
 const onWatch = async function (state: State): Promise<Partial<State>> {
   const previousConfig = state.config;
   const config = await load(false);
-  const logElements: { text: string; color: number }[][] = [];
+  const logElements: LogElement[] = [];
   if (!config) return {};
   if (
     isNaN(config?.port ?? NaN) ||
@@ -1850,12 +1928,10 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
     return {};
   }
   if (!config?.mapping?.[""]) {
-    logElements.push([
-      {
-        text: `${EMOJIS.ERROR_3} default mapping "" not provided.`,
-        color: LogLevel.WARNING,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.ERROR_3} default mapping "" not provided.`,
+      color: LogLevel.WARNING,
+    });
   }
   if (typeof config.mapping !== "object") {
     state.log([
@@ -1869,130 +1945,106 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
     return {};
   }
   if (config.replaceRequestBodyUrls !== previousConfig.replaceRequestBodyUrls) {
-    logElements.push([
-      {
-        text: `${EMOJIS.REWRITE} request body url ${
-          !config.replaceRequestBodyUrls ? "NO " : ""
-        }rewriting`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.REWRITE} request body url ${
+        !config.replaceRequestBodyUrls ? "NO " : ""
+      }rewriting`,
+      color: LogLevel.INFO,
+    });
   }
   if (
     config.replaceResponseBodyUrls !== previousConfig.replaceResponseBodyUrls
   ) {
-    logElements.push([
-      {
-        text: `${EMOJIS.REWRITE} response body url ${
-          !config.replaceResponseBodyUrls ? "NO " : ""
-        }rewriting`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.REWRITE} response body url ${
+        !config.replaceResponseBodyUrls ? "NO " : ""
+      }rewriting`,
+      color: LogLevel.INFO,
+    });
   }
   if (
     config.dontTranslateLocationHeader !==
     previousConfig.dontTranslateLocationHeader
   ) {
-    logElements.push([
-      {
-        text: `${EMOJIS.REWRITE} response location header ${
-          config.dontTranslateLocationHeader ? "NO " : ""
-        }translation`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.REWRITE} response location header ${
+        config.dontTranslateLocationHeader ? "NO " : ""
+      }translation`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.dontUseHttp2Downstream !== previousConfig.dontUseHttp2Downstream) {
-    logElements.push([
-      {
-        text: `${EMOJIS.OUTBOUND} http/2 ${config.dontUseHttp2Downstream ? "de" : ""}activated downstream`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.OUTBOUND} http/2 ${config.dontUseHttp2Downstream ? "de" : ""}activated downstream`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.disableWebSecurity !== previousConfig.disableWebSecurity) {
-    logElements.push([
-      {
-        text: `${EMOJIS.SHIELD} web security ${config.disableWebSecurity ? "de" : ""}activated`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.SHIELD} web security ${config.disableWebSecurity ? "de" : ""}activated`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.websocket !== previousConfig.websocket) {
-    logElements.push([
-      {
-        text: `${EMOJIS.WEBSOCKET} websocket ${!config.websocket ? "de" : ""}activated`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.WEBSOCKET} websocket ${!config.websocket ? "de" : ""}activated`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.logAccessInTerminal !== previousConfig.logAccessInTerminal) {
-    logElements.push([
-      {
-        text: `${EMOJIS.LOGS} access terminal logging ${!config.logAccessInTerminal ? "off" : "on"}`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.LOGS} access terminal logging ${!config.logAccessInTerminal ? "off" : "on"}`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.simpleLogs !== previousConfig.simpleLogs) {
-    logElements.push([
-      {
-        text: `${EMOJIS.COLORED} simple logs ${!config.simpleLogs ? "off" : "on"}`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.COLORED} simple logs ${!config.simpleLogs ? "off" : "on"}`,
+      color: LogLevel.INFO,
+    });
   }
   if (
     Object.keys(config.mapping).join("\n") !==
     Object.keys(previousConfig.mapping ?? {}).join("\n")
   ) {
-    logElements.push([
-      {
-        text: `${EMOJIS.RULES} ${Object.keys(config.mapping)
-          .length.toString()
-          .padStart(5)} loaded mapping rules`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.RULES} ${Object.keys(config.mapping)
+        .length.toString()
+        .padStart(5)} loaded mapping rules`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.port !== previousConfig.port) {
-    logElements.push([
-      {
-        text: `${EMOJIS.PORT} port changed from ${previousConfig.port} to ${config.port}`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.PORT} port changed from ${previousConfig.port} to ${config.port}`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.ssl && !previousConfig.ssl) {
-    logElements.push([
-      {
-        text: `${EMOJIS.INBOUND} ssl configuration added`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.INBOUND} ssl configuration added`,
+      color: LogLevel.INFO,
+    });
   }
   if (!config.ssl && previousConfig.ssl) {
-    logElements.push([
-      {
-        text: `${EMOJIS.INBOUND} ssl configuration removed`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.INBOUND} ssl configuration removed`,
+      color: LogLevel.INFO,
+    });
   }
   const shouldRestartServer =
     config.port !== previousConfig.port ||
     JSON.stringify(config.ssl) !== JSON.stringify(previousConfig.ssl);
 
   if (shouldRestartServer) {
-    logElements.push([
-      {
-        text: `${EMOJIS.RESTART} restarting server`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.RESTART} restarting server`,
+      color: LogLevel.INFO,
+    });
   }
-  setTimeout(() => quickStatus.apply({ ...state, config }), 1);
+  setTimeout(() => {
+    quickStatus.apply({ ...state, config }, [logElements.map(line => [line])]);
+  }, 1);
   return { config, server: shouldRestartServer ? null : undefined };
 };
 
@@ -2963,7 +3015,7 @@ const serve = async function (
             proxyHostnameAndPort,
             state,
             inboundRequest,
-            { target: targetUrl, proxyHostname, key },
+            { target: targetUrl, url, proxyHostname, key, requestBody },
           )
         : await http2Page(proxyHostnameAndPort, state, {
             target: targetUrl,

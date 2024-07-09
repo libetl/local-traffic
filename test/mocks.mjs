@@ -2,6 +2,7 @@ import { mock } from "node:test";
 
 const requestListeners = [];
 const watchFileCallbacks = [];
+const watchOnceFileCallbacks = [];
 export const buffers = [];
 export const responses = [];
 export const http2OutboundRequests = [];
@@ -44,7 +45,7 @@ export const connect = mock.fn((targetUrl, _2, resolve) => {
             buffer,
           ]);
         },
-        end: () => {},
+        end: data => {},
         on: (event, callback) => {
           if (event === "response") {
             callback(http2OutboundHeadersResponses.shift());
@@ -112,9 +113,17 @@ export const stdout = {
 let interval = null;
 export const watchFile = mock.fn((filename, callback) => {
   watchFileCallbacks.unshift(callback);
+  return {
+    once: (_, callback) => watchOnceFileCallbacks.unshift(callback),
+  };
 });
 export const writeFile = mock.fn((filename, content, callback) =>
-  process.nextTick(() => callback()),
+  process.nextTick(() => {
+    callback();
+    watchFileCallbacks.forEach(callback => callback());
+    watchOnceFileCallbacks.forEach(callback => callback());
+    watchOnceFileCallbacks.splice(0, watchOnceFileCallbacks.length);
+  }),
 );
 
 export const setup = () => {

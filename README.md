@@ -102,6 +102,29 @@ All boolean settings default to false when unspecified.
 - `socketTimeout`: (`number`) max time waiting for a response (defaults to 3000ms)
 - `unwantedHeaderNamesInMocks`: (`string[]`) header names that won't get added to the mock request matchers
 
+## config API
+
+(>= 0.1.1)
+The configuration can be manipulated programmatically with an API.
+It can be used if someone needs to automatically switch the routes or the options.
+It can be used for canary deployment strategy (to switch between odd domain and even domain)
+
+### post, put
+
+Argument : the config itself
+
+Updates the config, returns the new config once the update is complete
+
+### get, head
+
+Retrieves the current configuration.
+use `Accept: application/json` to use the API mode.
+
+```bash
+$ curl https://localhost:8443/config/ -XGET -k -H'Accept: application/json'
+{"mapping":{"/config/":"config://","":"https://github.com/"},"port":443,"replaceRequestBodyUrls":true,"replaceResponseBodyUrls":true}
+```
+
 ## recorder API
 
 (>= 0.0.86)

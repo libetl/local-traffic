@@ -764,6 +764,85 @@ describe("server cruise", async () => {
     assert.match(response.body.toString(), /Hello World !/);
   });
 
+  it("should alterate the config when the request is a POST to config api", async () => {
+    await start({
+      mapping: {
+        "/config/": "config://",
+        "/logs/": "logs://",
+        "/donate/": "https://www.mysite.org/donate/",
+        "": "https://acme.info",
+      },
+      port: 8080,
+      replaceRequestBodyUrls: true,
+      simpleLogs: false,
+    });
+    const newConfig = JSON.stringify({
+      mapping: {
+        "/config/": "config://",
+        "/logs/": "logs://",
+        "/donate/": "https://www.mysite.org/donate/",
+        "/my-new-route": "https://www.my-new-route.com/",
+        "/my-website/": "file:///User/me/projects/i/am/a/folder/",
+        "": "https://acme.info",
+      },
+      port: 8080,
+      replaceRequestBodyUrls: true,
+      simpleLogs: false,
+    });
+
+    // new file content
+    buffers.unshift(Buffer.from(newConfig));
+    // http request
+    buffers.unshift(
+      `request=${JSON.stringify({
+        method: "POST",
+        headers: {
+          "content-length": "261",
+          "Content-Type": "application/json",
+          host: "localhost",
+        },
+        url: "/config/",
+        body: newConfig,
+      })}`,
+    );
+    http2OutboundHeadersResponses.unshift({
+      [":status"]: 200,
+      ["content-length"]: 12,
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    const response = responses.shift();
+    assert.equal(response.code, 200);
+    // some configuration values should be inferred
+    // even if not saved to the file
+    assert.equal(
+      response.body.toString("ascii"),
+      JSON.stringify({
+        mapping: {
+          "/config/": "config://",
+          "/logs/": "logs://",
+          "/donate/": "https://www.mysite.org/donate/",
+          "/my-new-route": "https://www.my-new-route.com/",
+          "/my-website/(.*)": "file:///User/me/projects/i/am/a/folder/$$1",
+          "": "https://acme.info",
+        },
+        port: 8080,
+        replaceRequestBodyUrls: true,
+        replaceResponseBodyUrls: false,
+        dontUseHttp2Downstream: false,
+        dontTranslateLocationHeader: false,
+        logAccessInTerminal: false,
+        simpleLogs: false,
+        websocket: true,
+        disableWebSecurity: false,
+        connectTimeout: 3,
+        socketTimeout: 3,
+        unwantedHeaderNamesInMocks: [],
+      }),
+    );
+  });
+
   it("should translate the URLs found in the response body", async () => {
     await start({
       mapping: {
