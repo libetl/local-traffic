@@ -795,8 +795,8 @@ const configPage = (
       new Promise(resolve => {
         state.configFileWatcher?.once?.("change", () => {
           setTimeout(() => {
-            // state.config has mutated in function 'update'
-            resolve(Buffer.from(JSON.stringify(state.config)));
+            // state.config has mutated (maybe) in function 'update'
+            resolve(Buffer.from(JSON.stringify({...state.config, newConfig})));
           }, 10);
         });
         update(state, { pendingConfigSave: newConfig });
