@@ -20,12 +20,12 @@
   "scripts": {
     "start": "./dist/local-traffic.js",
     "typescript": "tsc",
-    "shebang": "echo '#!/usr/bin/env node' | cat - ./dist/terser.js > ./dist/local-traffic.js",
+    "zipify": "node ./zipify.js ./dist/terser.js > ./dist/local-traffic.js",
     "remove-useless-whitespaces": "cat ./dist/index.js | sed -e 's/^[ \t]*//' > ./dist/minified.js",
     "terser": "terser ./dist/minified.js -c -m --toplevel > ./dist/terser.js",
     "chmod": "chmod a+x ./dist/local-traffic.js",
     "clean": "rm -rf dist",
-    "build": "npm run clean && npm run typescript && npm run remove-useless-whitespaces && npm run terser && npm run shebang && npm run chmod",
+    "build": "npm run clean && npm run typescript && npm run remove-useless-whitespaces && npm run terser && npm run zipify && npm run chmod",
     "crash-test": "node ./dist/local-traffic.js --crash-test",
     "test": "node ./test/tests.spec.mjs"
   },
