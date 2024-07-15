@@ -95,7 +95,7 @@ All boolean settings default to false when unspecified.
 - `dontTranslateLocationHeader`: (`boolean`) when getting a response location header, in case `replaceResponseBodyUrls` does not change the URL, change the origin to the proxy anyway
 - `dontUseHttp2Downstream`: (`boolean`) force calling downstream services in http1.1 only (to save some time)
 - `simpleLogs`: (`boolean`) disable colored logs for text terminals
-- `logAccessInTerminal`: (`boolean`) write an access log in the terminal on each call (defaults to false)
+- `logAccessInTerminal`: (`boolean` | 'with-mapping') write an access log in the terminal on each call (>= 0.1.2 : 'with-mapping' will log the key used to find the target)
 - `websocket`: (`boolean`) true to activate websocket connections proxying via sockets. Required for logs UI.
 - `disableWebSecurity`: (`boolean`) true for easygoing values in cross origin requests or content security policy headers
 - `connectTimeout`: (`number`) max time before aborting the connection (defaults to 3000ms)
