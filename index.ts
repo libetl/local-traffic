@@ -184,7 +184,7 @@ const filename = !runAsMainProgram
         : resolve(homedir(), ".local-traffic.json"),
     );
 const crashTest = argv.some(arg => arg === "--crash-test");
-
+const screenWidth = 64;
 const instantTime = (): bigint => {
   return (
     hrtime.bigint?.() ??
@@ -254,7 +254,10 @@ const log = async function (
       );
       stdout.write(
         `${getCurrentTime(state?.config?.simpleLogs)}${renderedColors
-          .map(e => `\u001b[48;5;${e.color}m${"".padEnd((e.length ?? 64) + 1)}`)
+          .map(
+            e =>
+              `\u001b[48;5;${e.color}m${"".padEnd((e.length ?? screenWidth) + 1)}`,
+          )
           .join("▐")}\u001b[0m\n`,
       );
 
@@ -269,7 +272,7 @@ const log = async function (
           ),
         );
         stdout.write(logTexts[i]);
-        offset += (element[i].length ?? 64) + 2;
+        offset += (element[i].length ?? screenWidth) + 2;
       }
       stdout.write("\u001b[0m\n");
       for (let simpleText of simpleTexts)
@@ -2908,50 +2911,46 @@ const serve = async function (
     state.config.logAccessInTerminal &&
     !targetUrl.pathname.startsWith("/:/")
   ) {
+    const requestMethodLength = (inboundRequest.method?.length ?? 3) + 2;
     const keyToDisplay =
       state.config.logAccessInTerminal === "with-mapping" ? key ?? "" : "";
-    const keyLength = keyToDisplay.length ? keyToDisplay.length + 2 : 0;
+    const keyLength = keyToDisplay.length
+      ? Math.min(screenWidth - requestMethodLength - 2, keyToDisplay.length + 2)
+      : 0;
+    const requestLength = Math.max(
+      2,
+      screenWidth - requestMethodLength - keyLength,
+    );
     await state.log([
       [
         {
           color:
-            inboundRequest.method === "GET"
-              ? 22
-              : inboundRequest.method === "POST"
-                ? 52
-                : inboundRequest.method === "PUT"
-                  ? 94
-                  : inboundRequest.method === "DELETE"
-                    ? 244
-                    : inboundRequest.method === "OPTIONS"
-                      ? 19
-                      : inboundRequest.method === "PATCH"
-                        ? 162
-                        : inboundRequest.method === "HEAD"
-                          ? 53
-                          : inboundRequest.method === "TRACE"
-                            ? 6
-                            : inboundRequest.method === "CONNECT"
-                              ? 2
-                              : 0,
+            {
+              GET: 22,
+              POST: 52,
+              PUT: 94,
+              DELETE: 244,
+              OPTIONS: 19,
+              PATCH: 162,
+              HEAD: 53,
+              TRACE: 6,
+              CONNECT: 2,
+            }[inboundRequest.method ?? ""] ?? 0,
           text: (inboundRequest.method ?? "GET").toString(),
-          length: inboundRequest.method?.length,
+          length: requestMethodLength - 2,
         },
         {
           color: 32,
-          text: keyToDisplay,
-          length: keyToDisplay.length,
+          text: keyToDisplay.substring(0, keyLength - 2),
+          length: keyLength - 2,
         },
         {
           color: 8,
           text: targetUrl.pathname
             .toString()
-            .padStart(62 - (inboundRequest.method?.length ?? 3) - keyLength)
-            .substring(
-              0,
-              62 - (inboundRequest.method?.length ?? 3) - keyLength,
-            ),
-          length: 62 - (inboundRequest.method?.length ?? 3) - keyLength,
+            .padStart(requestLength)
+            .substring(0, requestLength),
+          length: requestLength,
         },
       ],
     ]);
