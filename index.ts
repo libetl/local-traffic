@@ -249,7 +249,9 @@ const log = async function (
   else {
     for (let element of logs) {
       const renderedColors = element.filter(e => e?.text?.length);
-      const logTexts = renderedColors.map(e => `\u001b[48;5;${e.color}m${e.text}`);
+      const logTexts = renderedColors.map(
+        e => `\u001b[48;5;${e.color}m${e.text}`,
+      );
       stdout.write(
         `${getCurrentTime(state?.config?.simpleLogs)}${renderedColors
           .map(e => `\u001b[48;5;${e.color}m${"".padEnd((e.length ?? 64) + 1)}`)
@@ -717,7 +719,9 @@ id="websocket-disconnected">
       '<td scope="col" class="statusCode">' + statusCode + '</td>' +
       '<td scope="col" class="duration text-end">' + duration + '</td>' +
       '<td scope="col" class="upstream-path">' + upstreamPath + '</td>' + 
-      '<td scope="col">' + downstreamPath + '</td>' + 
+      '<td scope="col">' + 
+      ((downstreamPath??'').startsWith('data:') ? 'data:...' : downstreamPath) + 
+      '</td>' + 
       '</tr>');
     }
     function getColorFromStatusCode(statusCode) {
@@ -845,14 +849,14 @@ const configPage = (
                 property === "unwantedHeaderNamesInMocks"
                   ? '{type:"array","items":{"type":"string"}}'
                   : property === "logAccessInTerminal"
-                  ? '{"oneOf":[{type:"boolean"},{enum:["with-mapping"]}]}'
-                  : typeof exampleValue === "number"
-                    ? '{type:"integer"}'
-                    : typeof exampleValue === "string"
-                      ? '{type:"string"}'
-                      : typeof exampleValue === "boolean"
-                        ? '{type:"boolean"}'
-                        : '{type:"object"}'
+                    ? '{"oneOf":[{type:"boolean"},{enum:["with-mapping"]}]}'
+                    : typeof exampleValue === "number"
+                      ? '{type:"integer"}'
+                      : typeof exampleValue === "string"
+                        ? '{type:"string"}'
+                        : typeof exampleValue === "boolean"
+                          ? '{type:"boolean"}'
+                          : '{type:"object"}'
               }`,
           )
           .join(",\n          ")}
@@ -2010,9 +2014,11 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
   if (config.logAccessInTerminal !== previousConfig.logAccessInTerminal) {
     logElements.push({
       text: `${EMOJIS.LOGS} access terminal logging ${
-        config.logAccessInTerminal === true ? "on" :
-        config.logAccessInTerminal === "with-mapping" ? ": show both path and mapping" :
-        "off"
+        config.logAccessInTerminal === true
+          ? "on"
+          : config.logAccessInTerminal === "with-mapping"
+            ? ": show both path and mapping"
+            : "off"
       }`,
       color: LogLevel.INFO,
     });
@@ -2902,8 +2908,9 @@ const serve = async function (
     state.config.logAccessInTerminal &&
     !targetUrl.pathname.startsWith("/:/")
   ) {
-    const keyToDisplay = state.config.logAccessInTerminal === "with-mapping" ? (key ?? "") : "";
-    const keyLength = (keyToDisplay.length ? keyToDisplay.length + 2 : 0);
+    const keyToDisplay =
+      state.config.logAccessInTerminal === "with-mapping" ? key ?? "" : "";
+    const keyLength = keyToDisplay.length ? keyToDisplay.length + 2 : 0;
     await state.log([
       [
         {
@@ -2940,7 +2947,10 @@ const serve = async function (
           text: targetUrl.pathname
             .toString()
             .padStart(62 - (inboundRequest.method?.length ?? 3) - keyLength)
-            .substring(0, 62 - (inboundRequest.method?.length ?? 3) - keyLength),
+            .substring(
+              0,
+              62 - (inboundRequest.method?.length ?? 3) - keyLength,
+            ),
           length: 62 - (inboundRequest.method?.length ?? 3) - keyLength,
         },
       ],
