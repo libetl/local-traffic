@@ -1805,7 +1805,18 @@ self.addEventListener("activate", function (event) {
 self.addEventListener("fetch", function (event) {
   const resolvedUrl = mapping.reduce((url, [to, from]) => 
     url.replace(new RegExp(from, "ig"), to), event.request.url);
-  event.respondWith(fetch(new URL(resolvedUrl, "${state.config.ssl ? "https://" : "http://"}${proxyHostnameAndPort}").href))
+  event.respondWith(fetch(new URL(resolvedUrl, "${state.config.ssl ? "https://" : "http://"}${
+    proxyHostnameAndPort}").href),{
+      method: event.request.method, 
+  headers: event.request.headers,
+  destination: event.request.destination,
+  referrer: event.request.referrer,
+  referrerPolicy: event.request.referrerPolicy,
+  mode: event.request.mode,
+  credentials: event.request.credentials,
+  cache: event.request.cache,
+  redirect: event.request.redirect,
+})
 });`,
     {
       headers: {
