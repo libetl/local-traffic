@@ -1805,8 +1805,7 @@ self.addEventListener("activate", function (event) {
 self.addEventListener("fetch", function (event) {
   const resolvedUrl = mapping.reduce((url, [to, from]) => 
     url.replace(new RegExp(from, "ig"), to), event.request.url);
-  event.respondWith(fetch(new URL(resolvedUrl, "${state.config.ssl ? "https://" : "http://"}${
-    proxyHostnameAndPort}").href),{
+  event.respondWith(fetch(new URL(resolvedUrl, "${state.config.ssl ? "https://" : "http://"}${proxyHostnameAndPort}").href),{
       method: event.request.method, 
       headers: event.request.headers,
       destination: event.request.destination,
@@ -1858,8 +1857,10 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
     {},
     ...specialPages
       .filter(page => page !== "data" && page !== "file")
-      .map(page => ({ [page === 'worker' ? 
-        "/local-traffic-worker.js": `/${page}/`]: `${page}://` })),
+      .map(page => ({
+        [page === "worker" ? "/local-traffic-worker.js" : `/${page}/`]:
+          `${page}://`,
+      })),
   ),
   port: 8080,
   replaceRequestBodyUrls: false,
