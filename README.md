@@ -40,6 +40,8 @@ npx local-traffic
       "replaceBody": "https://ac.me/acme.js",
       "downstreamUrl": "file:///home/user/projects/zepto/dist/zepto.js"
     },
+    "/local-traffic-worker.js": "worker://",
+    "/proxified-api/": "https://some-cors-restricted-domain.com/some-restricted-api/",
     "": "https://github.com/"
   }
 }
@@ -58,6 +60,7 @@ npx local-traffic
 10. You can use the [http://localhost:8080/recorder/](recorder) to turn your proxy into a mock server. There is a user interface and also an API (documented [here](#recorder-api))
 11. From the web config editor, create a SSL keypair and start working with a self signed SSL certificate right away
 12. Your page will use /jquery-local/jquery.js instead of the CDN asset, and will serve the file from your hard drive
+13. Use the /local-traffic-worker.js service worker to walk around the CORS restrictions when your api does a request to some-cors-restricted-domain.com (>= 0.1.4)
 
 ## usage
 
