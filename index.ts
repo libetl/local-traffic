@@ -2370,7 +2370,7 @@ const replaceBody = async (
               `?protocol=ws${parameters.ssl ? "s" : ""}%3A&hostname=${
                 parameters.proxyHostname
               }&port=${parameters.port}&pathname=${encodeURIComponent(
-                parameters.key.replace(/\/+$/, ""),
+                parameters.key.replace(/\/{1,6}$/, ""), // polynomial-redos, 6 might be a reasonable value
               )}`,
             )
             .replace(/<\/head>/, () => {
