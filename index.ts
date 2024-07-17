@@ -1809,13 +1809,17 @@ self.addEventListener("fetch", function (event) {
   event.respondWith(fetch(new URL(resolvedUrl, "${state.config.ssl ? "https://" : "http://"}${proxyHostnameAndPort}").href),{
       method: event.request.method, 
       headers: event.request.headers,
-      destination: event.request.destination,
-      referrer: event.request.referrer,
-      referrerPolicy: event.request.referrerPolicy,
+      body: event.request.body,
       mode: event.request.mode,
       credentials: event.request.credentials,
       cache: event.request.cache,
       redirect: event.request.redirect,
+      referrer: event.request.referrer,
+      referrerPolicy: event.request.referrerPolicy,
+      integrity: event.request.integrity,
+      keepalive: event.request.keepalive,
+      signal: event.request.signal,
+      destination: event.request.destination,
 })
 });`,
     {
