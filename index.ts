@@ -795,7 +795,7 @@ const configPage = (
           ?.replace?.(/"/g, '\\"')
           .replace(/[\s]+/g, " ")}"}`,
         {
-          contentType: "application/json; charset=utf-8",
+          headers: { contentType: "application/json; charset=utf-8" },
         },
       );
     }
@@ -810,7 +810,7 @@ const configPage = (
         update(state, { pendingConfigSave: newConfig });
       }),
       {
-        contentType: "application/json; charset=utf-8",
+        headers: { contentType: "application/json; charset=utf-8" },
       },
     );
   }
@@ -819,7 +819,7 @@ const configPage = (
     request.headers?.["accept"]?.includes("application/json")
   ) {
     return staticResponse(JSON.stringify(state.config), {
-      contentType: "application/json; charset=utf-8",
+      headers: { contentType: "application/json; charset=utf-8" },
     });
   }
   return staticResponse(`${header(0x1f39b, "config", "")}
@@ -1148,7 +1148,7 @@ const dataPage = (
           },
         ),
     {
-      contentType,
+      headers: { "content-type": contentType },
     },
   );
 };
@@ -1160,7 +1160,7 @@ const recorderPage = (
 ) => {
   if (request.url?.endsWith("?forceLogInRecorderPage=true")) {
     return staticResponse(`{"ping":"pong"}`, {
-      contentType: "application/json; charset=utf-8",
+      headers: { "content-type": "application/json; charset=utf-8" },
     });
   }
   if (
@@ -1176,13 +1176,13 @@ const recorderPage = (
         ),
       }),
       {
-        contentType: "application/json; charset=utf-8",
+        headers: { contentType: "application/json; charset=utf-8" },
       },
     );
   }
   if (["PUT", "POST", "DELETE"].includes(request.method ?? "")) {
     return staticResponse(`{"status": "acknowledged"}`, {
-      contentType: "application/json; charset=utf-8",
+      headers: { contentType: "application/json; charset=utf-8" },
       onOutboundWrite: buffer =>
         recorderHandler(state, buffer, request.method === "DELETE"),
     });
@@ -1772,6 +1772,65 @@ const http1Page = async (
   } as unknown as ClientHttp2Session;
 };
 
+const workerPage = (proxyHostnameAndPort: string, state: State) => {
+  return staticResponse(
+    `
+const mapping = ${JSON.stringify(
+      Object.entries(state.config.mapping)
+        .filter(key => key && key.length > 1)
+        .map(([key, value]) => {
+          if (typeof value === "string" && value.startsWith("data:"))
+            return [key, "data:text/plain,..."];
+          let match: RegExpMatchArray | null =
+            key.match(RegExp(key.replace(/^\//, "^/"))) ?? null;
+          const replacedReplaceBody = (
+            typeof value === "string" ? value : value.replaceBody
+          )?.replace(
+            /\$\$(\d+)/g,
+            (_, index) => match?.[parseInt(index)] ?? "",
+          );
+          let replacementCounter = 0;
+          return [
+            key.replace(/\([^)]+\)/g, () => `$${++replacementCounter}`),
+            replacedReplaceBody,
+          ];
+        }),
+    )}
+self.addEventListener("install", function () {
+  self.skipWaiting();
+});
+self.addEventListener("activate", function (event) {
+  event.waitUntil(self.clients.claim());
+});
+self.addEventListener("fetch", function (event) {
+  const resolvedUrl = mapping.reduce((url, [to, from]) => 
+    url.replace(new RegExp(from, "ig"), to), event.request.url);
+  if (resolvedUrl === event.request.url) return;
+  event.respondWith(fetch(new URL(resolvedUrl, "${state.config.ssl ? "https://" : "http://"}${proxyHostnameAndPort}").href),{
+      method: event.request.method, 
+      headers: event.request.headers,
+      body: event.request.body,
+      mode: event.request.mode,
+      credentials: event.request.credentials,
+      cache: event.request.cache,
+      redirect: event.request.redirect,
+      referrer: event.request.referrer,
+      referrerPolicy: event.request.referrerPolicy,
+      integrity: event.request.integrity,
+      keepalive: event.request.keepalive,
+      signal: event.request.signal,
+      destination: event.request.destination,
+})
+});`,
+    {
+      headers: {
+        "content-type": "text/javascript; charset=utf8",
+        "Service-Worker-Allowed": "/",
+      },
+    },
+  );
+};
+
 const specialPageMapping: Record<
   string,
   (
@@ -1792,7 +1851,9 @@ const specialPageMapping: Record<
   recorder: recorderPage,
   file: filePage,
   data: dataPage,
+  worker: workerPage,
 };
+
 const specialPages = Object.keys(specialPageMapping);
 const specialProtocols = specialPages.map(page => `${page}:`);
 const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
@@ -1801,7 +1862,10 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
     {},
     ...specialPages
       .filter(page => page !== "data" && page !== "file")
-      .map(page => ({ [`/${page}/`]: `${page}://` })),
+      .map(page => ({
+        [page === "worker" ? "/local-traffic-worker.js" : `/${page}/`]:
+          `${page}://`,
+      })),
   ),
   port: 8080,
   replaceRequestBodyUrls: false,
@@ -2169,7 +2233,7 @@ const mockRequest = ({
 const staticResponse = (
   data: string | Promise<Buffer>,
   options?: {
-    contentType?: string;
+    headers?: Record<string, string>;
     onOutboundWrite?: (buffer: Buffer) => void;
   },
 ): ClientHttp2Session =>
@@ -2196,7 +2260,8 @@ const staticResponse = (
           this.events["response"](
             {
               Server: "local",
-              "Content-Type": options?.contentType ?? "text/html",
+              "Content-Type": "text/html",
+              ...(options?.headers ?? {}),
             },
             0,
           );
@@ -2289,6 +2354,9 @@ const replaceBody = async (
       );
       const willReplace =
         !fileTooBig && (contentTypeCanBeProcessed || !fileHasSpecialChars());
+      const workerRoute = Object.entries(parameters.mapping).filter(([_, v]) =>
+        v?.toString()?.startsWith("worker://"),
+      )[0];
       return !willReplace
         ? uncompressedBuffer
         : replaceTextUsingMapping(uncompressedBuffer.toString(), {
@@ -2296,14 +2364,26 @@ const replaceBody = async (
             proxyHostnameAndPort: parameters.proxyHostnameAndPort,
             ssl: parameters.ssl,
             mapping: parameters.mapping,
-          }).replace(
-            /\?protocol=wss?%3A&hostname=[^&]+&port=[0-9]+&pathname=/g,
-            `?protocol=ws${parameters.ssl ? "s" : ""}%3A&hostname=${
-              parameters.proxyHostname
-            }&port=${parameters.port}&pathname=${encodeURIComponent(
-              parameters.key.replace(/\/+$/, ""),
-            )}`,
-          );
+          })
+            .replace(
+              /\?protocol=wss?%3A&hostname=[^&]+&port=[0-9]+&pathname=/g,
+              `?protocol=ws${parameters.ssl ? "s" : ""}%3A&hostname=${
+                parameters.proxyHostname
+              }&port=${parameters.port}&pathname=${encodeURIComponent(
+                parameters.key.replace(/\/{1,6}$/, ""), // polynomial-redos, 6 might be a reasonable value
+              )}`,
+            )
+            .replace(/<\/head>/, () => {
+              if (
+                parameters.direction !== REPLACEMENT_DIRECTION.INBOUND ||
+                !(headers["content-type"] ?? "")
+                  .toString()
+                  .includes("text/html") ||
+                !workerRoute
+              )
+                return "</head>";
+              return `<script type="text/javascript">navigator.serviceWorker.register("${workerRoute[0]}",{scope:"/"});</script></head>`;
+            });
     })
     .then((updatedBody: Buffer | string) =>
       (headers["content-encoding"]?.toString() ?? "")
