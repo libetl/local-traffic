@@ -1803,6 +1803,11 @@ self.addEventListener("activate", function (event) {
   event.waitUntil(self.clients.claim());
 });
 self.addEventListener("fetch", function (event) {
+  let canonicalUrl = '';
+  try {
+    canonicalUrl = new URL(event.request.url);
+  } catch(e) {}
+  if (!canonicalUrl || canonicalUrl.hostname === "${proxyHostnameAndPort}") return;
   const resolvedUrl = mapping.reduce((url, [to, from]) => 
     url.replace(new RegExp(from, "ig"), to), event.request.url);
   if (resolvedUrl === event.request.url) return;
