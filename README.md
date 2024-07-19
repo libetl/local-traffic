@@ -5,7 +5,7 @@ That is a secure http/2 (or insecure http1.1) reverse-proxy installed on your ma
 - with 0 transitive dependency
 - with 1 install step
 - with a startup time of a few milliseconds
-- with one 65kb index.js file
+- with one 29kb index.js file
 
 How simple is that ?
 
@@ -29,7 +29,8 @@ npx local-traffic
 {
   "mapping": {
     "/npm/": "https://www.npmjs.com/",
-    "/my-static-webapp/(.*)": "file:///home/user/projects/my-static-webapp/$$1",
+    "/my-static-webapp/": "file:///home/user/projects/my-static-webapp/",
+    "/my-non-existing-webapp/": "file:///home/user/random/404.html",
     "/welcome/": "data:text/html,<a href=\"https://ac.me/acme.js\">See my hobby project</a>",
     "/(see-this-example|yet-another-example)": "http://example.com/$$1",
     "/config/": "config://",
@@ -39,6 +40,8 @@ npx local-traffic
       "replaceBody": "https://ac.me/acme.js",
       "downstreamUrl": "file:///home/user/projects/zepto/dist/zepto.js"
     },
+    "/local-traffic-worker.js": "worker://",
+    "/proxified-api/": "https://some-cors-restricted-domain.com/some-restricted-api/",
     "": "https://github.com/"
   }
 }
@@ -48,15 +51,16 @@ npx local-traffic
 
 2. Go to [http://localhost:8080/prettier](http://localhost:8080/prettier) with your browser
 3. Go to [http://localhost:8080/npm/](http://localhost:8080/npm) with your browser
-4. Go to [http://localhost:8080/my-static-webapp/index.html](http://localhost:8080/my-static-webapp/index.html) with your browser (given your project name is my-static-webapp, but I am not 100% sure)
-5. Go to [http://localhost:8080/see-this-example](http://localhost:8080/see-this-example) or to [http://localhost:8080/yet-another-example](http://localhost:8080/yet-another-example) with your browser. Starting 0.0.89 and above, it supports regular expressions, and it is able to match them against the destination through string interpolation. Start with a double dollar sign (`$$`) followed by the index of the value in the [match array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/match#return_value)
-6. Go to [http://localhost:8080/welcome/](http://localhost:8080/welcome/) with your browser (data urls work with version >= 0.0.95)
-7. Go to [http://localhost:8080/logs/](http://localhost:8080/logs/) to watch the request logs
-8. Go to [http://localhost:8080/config/](http://localhost:8080/config/) to change the config in a web editor
-9. You can use the [http://localhost:8080/recorder/](recorder) to turn your proxy into a mock server. There is a user interface and also an API (documented [here](#recorder-api))
-10. From the web config editor, create a SSL keypair and start working with a self signed SSL certificate right away
-11. Your page will use /jquery-local/jquery.js instead of the CDN asset, and will serve the file from your hard drive
-12. Your server now proxies the mapping that you have configured
+4. Go to [http://localhost:8080/my-static-webapp/index.html](http://localhost:8080/my-static-webapp/index.html) to test your webapp
+5. Go to [http://localhost:8080/my-non-existing-webapp/admin/permissions](http://localhost:8080/my-non-existing-webapp/admin/permissions) to test your 404 page (>= 0.1.1)
+6. Go to [http://localhost:8080/see-this-example](http://localhost:8080/see-this-example) or to [http://localhost:8080/yet-another-example](http://localhost:8080/yet-another-example) with your browser. Starting 0.0.89 and above, it supports regular expressions, and it is able to match them against the destination through string interpolation. Start with a double dollar sign (`$$`) followed by the index of the value in the [match array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/match#return_value)
+7. Go to [http://localhost:8080/welcome/](http://localhost:8080/welcome/) with your browser (data urls work with version >= 0.0.95)
+8. Go to [http://localhost:8080/logs/](http://localhost:8080/logs/) to watch the request logs
+9. Go to [http://localhost:8080/config/](http://localhost:8080/config/) to change the config in a web editor
+10. You can use the [http://localhost:8080/recorder/](recorder) to turn your proxy into a mock server. There is a user interface and also an API (documented [here](#recorder-api))
+11. From the web config editor, create a SSL keypair and start working with a self signed SSL certificate right away
+12. Your page will use /jquery-local/jquery.js instead of the CDN asset, and will serve the file from your hard drive
+13. Use the /local-traffic-worker.js service worker to walk around the CORS restrictions when your api does a request to some-cors-restricted-domain.com (>= 0.1.4)
 
 ## usage
 
@@ -71,7 +75,7 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 ### from a node.js application (>= 0.0.72)
 
 ```bash
- node -e 'const { start } = require("local-traffic"); start({ /* configuration goes here */ })'
+ node -e 'require("local-traffic").start({ /* configuration goes here */ })'
 ```
 
 ## how to change mappings to local / non-local
@@ -94,12 +98,35 @@ All boolean settings default to false when unspecified.
 - `dontTranslateLocationHeader`: (`boolean`) when getting a response location header, in case `replaceResponseBodyUrls` does not change the URL, change the origin to the proxy anyway
 - `dontUseHttp2Downstream`: (`boolean`) force calling downstream services in http1.1 only (to save some time)
 - `simpleLogs`: (`boolean`) disable colored logs for text terminals
-- `logAccessInTerminal`: (`boolean`) write an access log in the terminal on each call (defaults to false)
+- `logAccessInTerminal`: (`boolean` | 'with-mapping') write an access log in the terminal on each call (>= 0.1.2 : 'with-mapping' will log the key used to find the target)
 - `websocket`: (`boolean`) true to activate websocket connections proxying via sockets. Required for logs UI.
 - `disableWebSecurity`: (`boolean`) true for easygoing values in cross origin requests or content security policy headers
 - `connectTimeout`: (`number`) max time before aborting the connection (defaults to 3000ms)
 - `socketTimeout`: (`number`) max time waiting for a response (defaults to 3000ms)
 - `unwantedHeaderNamesInMocks`: (`string[]`) header names that won't get added to the mock request matchers
+
+## config API
+
+(>= 0.1.1)
+The configuration can be manipulated programmatically with an API.
+It can be used if someone needs to automatically switch the routes or the options.
+It can be used for canary deployment strategy (to switch between odd domain and even domain)
+
+### post, put
+
+Argument : the config itself
+
+Updates the config, returns the new config once the update is complete
+
+### get, head
+
+Retrieves the current configuration.
+use `Accept: application/json` to use the API mode.
+
+```bash
+$ curl https://localhost:8443/config/ -XGET -k -H'Accept: application/json'
+{"mapping":{"/config/":"config://","":"https://github.com/"},"port":443,"replaceRequestBodyUrls":true,"replaceResponseBodyUrls":true}
+```
 
 ## recorder API
 

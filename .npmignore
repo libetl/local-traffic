@@ -7,6 +7,7 @@ renovate.json
 dist/minified.js
 dist/terser.js
 dist/index.js
+zipify.js
 test
 .vscode
 .github

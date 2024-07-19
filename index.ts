@@ -39,10 +39,10 @@ import {
   brotliCompress,
   brotliDecompress,
 } from "zlib";
-import { resolve, normalize } from "path";
+import { resolve, normalize, sep } from "path";
 import { createHash, randomBytes } from "crypto";
 import { argv, cwd, exit, hrtime, stdout } from "process";
-import { homedir } from "os";
+import { homedir, tmpdir } from "os";
 import type { Duplex, Readable } from "stream";
 
 type ErrorWithErrno = NodeJS.ErrnoException;
@@ -105,7 +105,7 @@ interface LocalConfiguration {
   replaceResponseBodyUrls?: boolean;
   dontUseHttp2Downstream?: boolean;
   dontTranslateLocationHeader?: boolean;
-  logAccessInTerminal?: boolean;
+  logAccessInTerminal?: boolean | "with-mapping";
   simpleLogs?: boolean;
   websocket?: boolean;
   disableWebSecurity?: boolean;
@@ -136,6 +136,8 @@ enum ServerMode {
   MOCK = "mock",
 }
 
+type LogElement = { color: number; text: string; length?: number };
+
 interface MockConfig {
   mocks: Mocks;
   strict: boolean;
@@ -150,21 +152,39 @@ interface State {
   configFileWatcher: StatWatcher | null;
   mode: ServerMode;
   mockConfig: MockConfig;
-  log: (
-    logs: { color: number; text: string; length?: number }[][],
-  ) => Promise<void>;
+  log: (logs: LogElement[][]) => Promise<void>;
   notifyConfigListeners: (data: Record<string, unknown>) => void;
   notifyLogsListeners: (data: Record<string, unknown>) => void;
-  buildQuickStatus: () => { color: number; text: string; length: number }[];
-  quickStatus: () => Promise<void>;
+  buildQuickStatus: () => LogElement[];
+  quickStatus: (otherLogElements?: LogElement[][]) => Promise<void>;
 }
 
-const userHomeConfigFile = resolve(homedir(), ".local-traffic.json");
-const filename = resolve(
-  cwd(),
-  argv.slice(-1)[0].endsWith(".json") ? argv.slice(-1)[0] : userHomeConfigFile,
-);
-
+const mainProgram =
+  argv
+    .map(arg => arg.trim())
+    .filter(
+      arg =>
+        arg &&
+        !["ts-node", "node", "npx", "npm", "exec"].some(
+          pattern =>
+            arg.includes(pattern) &&
+            !arg.match(/npm-cache/) &&
+            !arg.match(/_npx/),
+        ),
+    )[0] ?? "";
+const runAsMainProgram =
+  mainProgram.toLowerCase().replace(/[-_]/g, "").includes("localtraffic") &&
+  !mainProgram.match(/(.|-)?(test|spec)\.m?[jt]sx?$/);
+const filename = !runAsMainProgram
+  ? `${tmpdir()}${sep}local-traffic-temporary-config-${randomBytes(6).toString("hex")}.json`
+  : resolve(
+      cwd(),
+      argv.slice(-1)[0].endsWith(".json")
+        ? argv.slice(-1)[0]
+        : resolve(homedir(), ".local-traffic.json"),
+    );
+const crashTest = argv.some(arg => arg === "--crash-test");
+const screenWidth = 64;
 const instantTime = (): bigint => {
   return (
     hrtime.bigint?.() ??
@@ -194,7 +214,7 @@ const levelToString = (level?: number) =>
       : "info";
 const log = async function (
   state: Partial<State> | null,
-  logs: { color: number; text: string; length?: number }[][],
+  logs: LogElement[][],
 ) {
   const simpleTexts = logs.map(logLine =>
     logLine
@@ -224,16 +244,22 @@ const log = async function (
   if (true) return;
   if (state?.config?.simpleLogs)
     for (let simpleText of simpleTexts)
-      console.log(
-        `${getCurrentTime(state?.config?.simpleLogs)} | ${simpleText}`,
+      stdout.write(
+        `${getCurrentTime(state?.config?.simpleLogs)} | ${simpleText}\n`,
       );
   else {
     for (let element of logs) {
-      const logTexts = element.map(e => `\u001b[48;5;${e.color}m${e.text}`);
-      console.log(
-        `${getCurrentTime(state?.config?.simpleLogs)}${element
-          .map(e => `\u001b[48;5;${e.color}m${"".padEnd((e.length ?? 64) + 1)}`)
-          .join("▐")}\u001b[0m`,
+      const renderedColors = element.filter(e => e?.text?.length);
+      const logTexts = renderedColors.map(
+        e => `\u001b[48;5;${e.color}m${e.text}`,
+      );
+      stdout.write(
+        `${getCurrentTime(state?.config?.simpleLogs)}${renderedColors
+          .map(
+            e =>
+              `\u001b[48;5;${e.color}m${"".padEnd((e.length ?? screenWidth) + 1)}`,
+          )
+          .join("▐")}\u001b[0m\n`,
       );
 
       await new Promise(resolve =>
@@ -247,9 +273,9 @@ const log = async function (
           ),
         );
         stdout.write(logTexts[i]);
-        offset += (element[i].length ?? 64) + 2;
+        offset += (element[i].length ?? screenWidth) + 2;
       }
-      console.log("\u001b[0m");
+      stdout.write("\u001b[0m\n");
       for (let simpleText of simpleTexts)
         state?.notifyLogsListeners?.({
           event: simpleText,
@@ -459,9 +485,13 @@ const buildQuickStatus = function (this: State) {
   ];
 };
 
-const quickStatus = async function (this: State) {
-  this.log([this.buildQuickStatus()]);
-  this.notifyConfigListeners(this.config as Record<string, unknown>);
+const quickStatus = async function (
+  this: State,
+  otherLogElements?: LogElement[][],
+) {
+  this.log([...(otherLogElements ?? []), this.buildQuickStatus()]).then(() =>
+    this.notifyConfigListeners(this.config as Record<string, unknown>),
+  );
 };
 
 const errorPage = (
@@ -540,15 +570,30 @@ const logsView = (
   <tbody id="proxy">
   </tbody>
 </table>
+<div class="alert alert-warning" role="alert"
+style="display:none;left:20%;right:20%;top:20%;position:absolute;z-index:1;"
+id="websocket-disconnected">
+<p>&#x24D8;&nbsp;Websocket connection is not available at this moment.</p>
+<ul><li>Is local-traffic running ?</li><li>Are websockets enabled ?</li>
+<li>Are you running a network protection tool that disallows websockets ?</li></ul>
+</div>
 <script type="text/javascript">
+    let socket = null;
     function start() {
       document.getElementById('table-access').style.height =
         (document.documentElement.clientHeight - 150) + 'px';
-      const socket = new WebSocket("ws${
+      if (socket !== null) return;
+      socket = new WebSocket("ws${
         config.ssl ? "s" : ""
       }://${proxyHostnameAndPort}/local-traffic-logs${
         options.captureResponseBody ? "?wantsResponseMessage=true" : ""
       }");
+      socket.onopen = function(event) {
+        document.getElementById('websocket-disconnected').style.display = 'none';
+        document.getElementById('table-access').style.filter = null;
+        (document.getElementsByTagName('nav')[0]||{style:{}}).style.filter = null;
+        (document.getElementsByTagName('form')[0]||{style:{}}).style.filter = null;
+      }
       socket.onmessage = function(event) {
         let data = event.data
         let uniqueHash;
@@ -599,8 +644,20 @@ const logsView = (
         cleanup();
       };
       socket.onerror = function(error) {
-        console.log(\`[error] \${JSON.stringify(error)}\`);
-        setTimeout(start, 5000);
+        socket = null;
+        setTimeout(start, 1000);
+        if (error.target.readyState === 3) {
+          document.getElementById('websocket-disconnected').style.display = 'block';
+          document.getElementById('table-access').style.filter = 'blur(8px)';
+          (document.getElementsByTagName('nav')[0]||{style:{}}).style.filter = 'blur(8px)';
+          (document.getElementsByTagName('form')[0]||{style:{}}).style.filter = 'blur(8px)';
+          return;
+        }
+        throw new Error(\`[error] \${JSON.stringify(error)}\`);
+      };
+      socket.onclose = function(error) {
+        socket = null;
+        setTimeout(start, 1000);
       };
     };
     function show(id) {
@@ -666,7 +723,9 @@ const logsView = (
       '<td scope="col" class="statusCode">' + statusCode + '</td>' +
       '<td scope="col" class="duration text-end">' + duration + '</td>' +
       '<td scope="col" class="upstream-path">' + upstreamPath + '</td>' + 
-      '<td scope="col">' + downstreamPath + '</td>' + 
+      '<td scope="col">' + 
+      ((downstreamPath??'').startsWith('data:') ? 'data:...' : downstreamPath) + 
+      '</td>' + 
       '</tr>');
     }
     function getColorFromStatusCode(statusCode) {
@@ -703,8 +762,68 @@ const logsPage = (proxyHostnameAndPort: string, state: State) =>
 ${logsView(proxyHostnameAndPort, state.config, { captureResponseBody: false })}
 </body></html>`);
 
-const configPage = (proxyHostnameAndPort: string, state: State) =>
-  staticResponse(`${header(0x1f39b, "config", "")}
+const configPage = (
+  proxyHostnameAndPort: string,
+  state: State,
+  request: Http2ServerRequest | IncomingMessage,
+  mappingAttributes: {
+    requestBody: Buffer;
+    target: URL;
+    url: URL;
+  },
+) => {
+  if (["POST", "PUT"].includes(request.method)) {
+    let newConfig: LocalConfiguration;
+    try {
+      newConfig = JSON.parse(
+        mappingAttributes?.requestBody?.toString("ascii") ?? "{}",
+      );
+    } catch (e) {
+      setTimeout(
+        () =>
+          state.log([
+            [
+              {
+                text: `${EMOJIS.ERROR_4} config update could not be read`,
+                color: LogLevel.WARNING,
+              },
+            ],
+          ]),
+        1,
+      );
+      return staticResponse(
+        `{"error":"config update could not be read","stack":"${e.stack
+          ?.replace?.(/"/g, '\\"')
+          .replace(/[\s]+/g, " ")}"}`,
+        {
+          headers: { contentType: "application/json; charset=utf-8" },
+        },
+      );
+    }
+    return staticResponse(
+      new Promise(resolve => {
+        state.configFileWatcher?.once?.("change", () => {
+          setTimeout(() => {
+            // state.config has mutated (maybe) in function 'update'
+            resolve(Buffer.from(JSON.stringify(state.config)));
+          }, 10);
+        });
+        update(state, { pendingConfigSave: newConfig });
+      }),
+      {
+        headers: { contentType: "application/json; charset=utf-8" },
+      },
+    );
+  }
+  if (
+    ["GET", "HEAD"].includes(request.method) &&
+    request.headers?.["accept"]?.includes("application/json")
+  ) {
+    return staticResponse(JSON.stringify(state.config), {
+      headers: { contentType: "application/json; charset=utf-8" },
+    });
+  }
+  return staticResponse(`${header(0x1f39b, "config", "")}
     <link href="${cdn}jsoneditor/dist/jsoneditor.min.css" rel="stylesheet" type="text/css">
     <script src="${cdn}jsoneditor/dist/jsoneditor.min.js"></script>
     <script src="${cdn}node-forge/dist/forge.min.js"></script>
@@ -722,7 +841,7 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
     </div>
     <div id="jsoneditor" style="width: 400px; height: 400px;"></div>
     <script>
-    // create the editor
+    let socket = null;
     const container = document.getElementById("jsoneditor")
     const options = {mode: "code", allowSchemaSuggestions: true, schema: {
       type: "object",
@@ -730,17 +849,19 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
         ${Object.entries({ ...defaultConfig, ssl: { cert: "", key: "" } })
           .map(
             ([property, exampleValue]) =>
-              `${property}: {type: ${
+              `${property}:${
                 property === "unwantedHeaderNamesInMocks"
-                  ? '"array","items": {"type":"string"}'
-                  : typeof exampleValue === "number"
-                    ? '"integer"'
-                    : typeof exampleValue === "string"
-                      ? '"string"'
-                      : typeof exampleValue === "boolean"
-                        ? '"boolean"'
-                        : '"object"'
-              }}`,
+                  ? '{type:"array","items":{"type":"string"}}'
+                  : property === "logAccessInTerminal"
+                    ? '{"oneOf":[{type:"boolean"},{enum:["with-mapping"]}]}'
+                    : typeof exampleValue === "number"
+                      ? '{type:"integer"}'
+                      : typeof exampleValue === "string"
+                        ? '{type:"string"}'
+                        : typeof exampleValue === "boolean"
+                          ? '{type:"boolean"}'
+                          : '{type:"object"}'
+              }`,
           )
           .join(",\n          ")}
       },
@@ -749,7 +870,15 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
     }}
 
     function save() {
-      socket.send(JSON.stringify(editor.get()));
+      if (!socket || socket.readyState !== 1) {
+        fetch(window.location.href, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify(editor.get())
+        })
+      } else socket.send(JSON.stringify(editor.get()));
     }
 
     function generateSslCertificate() {
@@ -780,7 +909,6 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
     }
 
     const editor = new JSONEditor(container, options);
-    let socket;
     const initialJson = ${JSON.stringify(state.config)}
     editor.set(initialJson)
     editor.validate();
@@ -789,7 +917,28 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
       bindKey: {win: 'Ctrl-S',  mac: 'Command-S'},
       exec: save,
     });
-
+    function startSocket() {
+      if (socket != null) return;
+      socket = new WebSocket("ws${
+        state.config.ssl ? "s" : ""
+      }://${proxyHostnameAndPort}/local-traffic-config");
+      socket.onmessage = function(event) {
+        editor.set(JSON.parse(event.data))
+        editor.validate()
+      }
+      socket.onerror = function(error) {
+        socket = null;
+        setTimeout(startSocket, 1000);
+        if (error.target.readyState === 3) {
+          return;
+        }
+        throw new Error(\`[error] \${JSON.stringify(error)}\`);
+      };
+      socket.onclose = function(error) {
+        socket = null;
+        setTimeout(startSocket, 1000);
+      };
+    }
     window.addEventListener("DOMContentLoaded", function() {
       document.getElementById('jsoneditor').style.height =
         (document.documentElement.clientHeight - 150) + 'px';
@@ -812,16 +961,11 @@ const configPage = (proxyHostnameAndPort: string, state: State) =>
       saveButton.innerHTML="&#x1F4BE;";
       document.querySelector('.jsoneditor-menu')
               .appendChild(saveButton);
-      socket = new WebSocket("ws${
-        state.config.ssl ? "s" : ""
-      }://${proxyHostnameAndPort}/local-traffic-config");
-      socket.onmessage = function(event) {
-        editor.set(JSON.parse(event.data))
-        editor.validate()
-      }
+      startSocket();
     });
     </script>
   </body></html>`);
+};
 
 const recorderHandler = (
   state: State,
@@ -1005,7 +1149,7 @@ const dataPage = (
           },
         ),
     {
-      contentType,
+      headers: { "content-type": contentType },
     },
   );
 };
@@ -1017,7 +1161,7 @@ const recorderPage = (
 ) => {
   if (request.url?.endsWith("?forceLogInRecorderPage=true")) {
     return staticResponse(`{"ping":"pong"}`, {
-      contentType: "application/json; charset=utf-8",
+      headers: { "content-type": "application/json; charset=utf-8" },
     });
   }
   if (
@@ -1033,13 +1177,13 @@ const recorderPage = (
         ),
       }),
       {
-        contentType: "application/json; charset=utf-8",
+        headers: { contentType: "application/json; charset=utf-8" },
       },
     );
   }
   if (["PUT", "POST", "DELETE"].includes(request.method ?? "")) {
     return staticResponse(`{"status": "acknowledged"}`, {
-      contentType: "application/json; charset=utf-8",
+      headers: { contentType: "application/json; charset=utf-8" },
       onOutboundWrite: buffer =>
         recorderHandler(state, buffer, request.method === "DELETE"),
     });
@@ -1629,6 +1773,70 @@ const http1Page = async (
   } as unknown as ClientHttp2Session;
 };
 
+const workerPage = (proxyHostnameAndPort: string, state: State) => {
+  return staticResponse(
+    `
+const mapping = ${JSON.stringify(
+      Object.entries(state.config.mapping)
+        .filter(key => key && key.length > 1)
+        .map(([key, value]) => {
+          if (typeof value === "string" && value.startsWith("data:"))
+            return [key, "data:text/plain,..."];
+          let match: RegExpMatchArray | null =
+            key.match(RegExp(key.replace(/^\//, "^/"))) ?? null;
+          const replacedReplaceBody = (
+            typeof value === "string" ? value : value.replaceBody
+          )?.replace(
+            /\$\$(\d+)/g,
+            (_, index) => match?.[parseInt(index)] ?? "",
+          );
+          let replacementCounter = 0;
+          return [
+            key.replace(/\([^)]+\)/g, () => `$${++replacementCounter}`),
+            replacedReplaceBody,
+          ];
+        }),
+    )}
+self.addEventListener("install", function () {
+  self.skipWaiting();
+});
+self.addEventListener("activate", function (event) {
+  event.waitUntil(self.clients.claim());
+});
+self.addEventListener("fetch", function (event) {
+  let canonicalUrl = '';
+  try {
+    canonicalUrl = new URL(event.request.url);
+  } catch(e) {}
+  if (!canonicalUrl || canonicalUrl.hostname === "${proxyHostnameAndPort}") return;
+  const resolvedUrl = mapping.reduce((url, [to, from]) => 
+    url.replace(new RegExp(from, "ig"), to), event.request.url);
+  if (resolvedUrl === event.request.url) return;
+  event.respondWith(fetch(new URL(resolvedUrl, "${state.config.ssl ? "https://" : "http://"}${proxyHostnameAndPort}").href),{
+      method: event.request.method, 
+      headers: event.request.headers,
+      body: event.request.body,
+      mode: event.request.mode,
+      credentials: event.request.credentials,
+      cache: event.request.cache,
+      redirect: event.request.redirect,
+      referrer: event.request.referrer,
+      referrerPolicy: event.request.referrerPolicy,
+      integrity: event.request.integrity,
+      keepalive: event.request.keepalive,
+      signal: event.request.signal,
+      destination: event.request.destination,
+})
+});`,
+    {
+      headers: {
+        "content-type": "text/javascript; charset=utf8",
+        "Service-Worker-Allowed": "/",
+      },
+    },
+  );
+};
+
 const specialPageMapping: Record<
   string,
   (
@@ -1637,8 +1845,10 @@ const specialPageMapping: Record<
     request: Http2ServerRequest | IncomingMessage,
     mappingAttributes: {
       target: URL;
+      url: URL;
       proxyHostname: string;
       key: string;
+      requestBody: Buffer;
     },
   ) => ClientHttp2Session
 > = {
@@ -1647,7 +1857,9 @@ const specialPageMapping: Record<
   recorder: recorderPage,
   file: filePage,
   data: dataPage,
+  worker: workerPage,
 };
+
 const specialPages = Object.keys(specialPageMapping);
 const specialProtocols = specialPages.map(page => `${page}:`);
 const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
@@ -1656,7 +1868,10 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
     {},
     ...specialPages
       .filter(page => page !== "data" && page !== "file")
-      .map(page => ({ [`/${page}/`]: `${page}://` })),
+      .map(page => ({
+        [page === "worker" ? "/local-traffic-worker.js" : `/${page}/`]:
+          `${page}://`,
+      })),
   ),
   port: 8080,
   replaceRequestBodyUrls: false,
@@ -1671,18 +1886,21 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   socketTimeout: 3000,
   unwantedHeaderNamesInMocks: [],
 };
-const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
+const load = async (
+  firstTime: boolean = true,
+): Promise<LocalConfiguration | null> =>
   new Promise<LocalConfiguration>(resolve =>
     readFile(filename, (error, data) => {
-      if (error && !firstTime) {
+      if (error) {
         log(null, [
           [
             {
-              text: `${EMOJIS.ERROR_1} config error. Using default value`,
+              text: `${EMOJIS.ERROR_1} config error. Using previous value`,
               color: LogLevel.ERROR,
             },
           ],
-        ]);
+        ]).then(() => resolve({ ...defaultConfig }));
+        if (error.code !== "ENOENT") return;
       }
       let config: LocalConfiguration | null = null;
       try {
@@ -1702,12 +1920,7 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
           ],
         ]).then(() => resolve(config));
       }
-      if (
-        error &&
-        error.code === "ENOENT" &&
-        firstTime &&
-        filename === userHomeConfigFile
-      ) {
+      if (error?.code === "ENOENT" && firstTime) {
         writeFile(
           filename,
           JSON.stringify(defaultConfig, null, 2),
@@ -1735,12 +1948,62 @@ const load = async (firstTime: boolean = true): Promise<LocalConfiguration> =>
         );
       } else resolve(config!);
     }),
+  ).then(async (readConfig: LocalConfiguration) =>
+    !readConfig
+      ? readConfig
+      : await Promise.all(
+          Object.entries(readConfig.mapping).map(
+            ([key, mapping]) =>
+              new Promise<[keyof Mapping, typeof mapping]>(resolve => {
+                const replaceBody =
+                  typeof mapping === "string" ? null : mapping.replaceBody;
+                const downstreamUrl =
+                  typeof mapping === "string" ? mapping : mapping.downstreamUrl;
+                if (!downstreamUrl.startsWith("file:") || key.endsWith("(.*)"))
+                  return resolve([key, mapping]);
+                const matchersCount = downstreamUrl
+                  .split("")
+                  .map((c, i) => c + downstreamUrl.charAt(i + 1))
+                  .filter(m => m === "$$").length;
+                return lstat(
+                  new URL(downstreamUrl.replace(/\$\$[0-9]+/g, "")).pathname,
+                  (e, stats) => {
+                    if (e) return resolve([key, mapping]);
+                    const isDirectory = stats.isDirectory();
+                    const replacedKey = isDirectory
+                      ? `${key?.replace(/\/*$/g, "")}/(.*)`
+                      : key;
+                    const replacedReplaceBody = isDirectory
+                      ? `${replaceBody?.replace(/\/*$/g, "")}/$$${matchersCount + 1}`
+                      : replaceBody;
+                    const replacedDownstreamUrl = isDirectory
+                      ? `${downstreamUrl.replace(/\/*$/g, "")}${sep}$$${matchersCount + 1}`
+                      : downstreamUrl;
+                    return resolve(
+                      !replaceBody
+                        ? [replacedKey, replacedDownstreamUrl]
+                        : [
+                            replacedKey,
+                            {
+                              replaceBody: replacedReplaceBody,
+                              downstreamUrl: replacedDownstreamUrl,
+                            },
+                          ],
+                    );
+                  },
+                );
+              }),
+          ),
+        ).then(interpretedMapping => ({
+          ...readConfig,
+          mapping: Object.fromEntries(interpretedMapping),
+        })),
   );
 
 const onWatch = async function (state: State): Promise<Partial<State>> {
   const previousConfig = state.config;
   const config = await load(false);
-  const logElements: { text: string; color: number }[][] = [];
+  const logElements: LogElement[] = [];
   if (!config) return {};
   if (
     isNaN(config?.port ?? NaN) ||
@@ -1758,12 +2021,10 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
     return {};
   }
   if (!config?.mapping?.[""]) {
-    logElements.push([
-      {
-        text: `${EMOJIS.ERROR_3} default mapping "" not provided.`,
-        color: LogLevel.WARNING,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.ERROR_3} default mapping "" not provided.`,
+      color: LogLevel.WARNING,
+    });
   }
   if (typeof config.mapping !== "object") {
     state.log([
@@ -1777,136 +2038,112 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
     return {};
   }
   if (config.replaceRequestBodyUrls !== previousConfig.replaceRequestBodyUrls) {
-    logElements.push([
-      {
-        text: `${EMOJIS.REWRITE} request body url ${
-          !config.replaceRequestBodyUrls ? "NO " : ""
-        }rewriting`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.REWRITE} request body url ${
+        !config.replaceRequestBodyUrls ? "NO " : ""
+      }rewriting`,
+      color: LogLevel.INFO,
+    });
   }
   if (
     config.replaceResponseBodyUrls !== previousConfig.replaceResponseBodyUrls
   ) {
-    logElements.push([
-      {
-        text: `${EMOJIS.REWRITE} response body url ${
-          !config.replaceResponseBodyUrls ? "NO " : ""
-        }rewriting`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.REWRITE} response body url ${
+        !config.replaceResponseBodyUrls ? "NO " : ""
+      }rewriting`,
+      color: LogLevel.INFO,
+    });
   }
   if (
     config.dontTranslateLocationHeader !==
     previousConfig.dontTranslateLocationHeader
   ) {
-    logElements.push([
-      {
-        text: `${EMOJIS.REWRITE} response location header ${
-          config.dontTranslateLocationHeader ? "NO " : ""
-        }translation`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.REWRITE} response location header ${
+        config.dontTranslateLocationHeader ? "NO " : ""
+      }translation`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.dontUseHttp2Downstream !== previousConfig.dontUseHttp2Downstream) {
-    logElements.push([
-      {
-        text: `${EMOJIS.OUTBOUND} http/2 ${config.dontUseHttp2Downstream ? "de" : ""}activated downstream`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.OUTBOUND} http/2 ${config.dontUseHttp2Downstream ? "de" : ""}activated downstream`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.disableWebSecurity !== previousConfig.disableWebSecurity) {
-    logElements.push([
-      {
-        text: `${EMOJIS.SHIELD} web security ${config.disableWebSecurity ? "de" : ""}activated`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.SHIELD} web security ${config.disableWebSecurity ? "de" : ""}activated`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.websocket !== previousConfig.websocket) {
-    logElements.push([
-      {
-        text: `${EMOJIS.WEBSOCKET} websocket ${!config.websocket ? "de" : ""}activated`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.WEBSOCKET} websocket ${!config.websocket ? "de" : ""}activated`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.logAccessInTerminal !== previousConfig.logAccessInTerminal) {
-    logElements.push([
-      {
-        text: `${EMOJIS.LOGS} access terminal logging ${!config.logAccessInTerminal ? "off" : "on"}`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.LOGS} access terminal logging ${
+        config.logAccessInTerminal === true
+          ? "on"
+          : config.logAccessInTerminal === "with-mapping"
+            ? ": show both path and mapping"
+            : "off"
+      }`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.simpleLogs !== previousConfig.simpleLogs) {
-    logElements.push([
-      {
-        text: `${EMOJIS.COLORED} simple logs ${!config.simpleLogs ? "off" : "on"}`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.COLORED} simple logs ${!config.simpleLogs ? "off" : "on"}`,
+      color: LogLevel.INFO,
+    });
   }
   if (
     Object.keys(config.mapping).join("\n") !==
     Object.keys(previousConfig.mapping ?? {}).join("\n")
   ) {
-    logElements.push([
-      {
-        text: `${EMOJIS.RULES} ${Object.keys(config.mapping)
-          .length.toString()
-          .padStart(5)} loaded mapping rules`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.RULES} ${Object.keys(config.mapping)
+        .length.toString()
+        .padStart(5)} loaded mapping rules`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.port !== previousConfig.port) {
-    logElements.push([
-      {
-        text: `${EMOJIS.PORT} port changed from ${previousConfig.port} to ${config.port}`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.PORT} port changed from ${previousConfig.port} to ${config.port}`,
+      color: LogLevel.INFO,
+    });
   }
   if (config.ssl && !previousConfig.ssl) {
-    logElements.push([
-      {
-        text: `${EMOJIS.INBOUND} ssl configuration added`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.INBOUND} ssl configuration added`,
+      color: LogLevel.INFO,
+    });
   }
   if (!config.ssl && previousConfig.ssl) {
-    logElements.push([
-      {
-        text: `${EMOJIS.INBOUND} ssl configuration removed`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.INBOUND} ssl configuration removed`,
+      color: LogLevel.INFO,
+    });
   }
   const shouldRestartServer =
     config.port !== previousConfig.port ||
     JSON.stringify(config.ssl) !== JSON.stringify(previousConfig.ssl);
 
   if (shouldRestartServer) {
-    logElements.push([
-      {
-        text: `${EMOJIS.RESTART} restarting server`,
-        color: LogLevel.INFO,
-      },
-    ]);
+    logElements.push({
+      text: `${EMOJIS.RESTART} restarting server`,
+      color: LogLevel.INFO,
+    });
   }
-  setTimeout(
-    () =>
-      state?.log(
-        logElements.concat([buildQuickStatus.apply({ ...state, config })]),
-      ),
-    1,
-  );
+  setTimeout(() => {
+    quickStatus.apply({ ...state, config }, [logElements.map(line => [line])]);
+  }, 1);
   return { config, server: shouldRestartServer ? null : undefined };
 };
 
@@ -2002,7 +2239,7 @@ const mockRequest = ({
 const staticResponse = (
   data: string | Promise<Buffer>,
   options?: {
-    contentType?: string;
+    headers?: Record<string, string>;
     onOutboundWrite?: (buffer: Buffer) => void;
   },
 ): ClientHttp2Session =>
@@ -2029,7 +2266,8 @@ const staticResponse = (
           this.events["response"](
             {
               Server: "local",
-              "Content-Type": options?.contentType ?? "text/html",
+              "Content-Type": "text/html",
+              ...(options?.headers ?? {}),
             },
             0,
           );
@@ -2122,6 +2360,9 @@ const replaceBody = async (
       );
       const willReplace =
         !fileTooBig && (contentTypeCanBeProcessed || !fileHasSpecialChars());
+      const workerRoute = Object.entries(parameters.mapping).filter(([_, v]) =>
+        v?.toString()?.startsWith("worker://"),
+      )[0];
       return !willReplace
         ? uncompressedBuffer
         : replaceTextUsingMapping(uncompressedBuffer.toString(), {
@@ -2129,14 +2370,26 @@ const replaceBody = async (
             proxyHostnameAndPort: parameters.proxyHostnameAndPort,
             ssl: parameters.ssl,
             mapping: parameters.mapping,
-          }).replace(
-            /\?protocol=wss?%3A&hostname=[^&]+&port=[0-9]+&pathname=/g,
-            `?protocol=ws${parameters.ssl ? "s" : ""}%3A&hostname=${
-              parameters.proxyHostname
-            }&port=${parameters.port}&pathname=${encodeURIComponent(
-              parameters.key.replace(/\/+$/, ""),
-            )}`,
-          );
+          })
+            .replace(
+              /\?protocol=wss?%3A&hostname=[^&]+&port=[0-9]+&pathname=/g,
+              `?protocol=ws${parameters.ssl ? "s" : ""}%3A&hostname=${
+                parameters.proxyHostname
+              }&port=${parameters.port}&pathname=${encodeURIComponent(
+                parameters.key.replace(/\/{1,6}$/, ""), // polynomial-redos, 6 might be a reasonable value
+              )}`,
+            )
+            .replace(/<\/head>/, () => {
+              if (
+                parameters.direction !== REPLACEMENT_DIRECTION.INBOUND ||
+                !(headers["content-type"] ?? "")
+                  .toString()
+                  .includes("text/html") ||
+                !workerRoute
+              )
+                return "</head>";
+              return `<script type="text/javascript">navigator.serviceWorker.register("${workerRoute[0]}",{scope:"/"});</script></head>`;
+            });
     })
     .then((updatedBody: Buffer | string) =>
       (headers["content-encoding"]?.toString() ?? "")
@@ -2203,29 +2456,49 @@ const replaceTextUsingMapping = (
       typeof value === "string" ? value : value.replaceBody,
     ])
     .reduce((inProgress, [path, value]) => {
+      const pathRegexes = path
+        .split("")
+        .filter(e => ["(", ")"].includes(e))
+        .join("")
+        .match(/^(\(\))*$/)
+        ? path
+            .split("(")
+            .flatMap(e => e.split(")"))
+            .filter((_, i) => i % 2 === 1)
+        : [];
+      let replacementCounter = 0;
       return specialProtocols.some(protocol => value.startsWith(protocol)) ||
-        (path !== "" && !path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/))
+        (path !== "" &&
+          !(
+            path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/) || pathRegexes.length
+          ))
         ? inProgress
         : direction === REPLACEMENT_DIRECTION.INBOUND
           ? inProgress.replace(
               new RegExp(
                 value
                   .replace(new RegExp(`^(${specialPages.join("|")}):\/\/`), "")
-                  .replace(/[*+?^${}()|[\]\\]/g, "")
-                  .replace(/^https/, "https?") + "/*",
+                  .replace(
+                    /\$\$(\d+)/g,
+                    (_, index) =>
+                      "(" + (pathRegexes![parseInt(index) - 1] ?? "") + ")",
+                  )
+                  .replace(/\.\*/g, "[-a-zA-Z0-9()@:%_+.~#?&//=]*")
+                  .replace(pathRegexes.length ? "" : /[*+?^${}()|[\]\\]/g, "")
+                  .replace(/^https/, "https?") +
+                  (pathRegexes.length ? "" : "/*"),
                 "ig",
               ),
-              `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path.replace(
-                /\/+$/,
-                "",
-              )}/`,
+              `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path
+                .replace(/\([^)]+\)/g, () => `$${++replacementCounter}`)
+                .replace(/\/+$/, "/")
+                .replace(/^(?![^/])$/, "/")}`,
             )
           : inProgress
               .split(
-                `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path.replace(
-                  /\/+$/,
-                  "",
-                )}`,
+                `http${ssl ? "s" : ""}://${proxyHostnameAndPort}${path
+                  .replace(/\/+$/, "")
+                  .replace(/^(?![^/])$/, "/")}`,
               )
               .join(value);
     }, text)
@@ -2352,10 +2625,14 @@ const determineMapping = (
       ...Object.entries(parameters.mapping ?? {}).map(([key, entry]) => {
         const value =
           typeof entry === "string" ? entry : entry?.downstreamUrl ?? "";
+        const matchedKey =
+          typeof entry === "string" ? key : entry?.replaceBody ?? "";
+        const url = new URL(
+          value?.startsWith?.("data:") ? value : unixNorm(value),
+        );
         return {
-          [key]: new URL(
-            value?.startsWith?.("data:") ? value : unixNorm(value),
-          ),
+          [matchedKey]: url,
+          [key]: url,
         };
       }),
     ),
@@ -2372,7 +2649,7 @@ const determineMapping = (
       : new URL(
           rawTarget.href.replace(
             /\$\$(\d+)/g,
-            (_, index) => match![parseInt(index)],
+            (_, index) => match![parseInt(index)] ?? "",
           ),
         );
   return { proxyHostname, proxyHostnameAndPort, url, path, key, target };
@@ -2720,39 +2997,46 @@ const serve = async function (
     state.config.logAccessInTerminal &&
     !targetUrl.pathname.startsWith("/:/")
   ) {
+    const requestMethodLength = (inboundRequest.method?.length ?? 3) + 2;
+    const keyToDisplay =
+      state.config.logAccessInTerminal === "with-mapping" ? key ?? "" : "";
+    const keyLength = keyToDisplay.length
+      ? Math.min(screenWidth - requestMethodLength - 2, keyToDisplay.length + 2)
+      : 0;
+    const requestLength = Math.max(
+      2,
+      screenWidth - requestMethodLength - keyLength,
+    );
     await state.log([
       [
         {
           color:
-            inboundRequest.method === "GET"
-              ? 22
-              : inboundRequest.method === "POST"
-                ? 52
-                : inboundRequest.method === "PUT"
-                  ? 94
-                  : inboundRequest.method === "DELETE"
-                    ? 244
-                    : inboundRequest.method === "OPTIONS"
-                      ? 19
-                      : inboundRequest.method === "PATCH"
-                        ? 162
-                        : inboundRequest.method === "HEAD"
-                          ? 53
-                          : inboundRequest.method === "TRACE"
-                            ? 6
-                            : inboundRequest.method === "CONNECT"
-                              ? 2
-                              : 0,
+            {
+              GET: 22,
+              POST: 52,
+              PUT: 94,
+              DELETE: 244,
+              OPTIONS: 19,
+              PATCH: 162,
+              HEAD: 53,
+              TRACE: 6,
+              CONNECT: 2,
+            }[inboundRequest.method ?? ""] ?? 0,
           text: (inboundRequest.method ?? "GET").toString(),
-          length: inboundRequest.method?.length,
+          length: requestMethodLength - 2,
+        },
+        {
+          color: 32,
+          text: keyToDisplay.substring(0, keyLength - 2),
+          length: keyLength - 2,
         },
         {
           color: 8,
           text: targetUrl.pathname
             .toString()
-            .padStart(62 - (inboundRequest.method?.length ?? 3))
-            .substring(0, 62 - (inboundRequest.method?.length ?? 3)),
-          length: 62 - (inboundRequest.method?.length ?? 3),
+            .padStart(requestLength)
+            .substring(0, requestLength),
+          length: requestLength,
         },
       ],
     ]);
@@ -2853,7 +3137,7 @@ const serve = async function (
             proxyHostnameAndPort,
             state,
             inboundRequest,
-            { target: targetUrl, proxyHostname, key },
+            { target: targetUrl, url, proxyHostname, key, requestBody },
           )
         : await http2Page(proxyHostnameAndPort, state, {
             target: targetUrl,
@@ -3319,7 +3603,12 @@ const update = async (
     },
     configFileWatcher:
       state.configFileWatcher === undefined
-        ? watchFile(filename, async () => update(state, await onWatch(state)))
+        ? watchFile(filename, async (stats: Stats) => {
+            update(
+              state,
+              stats.isFile() ? await onWatch(state) : { server: null },
+            );
+          })
         : state.configFileWatcher,
     log: log.bind(state, state),
     notifyConfigListeners: notifyConfigListeners.bind(state),
@@ -3352,26 +3641,6 @@ const update = async (
   });
   return state;
 };
-
-const mainProgram =
-  argv
-    .map(arg => arg.trim())
-    .filter(
-      arg =>
-        arg &&
-        !["ts-node", "node", "npx", "npm", "exec"].some(
-          pattern =>
-            arg.includes(pattern) &&
-            !arg.match(/npm-cache/) &&
-            !arg.match(/_npx/),
-        ),
-    )[0] ?? "";
-
-const runAsMainProgram =
-  mainProgram.toLowerCase().replace(/[-_]/g, "").includes("localtraffic") &&
-  !mainProgram.match(/(.|-)?(test|spec)\.m?[jt]sx?$/);
-
-const crashTest = argv.some(arg => arg === "--crash-test");
 
 if (crashTest) {
   const port = Math.floor(40151 + Math.random() * 9000);

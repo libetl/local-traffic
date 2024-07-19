@@ -2,6 +2,7 @@ import { mock } from "node:test";
 
 const requestListeners = [];
 const watchFileCallbacks = [];
+const watchOnceFileCallbacks = [];
 export const buffers = [];
 export const responses = [];
 export const http2OutboundRequests = [];
@@ -21,8 +22,8 @@ const Server = class {
 
 export const argv = ["test-runner", "local-traffic"];
 export const cwd = mock.fn(() => "/home/user/fake-dir");
-export const exit = mock.fn(() => {})
-export const homedir = mock.fn(() => "/home/user")
+export const exit = mock.fn(() => {});
+export const homedir = mock.fn(() => "/home/user");
 export const createServer = mock.fn(
   requestListener => new Server(requestListener),
 );
@@ -31,9 +32,9 @@ export const createSecureServer = mock.fn(
 );
 export const connect = mock.fn((targetUrl, _2, resolve) => {
   if (!targetUrl?.pathname?.includes("http1"))
-    process.nextTick(() => resolve({}, { alpnProtocol: 'h2c' }));
+    process.nextTick(() => resolve({}, { alpnProtocol: "h2c" }));
   return {
-    alpnProtocol: 'h2c',
+    alpnProtocol: "h2c",
     on: (event, callback) => {},
     request: http2OutboundRequest => {
       http2OutboundRequests.unshift(http2OutboundRequest);
@@ -44,7 +45,7 @@ export const connect = mock.fn((targetUrl, _2, resolve) => {
             buffer,
           ]);
         },
-        end: () => {},
+        end: data => {},
         on: (event, callback) => {
           if (event === "response") {
             callback(http2OutboundHeadersResponses.shift());
@@ -81,7 +82,10 @@ export const request = mock.fn((http1Request, resolve) => {
 });
 export const lstat = mock.fn((path, callback) => {
   process.nextTick(() =>
-    callback(null, { isDirectory: () => false, isFile: () => true }),
+    callback(null, {
+      isDirectory: () => path.includes("i/am/a/folder"),
+      isFile: () => true,
+    }),
   );
 });
 export const readFile = mock.fn((path, callback) => {
@@ -98,20 +102,32 @@ export const readFile = mock.fn((path, callback) => {
 export const readdir = mock.fn((path, callback) => {
   process.nextTick(() => callback(null, ["file1.txt", "file2.txt"]));
 });
-export const stdout = { 
-  isTTY: true, 
-  moveCursor: (_x, _y, resolve) => {resolve()},
-  write: () => {}
+export const stdout = {
+  isTTY: true,
+  moveCursor: (_x, _y, resolve) => {
+    resolve();
+  },
+  write: () => {},
 };
 
 let interval = null;
 export const watchFile = mock.fn((filename, callback) => {
   watchFileCallbacks.unshift(callback);
+  return {
+    once: (_, callback) => watchOnceFileCallbacks.unshift(callback),
+  };
 });
 export const writeFile = mock.fn((filename, content, callback) =>
-  process.nextTick(() => callback()),
+  process.nextTick(() => {
+    callback();
+    watchFileCallbacks.forEach(callback => callback({ isFile: () => true }));
+    watchOnceFileCallbacks.forEach(callback =>
+      callback({ isFile: () => true }),
+    );
+    watchOnceFileCallbacks.splice(0, watchOnceFileCallbacks.length);
+  }),
 );
-
+export const tmpdir = () => "/tmp/";
 export const setup = () => {
   if (interval) return;
   interval = setInterval(() => {
@@ -119,7 +135,7 @@ export const setup = () => {
       buffers.shift();
       process.nextTick(() => {
         const callback = watchFileCallbacks.shift();
-        callback();
+        callback({ isFile: () => true });
       });
     }
     if (buffers[0]?.toString()?.startsWith("request=")) {
@@ -139,10 +155,10 @@ export const setup = () => {
         Object.assign(response, {
           writeHead: (code, statusMessage, headers) => {
             response.code = code ?? 200;
-            response.statusMessage = typeof statusMessage === 'object' ? "" :
-            statusMessage ?? "";
-            response.headers = typeof statusMessage === 'object' ? statusMessage :
-            headers ?? {};
+            response.statusMessage =
+              typeof statusMessage === "object" ? "" : statusMessage ?? "";
+            response.headers =
+              typeof statusMessage === "object" ? statusMessage : headers ?? {};
           },
           setHeader: (headerName, headerValue) => {
             response.headers = response.headers ?? {};
