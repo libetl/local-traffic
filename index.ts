@@ -738,7 +738,11 @@ id="websocket-disconnected">
     window.addEventListener("DOMContentLoaded", start);
 </script>`;
 
-const logsPage = (proxyHostnameAndPort: string, state: State) =>
+const logsPage = (
+  state: State,
+  _,
+  mappingAttributes: { proxyHostnameAndPort: string },
+) =>
   staticResponse(`${header(0x1f4fa, "logs", "")}
 <nav class="navbar navbar-expand-lg navbar-dark bg-primary nav-fill">
   <div class="container-fluid">
@@ -758,14 +762,16 @@ const logsPage = (proxyHostnameAndPort: string, state: State) =>
     </span>
   </div>
 </nav>
-${logsView(proxyHostnameAndPort, state.config, { captureResponseBody: false })}
+${logsView(mappingAttributes.proxyHostnameAndPort, state.config, {
+  captureResponseBody: false,
+})}
 </body></html>`);
 
 const configPage = (
-  proxyHostnameAndPort: string,
   state: State,
   request: Http2ServerRequest | IncomingMessage,
   mappingAttributes: {
+    proxyHostnameAndPort: string;
     requestBody: Buffer;
     target: URL;
     url: URL;
@@ -920,7 +926,7 @@ const configPage = (
       if (socket != null) return;
       socket = new WebSocket("ws${
         state.config.ssl ? "s" : ""
-      }://${proxyHostnameAndPort}/local-traffic-config");
+      }://${mappingAttributes.proxyHostnameAndPort}/local-traffic-config");
       socket.onmessage = function(event) {
         editor.set(JSON.parse(event.data))
         editor.validate()
@@ -1111,12 +1117,12 @@ const recorderHandler = (
 };
 
 const dataPage = (
-  proxyHostnameAndPort: string,
   state: State,
   _request: Http2ServerRequest | IncomingMessage,
   mappingAttributes?: {
     target: URL;
     key: string;
+    proxyHostnameAndPort: string;
     proxyHostname: string;
   },
 ): ClientHttp2Session => {
@@ -1139,7 +1145,7 @@ const dataPage = (
           },
           {
             mapping: state.config.mapping ?? {},
-            proxyHostnameAndPort,
+            proxyHostnameAndPort: mappingAttributes.proxyHostnameAndPort,
             proxyHostname: mappingAttributes?.proxyHostname ?? "localhost",
             key: mappingAttributes?.key ?? "",
             direction: REPLACEMENT_DIRECTION.INBOUND,
@@ -1154,9 +1160,9 @@ const dataPage = (
 };
 
 const recorderPage = (
-  proxyHostnameAndPort: string,
   state: State,
   request: Http2ServerRequest | IncomingMessage,
+  mappingAttributes: { proxyHostnameAndPort: string; proxyOrigin: string },
 ) => {
   if (request.url?.endsWith("?forceLogInRecorderPage=true")) {
     return staticResponse(`{"ping":"pong"}`, {
@@ -1273,7 +1279,7 @@ function getMocksData () {
    )
 }
 function updateState () {
-  fetch("http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
+  fetch("${mappingAttributes.proxyOrigin}${
     Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
       value?.toString()?.startsWith("recorder:"),
     )?.[0] ?? "/recorder/"
@@ -1312,7 +1318,7 @@ document.getElementById('add-mock').addEventListener('click', () => {
   const iframe = document.createElement('iframe');
   iframe.style.display = 'none';
   iframe.onload = function() { iframe.parentNode.removeChild(iframe); };
-  iframe.src = "http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}${
+  iframe.src = "${mappingAttributes.proxyOrigin}${
     Object.entries(state.config.mapping ?? {}).find(([_, value]) =>
       value?.toString()?.startsWith("recorder:"),
     )?.[0] ?? "/recorder/"
@@ -1502,13 +1508,14 @@ setTimeout(() => {
     <li>If you want to record mocks with the recorder API only, close this app.</li>
   </ul>
 </div>
-${logsView(proxyHostnameAndPort, state.config, { captureResponseBody: true })}
+${logsView(mappingAttributes.proxyHostnameAndPort, state.config, {
+  captureResponseBody: true,
+})}
 </body>
 </html>`);
 };
 
 const filePage = (
-  _proxyHostnameAndPort: string,
   _state: State,
   _request: Http2ServerRequest | IncomingMessage,
   mappingAttributes: { target: URL },
@@ -1631,7 +1638,6 @@ const filePage = (
 };
 
 const http2Page = async (
-  _proxyHostnameAndPort: string,
   state: State,
   mappingAttributes: { target: URL; url: URL },
 ): Promise<ClientHttp2Session | null> => {
@@ -1772,7 +1778,11 @@ const http1Page = async (
   } as unknown as ClientHttp2Session;
 };
 
-const workerPage = (proxyHostnameAndPort: string, state: State) => {
+const workerPage = (
+  state: State,
+  _,
+  mappingAttributes: { proxyOrigin: string; proxyHostnameAndPort: string },
+) => {
   return staticResponse(
     `
 const mapping = ${JSON.stringify(
@@ -1807,11 +1817,13 @@ self.addEventListener("fetch", function (event) {
   try {
     canonicalUrl = new URL(event.request.url);
   } catch(e) {}
-  if (!canonicalUrl || canonicalUrl.hostname === "${proxyHostnameAndPort}") return;
+  if (!canonicalUrl || canonicalUrl.hostname === "${
+    mappingAttributes.proxyHostnameAndPort
+  }") return;
   const resolvedUrl = mapping.reduce((url, [to, from]) => 
     url.replace(new RegExp(from, "ig"), to), event.request.url);
   if (resolvedUrl === event.request.url) return;
-  event.respondWith(fetch(new URL(resolvedUrl, "${state.config.ssl ? "https://" : "http://"}${proxyHostnameAndPort}").href),{
+  event.respondWith(fetch(new URL(resolvedUrl, "${mappingAttributes.proxyOrigin}").href),{
       method: event.request.method, 
       headers: event.request.headers,
       body: event.request.body,
@@ -1839,13 +1851,14 @@ self.addEventListener("fetch", function (event) {
 const specialPageMapping: Record<
   string,
   (
-    proxyHostnameAndPort: string,
     state: State,
     request: Http2ServerRequest | IncomingMessage,
     mappingAttributes: {
       target: URL;
       url: URL;
       proxyHostname: string;
+      proxyHostnameAndPort: string;
+      proxyOrigin: string;
       key: string;
       requestBody: Buffer;
     },
@@ -2865,11 +2878,14 @@ const serve = async function (
     key,
     target: targetFromProxy,
   } = determineMapping(inboundRequest, state.config);
+  const proxyOrigin = `http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}`;
+  let referrerOrigin = null;
+  try {
+    referrerOrigin = new URL(inboundRequest.headers["referer"]).origin;
+  } catch (e) {}
   const target =
     targetFromProxy ??
-    (state.mode === ServerMode.MOCK
-      ? new URL(`http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}/`)
-      : null);
+    (state.mode === ServerMode.MOCK ? new URL(proxyOrigin) : null);
 
   if (!target) {
     send(
@@ -3133,12 +3149,19 @@ const serve = async function (
       ? mockRequest({ response: foundMock })
       : targetUsesSpecialProtocol
         ? specialPageMapping[target.protocol.replace(/:$/, "")](
-            proxyHostnameAndPort,
             state,
             inboundRequest,
-            { target: targetUrl, url, proxyHostname, key, requestBody },
+            {
+              target: targetUrl,
+              url,
+              proxyHostnameAndPort,
+              proxyHostname,
+              key,
+              requestBody,
+              proxyOrigin,
+            },
           )
-        : await http2Page(proxyHostnameAndPort, state, {
+        : await http2Page(state, {
             target: targetUrl,
             url,
           })
@@ -3348,7 +3371,8 @@ const serve = async function (
             ["content-security-policy"]: "report only",
             ["access-control-allow-headers"]: "*",
             ["access-control-allow-method"]: "*",
-            ["access-control-allow-origin"]: "*",
+            ["access-control-allow-origin"]: referrerOrigin ?? "*",
+            ["access-control-allow-credentials"]: "true",
           }
         : {}),
       ...(serverSentEvents
