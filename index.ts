@@ -2639,9 +2639,10 @@ const determineMapping = (
           typeof entry === "string" ? entry : entry?.downstreamUrl ?? "";
         const matchedKey =
           typeof entry === "string" ? key : entry?.replaceBody ?? "";
-        const url = new URL(
-          value?.startsWith?.("data:") ? value : unixNorm(value),
-        );
+        let url = null;
+        try {
+          url = new URL(value?.startsWith?.("data:") ? value : unixNorm(value));
+        } catch (e) {}
         return {
           [matchedKey]: url,
           [key]: url,
@@ -2650,10 +2651,33 @@ const determineMapping = (
     ),
   };
 
-  let match: RegExpMatchArray | null = null;
-  const [key, rawTarget] = Object.entries(mappings).find(
-    ([key]) => (match = path.match(RegExp(key.replace(/^\//, "^/"))) ?? null),
+  const matchedElements = Object.entries(mappings).filter(
+    ([key]) => path.match(RegExp(key.replace(/^\//, "^/"))) ?? null,
+  );
+
+  const [key, rawTarget] = matchedElements.find(matchedElement =>
+    Object.values(matchedElement).every(v => v !== null),
   ) ?? ["/"];
+  const match: RegExpMatchArray | null = path.match(
+    RegExp(key.replace(/^\//, "^/")),
+  );
+  const missingMappings = matchedElements
+    .filter(e => Object.values(e).some(v => v === null))
+    .map(([k]) => k);
+  if (missingMappings.length) {
+    setTimeout(
+      () =>
+        log({}, [
+          [
+            {
+              text: `${EMOJIS.ERROR_4} mapping error for key(s) ${missingMappings}`,
+              color: LogLevel.WARNING,
+            },
+          ],
+        ]),
+      1,
+    );
+  }
 
   const target =
     !match || !rawTarget
