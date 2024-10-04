@@ -1612,7 +1612,12 @@ const filePage = (
                   Server: "local",
                   "Content-Type": "image/svg+xml",
                 }
-              : { Server: "local" },
+              : file.endsWith(".js") || file.endsWith(".jsx")
+                ? {
+                  Server: "local",
+                  "Content-Type": "application/javascript",
+                }
+                : { Server: "local" },
             0,
           );
         if (name === "data" && this.data) {
