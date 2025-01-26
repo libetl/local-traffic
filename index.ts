@@ -1774,6 +1774,10 @@ const http1Page = async (
     end: function () {
       return this;
     },
+    close: function () {
+      outboundHttp1Response.destroy();
+      return this;
+    },
     request: function () {
       return this;
     },
@@ -3474,6 +3478,11 @@ const serve = async function (
     }
   } catch (e) {}
   if (serverSentEvents) {
+    inboundResponse.on("close", () => {
+      try {
+        outboundExchange?.close?.();
+      } catch (e) { }
+    });
     inboundResponse.write(payload);
     (outboundExchange as ClientHttp2Stream | Duplex)?.on?.(
       "data",
