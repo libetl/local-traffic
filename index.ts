@@ -2169,7 +2169,8 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
 };
 
 const unixNorm = (path: string) =>
-  path == "" ? "" : normalize(path).replace(/\\/g, "/");
+  path == "" ? "" : normalize(path).replace(/\\/g, "/")
+    .replace(/^\.\//, "");
 
 const cdn = "https://cdn.jsdelivr.net/npm/";
 const disallowedHttp2HeaderNames = [
