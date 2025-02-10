@@ -3407,6 +3407,7 @@ const serve = async function (
             ["access-control-allow-method"]: "*",
             ["access-control-allow-origin"]: referrerOrigin ?? "*",
             ["access-control-allow-credentials"]: "true",
+            ["x-frame-options"]: "SAMEORIGIN",
           }
         : {}),
       ...(serverSentEvents
