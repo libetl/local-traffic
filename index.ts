@@ -772,7 +772,7 @@ const configPage = (
   request: Http2ServerRequest | IncomingMessage,
   mappingAttributes: {
     proxyHostnameAndPort: string;
-    requestBody: Buffer;
+    requestBody: Buffer | string;
     target: URL;
     url: URL;
   },
@@ -1702,7 +1702,7 @@ const http1Page = async (
   fullPath: string,
   inboundRequest: IncomingMessage | Http2ServerRequest,
   outboundHeaders: OutgoingHttpHeaders,
-  requestBody: Buffer,
+  requestBody: Buffer | string,
   bufferedRequestBody: boolean,
   mode: ServerMode,
 ): Promise<ClientHttp2Session> => {
@@ -1869,7 +1869,7 @@ const specialPageMapping: Record<
       proxyHostnameAndPort: string;
       proxyOrigin: string;
       key: string;
-      requestBody: Buffer;
+      requestBody: Buffer | string;
     },
   ) => ClientHttp2Session
 > = {
@@ -2259,7 +2259,7 @@ const mockRequest = ({
 };
 
 const staticResponse = (
-  data: string | Promise<Buffer>,
+  data: string | Promise<string | Buffer>,
   options?: {
     headers?: Record<string, string>;
     onOutboundWrite?: (buffer: Buffer) => void;
@@ -2454,7 +2454,10 @@ const replaceBody = async (
                 ),
             );
           },
-          Promise.resolve(Buffer.from(updatedBody)),
+          Promise.resolve<Buffer>(
+            typeof updatedBody === "string"
+            ? Buffer.from(updatedBody as string)
+            : updatedBody),
         ),
     );
 
@@ -2955,7 +2958,7 @@ const serve = async function (
   );
 
   const randomId = randomBytes(20).toString("hex");
-  let requestBody: Buffer | null = null;
+  let requestBody: Buffer | string | null = null;
   const bufferedRequestBody =
     state.config.replaceRequestBodyUrls || !!state.logsListeners.length;
   // sounds ridiculous, but yes, I need to wait until the HTTP/2 stream gets read
