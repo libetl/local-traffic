@@ -1,6 +1,6 @@
 {
   "name": "local-traffic",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "main": "./dist/local-traffic.js",
   "private": false,
   "keywords": [
@@ -18,7 +18,7 @@
   },
   "author": "LiBe <libe4@free.fr>",
   "scripts": {
-    "start": "./dist/local-traffic.js",
+    "start": "node ./index.ts",
     "typescript": "tsc",
     "zipify": "node ./zipify.js ./dist/terser.js > ./dist/local-traffic.js",
     "remove-useless-whitespaces": "cat ./dist/index.js | sed -e 's/^[ \t]*//' > ./dist/minified.js",

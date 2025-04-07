@@ -47,39 +47,36 @@ import type { Duplex, Readable } from "stream";
 
 type ErrorWithErrno = NodeJS.ErrnoException;
 
-enum LogLevel {
-  ERROR = 124,
-  INFO = 93,
-  WARNING = 172,
+const LogLevel = {
+  ERROR: 124,
+  INFO: 93,
+  WARNING: 172,
 }
 
-enum EMOJIS {
-  INBOUND = "↘️ ",
-  PORT = "☎️ ",
-  OUTBOUND = "↗️ ",
-  RULES = "🔗",
-  MOCKS = "🌐",
-  STRICT_MOCKS = "🕸️",
-  AUTO_RECORD = "📼",
-  REWRITE = "✒️ ",
-  LOGS = "📝",
-  RESTART = "🔄",
-  WEBSOCKET = "☄️ ",
-  COLORED = "✨",
-  SHIELD = "🛡️ ",
-  NO = "⛔",
-  ERROR_1 = "❌",
-  ERROR_2 = "⛈️ ",
-  ERROR_3 = "☢️ ",
-  ERROR_4 = "⁉️ ",
-  ERROR_5 = "⚡",
-  ERROR_6 = "☠️ ",
-}
+const EMOJIS = Object.fromEntries([
+  ["INBOUND", "↘️ "],
+  ["PORT", "☎️ "],
+  ["OUTBOUND", "↗️ "],
+  ["RULES", "🔗"],
+  ["MOCKS", "🌐"],
+  ["STRICT_MOCKS", "🕸️"],
+  ["AUTO_RECORD", "📼"],
+  ["REWRITE", "✒️ "],
+  ["LOGS", "📝"],
+  ["RESTART", "🔄"],
+  ["WEBSOCKET", "☄️ "],
+  ["COLORED", "✨"],
+  ["SHIELD", "🛡️ "],
+  ["NO", "⛔"],
+  ["ERROR_1", "❌"],
+  ["ERROR_2", "⛈️ "],
+  ["ERROR_3", "☢️ "],
+  ["ERROR_4", "⁉️ "],
+  ["ERROR_5", "⚡"],
+  ["ERROR_6", "☠️ "],
+])
 
-enum REPLACEMENT_DIRECTION {
-  INBOUND = "INBOUND",
-  OUTBOUND = "OUTBOUND",
-}
+type REPLACEMENT_DIRECTION = "INBOUND" | "OUTBOUND"
 
 interface WebsocketListener {
   stream: Duplex;
@@ -131,10 +128,7 @@ type RequestStruct = {
   body: string;
 };
 
-enum ServerMode {
-  PROXY = "proxy",
-  MOCK = "mock",
-}
+type ServerMode = "proxy" | "mock"
 
 type LogElement = { color: number; text: string; length?: number };
 
@@ -452,11 +446,11 @@ const buildQuickStatus = function (this: State) {
     {
       color: 55,
       text: `${
-        this.mode === ServerMode.PROXY && this.mockConfig.autoRecord
+        this.mode === "proxy" && this.mockConfig.autoRecord
           ? `${EMOJIS.AUTO_RECORD}${this.mockConfig.mocks.size
               .toString()
               .padStart(3)}`
-          : this.mode === ServerMode.PROXY
+          : this.mode === "proxy"
             ? `${EMOJIS.RULES}${Object.keys(this.config.mapping ?? {})
                 .length.toString()
                 .padStart(3)}`
@@ -772,12 +766,12 @@ const configPage = (
   request: Http2ServerRequest | IncomingMessage,
   mappingAttributes: {
     proxyHostnameAndPort: string;
-    requestBody: Buffer | string;
+    requestBody: Buffer | string | null;
     target: URL;
     url: URL;
   },
 ) => {
-  if (["POST", "PUT"].includes(request.method)) {
+  if (["POST", "PUT"].includes(request.method!)) {
     let newConfig: LocalConfiguration;
     try {
       newConfig = JSON.parse(
@@ -821,7 +815,7 @@ const configPage = (
     );
   }
   if (
-    ["GET", "HEAD"].includes(request.method) &&
+    ["GET", "HEAD"].includes(request.method!) &&
     request.headers?.["accept"]?.includes("application/json")
   ) {
     return staticResponse(JSON.stringify(state.config), {
@@ -1018,7 +1012,7 @@ const recorderHandler = (
         ]),
       );
   const modeHasBeenChangedToProxy =
-    newMode !== state.mode && newMode === ServerMode.PROXY;
+    newMode !== state.mode && newMode === "proxy";
   const autoRecord =
     modeHasBeenChangedToProxy && autoRecordUpdate !== true
       ? false
@@ -1026,7 +1020,7 @@ const recorderHandler = (
   const autoRecordModeHasBeenChanged =
     autoRecord !== undefined && autoRecord != state.mockConfig.autoRecord;
   const mocksConfigHasBeenChanged =
-    (newMode !== state.mode && newMode === ServerMode.MOCK) ||
+    (newMode !== state.mode && newMode === "mock") ||
     (mocks !== null && state.mockConfig.mocks.size !== mocks.size);
   const strict = strictMode ?? state.mockConfig.strict;
   const mode = newMode ?? state.mode;
@@ -1093,7 +1087,7 @@ const recorderHandler = (
             ? [
                 {
                   text: `${
-                    mode === ServerMode.PROXY
+                    mode === "proxy"
                       ? EMOJIS.AUTO_RECORD
                       : strict
                         ? EMOJIS.STRICT_MOCKS
@@ -1110,7 +1104,7 @@ const recorderHandler = (
           mocksHaveBeenPurged
             ? state.buildQuickStatus()
             : null,
-        ].filter(e => e),
+        ].filter(e => e) as LogElement[][],
       ),
     1,
   );
@@ -1145,10 +1139,10 @@ const dataPage = (
           },
           {
             mapping: state.config.mapping ?? {},
-            proxyHostnameAndPort: mappingAttributes.proxyHostnameAndPort,
+            proxyHostnameAndPort: mappingAttributes?.proxyHostnameAndPort ?? "localhost",
             proxyHostname: mappingAttributes?.proxyHostname ?? "localhost",
             key: mappingAttributes?.key ?? "",
-            direction: REPLACEMENT_DIRECTION.INBOUND,
+            direction: "INBOUND",
             ssl: !!state.config.ssl,
             port: state.config.port ?? defaultConfig?.port,
           },
@@ -1204,11 +1198,11 @@ const recorderPage = (
     <span>Mode : </span>
     <div class="btn-group" role="group" aria-label="Server Mode">
       <input type="radio" class="btn-check" name="server-mode" id="record-mode" autocomplete="off"${
-        state.mode === ServerMode.PROXY ? " checked" : ""
+        state.mode === "proxy" ? " checked" : ""
       }>
       <label class="btn btn-outline-primary" for="record-mode">&#9210; Record</label>
       <input type="radio" class="btn-check" name="server-mode" id="mock-mode" autocomplete="off"${
-        state.mode === ServerMode.MOCK ? " checked" : ""
+        state.mode === "mock" ? " checked" : ""
       }>
       <label class="btn btn-outline-primary" for="mock-mode">&#x1F310; Mock</label>
     </div>
@@ -1652,7 +1646,7 @@ const http2Page = async (
     !state.config.dontUseHttp2Downstream;
   const http2Connection = !http2IsSupported
     ? null
-    : state.mode !== ServerMode.PROXY && state?.mockConfig?.strict
+    : state.mode !== "proxy" && state?.mockConfig?.strict
       ? null
       : await Promise.race([
           new Promise<ClientHttp2Session | null>(resolve => {
@@ -1702,7 +1696,7 @@ const http1Page = async (
   fullPath: string,
   inboundRequest: IncomingMessage | Http2ServerRequest,
   outboundHeaders: OutgoingHttpHeaders,
-  requestBody: Buffer | string,
+  requestBody: Buffer | string | null,
   bufferedRequestBody: boolean,
   mode: ServerMode,
 ): Promise<ClientHttp2Session> => {
@@ -1765,17 +1759,17 @@ const http1Page = async (
     on: function (name: string, action: (...any: any) => any) {
       if (name === "response")
         return action?.({
-          ...outboundHttp1Response.headers,
-          [":status"]: outboundHttp1Response.statusCode,
-          [":statusmessage"]: outboundHttp1Response.statusMessage,
+          ...outboundHttp1Response!.headers,
+          [":status"]: outboundHttp1Response!.statusCode,
+          [":statusmessage"]: outboundHttp1Response!.statusMessage,
         });
-      return outboundHttp1Response.on(name, action);
+      return outboundHttp1Response!.on(name, action);
     },
     end: function () {
       return this;
     },
     close: function () {
-      outboundHttp1Response.destroy();
+      outboundHttp1Response!.destroy();
       return this;
     },
     request: function () {
@@ -1795,7 +1789,7 @@ const workerPage = (
   return staticResponse(
     `
 const mapping = ${JSON.stringify(
-      Object.entries(state.config.mapping)
+      Object.entries(state.config.mapping!)
         .filter(key => key && key.length > 1)
         .map(([key, value]) => {
           if (typeof value === "string" && value.startsWith("data:"))
@@ -1869,7 +1863,7 @@ const specialPageMapping: Record<
       proxyHostnameAndPort: string;
       proxyOrigin: string;
       key: string;
-      requestBody: Buffer | string;
+      requestBody: Buffer | string | null;
     },
   ) => ClientHttp2Session
 > = {
@@ -1909,7 +1903,7 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
 };
 const load = async (
   firstTime: boolean = true,
-): Promise<LocalConfiguration | null> =>
+): Promise<LocalConfiguration> =>
   new Promise<LocalConfiguration>(resolve =>
     readFile(filename, (error, data) => {
       if (error) {
@@ -1939,7 +1933,7 @@ const load = async (
               color: LogLevel.ERROR,
             },
           ],
-        ]).then(() => resolve(config));
+        ]).then(() => resolve(config!));
       }
       if (error?.code === "ENOENT" && firstTime) {
         writeFile(
@@ -1973,7 +1967,7 @@ const load = async (
     !readConfig
       ? readConfig
       : await Promise.all(
-          Object.entries(readConfig.mapping).map(
+          Object.entries(readConfig.mapping!).map(
             ([key, mapping]) =>
               new Promise<[keyof Mapping, typeof mapping]>(resolve => {
                 const replaceBody =
@@ -1996,7 +1990,7 @@ const load = async (
                       : key;
                     const replacedReplaceBody = isDirectory
                       ? `${replaceBody?.replace(/\/*$/g, "")}/$$${matchersCount + 1}`
-                      : replaceBody;
+                      : replaceBody ?? "";
                     const replacedDownstreamUrl = isDirectory
                       ? `${downstreamUrl.replace(/\/*$/g, "")}${sep}$$${matchersCount + 1}`
                       : downstreamUrl;
@@ -2403,7 +2397,7 @@ const replaceBody = async (
             )
             .replace(/<\/head>/, () => {
               if (
-                parameters.direction !== REPLACEMENT_DIRECTION.INBOUND ||
+                parameters.direction !== "INBOUND" ||
                 !(headers["content-type"] ?? "")
                   .toString()
                   .includes("text/html") ||
@@ -2498,7 +2492,7 @@ const replaceTextUsingMapping = (
             path.match(/^[-a-zA-Z0-9()@:%_\+.~#?&//=]*$/) || pathRegexes.length
           ))
         ? inProgress
-        : direction === REPLACEMENT_DIRECTION.INBOUND
+        : direction === "INBOUND"
           ? inProgress.replace(
               new RegExp(
                 value
@@ -2652,7 +2646,7 @@ const determineMapping = (
           typeof entry === "string" ? entry : entry?.downstreamUrl ?? "";
         const matchedKey =
           typeof entry === "string" ? key : entry?.replaceBody ?? "";
-        let url = null;
+        let url : URL | null = null;
         try {
           url = new URL(value?.startsWith?.("data:") ? value : unixNorm(value));
         } catch (e) {}
@@ -2796,7 +2790,7 @@ const websocketServe = function (
 
   const target = new URL(
     `${targetWithForcedPrefix?.protocol ?? "https"}//${targetWithForcedPrefix?.host ?? "localhost"}${request.url
-      ?.replace(new RegExp(`^${key}`, "g"), targetWithForcedPrefix.pathname)
+      ?.replace(new RegExp(`^${key}`, "g"), targetWithForcedPrefix?.pathname ?? "")
       ?.replace(/^\/*/, "/")}`,
   );
   const downstreamRequestOptions: RequestOptions = {
@@ -2916,13 +2910,13 @@ const serve = async function (
     target: targetFromProxy,
   } = determineMapping(inboundRequest, state.config);
   const proxyOrigin = `http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}`;
-  let referrerOrigin = null;
+  let referrerOrigin: string | null = null;
   try {
-    referrerOrigin = new URL(inboundRequest.headers["referer"]).origin;
+    referrerOrigin = new URL(inboundRequest.headers["referer"] ?? "about:blank").origin;
   } catch (e) {}
   const target =
     targetFromProxy ??
-    (state.mode === ServerMode.MOCK ? new URL(proxyOrigin) : null);
+    (state.mode === "mock" ? new URL(proxyOrigin) : null);
 
   if (!target) {
     send(
@@ -3020,14 +3014,14 @@ const serve = async function (
           mapping: state.config.mapping ?? {},
           port: state.config.port ?? defaultConfig.port,
           ssl: !!state.config.ssl,
-          direction: REPLACEMENT_DIRECTION.OUTBOUND,
+          direction: "OUTBOUND",
         });
   }
   const atLeastOneLoggerWantsResponseBody = state.logsListeners.some(
     listener => listener.wantsResponseMessage,
   );
   const autoRecordModeEnabled =
-    state.mockConfig.autoRecord && state.mode === ServerMode.PROXY;
+    state.mockConfig.autoRecord && state.mode === "proxy";
   const uniqueHash = cleanEntropy(state.config, {
     method: inboundRequest.method ?? "GET",
     url: inboundRequest.url ?? "",
@@ -3038,7 +3032,7 @@ const serve = async function (
         .map(([key, value]) => ({ [key]: value })),
     ),
     body:
-      state.mode === ServerMode.MOCK ||
+      state.mode === "mock" ||
       atLeastOneLoggerWantsResponseBody ||
       autoRecordModeEnabled
         ? requestBody?.toString("base64") ?? ""
@@ -3095,7 +3089,7 @@ const serve = async function (
   }
 
   const shouldMock =
-    state.mode === ServerMode.MOCK && !targetUsesSpecialProtocol;
+    state.mode === "mock" && !targetUsesSpecialProtocol;
 
   const foundMock = !shouldMock
     ? null
@@ -3333,7 +3327,7 @@ const serve = async function (
       ? redirectUrl
       : new URL(
           replaceTextUsingMapping(redirectUrl.href, {
-            direction: REPLACEMENT_DIRECTION.INBOUND,
+            direction: "INBOUND",
             proxyHostnameAndPort,
             ssl: !!state.config.ssl,
             mapping: state.config.mapping ?? {},
@@ -3382,7 +3376,7 @@ const serve = async function (
         proxyHostnameAndPort,
         proxyHostname,
         key,
-        direction: REPLACEMENT_DIRECTION.INBOUND,
+        direction: "INBOUND",
         mapping: state.config.mapping ?? {},
         port: state.config.port ?? defaultConfig.port,
         ssl: !!state.config.ssl,
@@ -3489,10 +3483,11 @@ const serve = async function (
         outboundExchange?.close?.();
       } catch (e) { }
     });
-    inboundResponse.write(payload);
+    (inboundResponse.write as any)(payload)
     (outboundExchange as ClientHttp2Stream | Duplex)?.on?.(
       "data",
-      (chunk: Buffer | string) => inboundResponse.write(chunk),
+      (chunk: Buffer | string) =>
+        (inboundResponse.write as any)(chunk),
     );
   } else if (payload) inboundResponse.end(payload);
   else inboundResponse.end();
@@ -3635,7 +3630,7 @@ const update = async (
     .forEach(l => l.stream.destroy());
 
   const config = newState?.config ?? currentState.config;
-  const mode = newState?.mode ?? currentState.mode ?? ServerMode.PROXY;
+  const mode = newState?.mode ?? currentState.mode ?? "proxy";
   const autoRecord =
     newState?.mockConfig?.autoRecord ??
     currentState.mockConfig?.autoRecord ??
