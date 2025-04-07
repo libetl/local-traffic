@@ -3405,6 +3405,7 @@ const serve = async function (
         : {}),
       ...(state.config.disableWebSecurity
         ? {
+            ["service-worker-allowed"]: "/",
             ["content-security-policy"]: "report only",
             ["access-control-allow-headers"]: "*",
             ["access-control-allow-method"]: "*",
