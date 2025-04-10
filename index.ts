@@ -53,27 +53,27 @@ const LogLevel = {
   WARNING: 172,
 }
 
-const EMOJIS = Object.fromEntries([
-  ["INBOUND", "↘️ "],
-  ["PORT", "☎️ "],
-  ["OUTBOUND", "↗️ "],
-  ["RULES", "🔗"],
-  ["MOCKS", "🌐"],
-  ["STRICT_MOCKS", "🕸️"],
-  ["AUTO_RECORD", "📼"],
-  ["REWRITE", "✒️ "],
-  ["LOGS", "📝"],
-  ["RESTART", "🔄"],
-  ["WEBSOCKET", "☄️ "],
-  ["COLORED", "✨"],
-  ["SHIELD", "🛡️ "],
-  ["NO", "⛔"],
-  ["ERROR_1", "❌"],
-  ["ERROR_2", "⛈️ "],
-  ["ERROR_3", "☢️ "],
-  ["ERROR_4", "⁉️ "],
-  ["ERROR_5", "⚡"],
-  ["ERROR_6", "☠️ "],
+const EMOJIS = Object.assign(...[
+  {"INBOUND": "↘️ "},
+  {"PORT": "☎️ "},
+  {"OUTBOUND": "↗️ "},
+  {"RULES": "🔗"},
+  {"MOCKS": "🌐"},
+  {"STRICT_MOCKS": "🕸️"},
+  {"AUTO_RECORD": "📼"},
+  {"REWRITE": "✒️ "},
+  {"LOGS": "📝"},
+  {"RESTART": "🔄"},
+  {"WEBSOCKET": "☄️ "},
+  {"COLORED": "✨"},
+  {"SHIELD": "🛡️ "},
+  {"NO": "⛔"},
+  {"ERROR_1": "❌"},
+  {"ERROR_2": "⛈️ "},
+  {"ERROR_3": "☢️ "},
+  {"ERROR_4": "⁉️ "},
+  {"ERROR_5": "⚡"},
+  {"ERROR_6": "☠️ "},
 ])
 
 type REPLACEMENT_DIRECTION = "INBOUND" | "OUTBOUND"
@@ -2011,7 +2011,8 @@ const load = async (
           ),
         ).then(interpretedMapping => ({
           ...readConfig,
-          mapping: Object.fromEntries(interpretedMapping),
+          mapping: interpretedMapping
+          .reduce((acc, [key, value]) => Object.assign(acc, {[key]:value}), {}),
         })),
   );
 
