@@ -2483,7 +2483,8 @@ const replaceTextUsingMapping = (
         .match(/^(\(\))*$/)
         ? path
             .split("(")
-            .flatMap(e => e.split(")"))
+            .map(e => e.split(")"))
+            .reduce((acc,value)=>acc.concat(value), [])
             .filter((_, i) => i % 2 === 1)
         : [];
       let replacementCounter = 0;
