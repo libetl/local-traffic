@@ -154,7 +154,7 @@ interface State {
 }
 
 const mainProgram =
-  (globalThis ?? global)?.module?.id === '[eval]'
+  global?.module?.id === '[eval]'
   ? 'local-traffic'
   : argv
     .map(arg => arg.trim())
