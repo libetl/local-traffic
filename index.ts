@@ -3403,6 +3403,8 @@ const serve = async function (
         : {}),
       ...(state.config.disableWebSecurity
         ? {
+            ["cross-origin-embedder-policy"]: "require-corp",
+            ["cross-origin-opener-policy"]: "same-origin",
             ["service-worker-allowed"]: "/",
             ["content-security-policy"]: "report only",
             ["access-control-allow-headers"]: "*",
