@@ -3431,6 +3431,13 @@ const serve = async function (
       ...(state.config.replaceResponseBodyUrls && !serverSentEvents
         ? { ["content-length"]: `${payload.byteLength}` }
         : {}),
+      ...((state.config.crossOriginWhitelist ?? [])
+      .map(
+        whitelistElement => whitelistElement.replace(/^[a-z]+:\/\//, '')
+      .includes(url.origin))
+      ? {
+            ["cross-origin-resource-policy"]: "cross-origin"}
+      : {}),
       ...(state.config.disableWebSecurity
         ? {
             ["cross-origin-embedder-policy"]: "credentialless",
@@ -3441,7 +3448,7 @@ const serve = async function (
             ["access-control-allow-method"]: "*",
             ["access-control-allow-origin"]: referrerOrigin ?? "*",
             ["access-control-allow-credentials"]: "true",
-            ["x-frame-options"]: "SAMEORIGIN",
+            ["x-frame-options"]: "",
           }
         : {}),
       ...(serverSentEvents
