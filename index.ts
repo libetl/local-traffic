@@ -109,6 +109,7 @@ interface LocalConfiguration {
   connectTimeout?: number;
   socketTimeout?: number;
   crossOriginUrlPattern?: string;
+  crossOriginWhitelist?: string[];
 }
 
 type Mapping = {
@@ -852,7 +853,8 @@ const configPage = (
           .map(
             ([property, exampleValue]) =>
               `${property}:${
-                property === "unwantedHeaderNamesInMocks"
+                property === "unwantedHeaderNamesInMocks" ||
+                property === "crossOriginWhitelist"
                   ? '{type:"array","items":{"type":"string"}}'
                   : property === "logAccessInTerminal"
                     ? '{"oneOf":[{type:"boolean"},{enum:["with-mapping"]}]}'
@@ -1903,7 +1905,8 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   connectTimeout: 3000,
   socketTimeout: 3000,
   unwantedHeaderNamesInMocks: [],
-  crossOriginUrlPattern: "${href}"
+  crossOriginUrlPattern: "${href}",
+  crossOriginWhitelist: []
 };
 const load = async (
   firstTime: boolean = true,
@@ -2918,7 +2921,10 @@ const serve = async function (
   const proxyOrigin = `http${state.config.ssl ? "s" : ""}://${proxyHostnameAndPort}`;
   let referrerOrigin: string | null = null;
   try {
-    referrerOrigin = new URL(inboundRequest.headers["referer"] ?? "about:blank").origin;
+    referrerOrigin = new URL(
+      inboundRequest.headers["referer"] ??
+      inboundRequest.headers["origin"] ??
+      "about:blank").origin;
   } catch (e) {}
   const target =
     targetFromProxy ??
@@ -2941,7 +2947,15 @@ const serve = async function (
   }
   const isWebContainer = 'webcontainer' in process.versions;
   const isCrossOrigin = referrerOrigin !== target.origin &&
-  target.hostname !== "localhost";
+    // not localhost
+    target.hostname !== "localhost" &&
+    // not local ip
+    !["1.", "10.", "127.", "172.", "192."].some(ipPrefix =>
+      target.hostname.startsWith(ipPrefix)) &&
+      // not whitelisted
+      !(state.config.crossOriginWhitelist ?? []).map(
+        whitelistElement => whitelistElement.replace(/^[a-z]+:\/\//, '')
+      ).includes(target.hostname);
   const protocolSlashes = target.protocol === "data:" ? "" : "//";
   const targetHost = target.host.replace(RegExp(/\/+$/), "");
   const targetPrefix = target.href.substring(
@@ -2957,9 +2971,9 @@ const serve = async function (
     `${target.protocol}${protocolSlashes}${targetHost}${fullPath}`,
   );
   const shouldUseAnotherProxy =
-  isWebContainer &&
-  isCrossOrigin &&
-  state.config.crossOriginUrlPattern !== "${href}";
+    isWebContainer &&
+    isCrossOrigin &&
+    state.config.crossOriginUrlPattern !== "${href}";
   const nextHopUrl = shouldUseAnotherProxy
   ? new URL(
     state.config.crossOriginUrlPattern.replace(/\${([a-zA-Z]+)}/,

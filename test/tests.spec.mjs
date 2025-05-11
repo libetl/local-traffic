@@ -121,6 +121,7 @@ describe("config load", async () => {
       websocket: true,
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
+      crossOriginWhitelist: [],
       disableWebSecurity: false,
     });
   });
@@ -151,6 +152,7 @@ describe("config load", async () => {
       logAccessInTerminal: false,
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
+      crossOriginWhitelist: [],
       websocket: true,
       disableWebSecurity: false,
     });
@@ -180,6 +182,7 @@ describe("config load", async () => {
       websocket: true,
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
+      crossOriginWhitelist: [],
       disableWebSecurity: false,
     });
   });
@@ -213,7 +216,7 @@ describe("config load", async () => {
       logAccessInTerminal: false,
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
-      websocket: true,
+      crossOriginWhitelist: [],websocket: true,
       disableWebSecurity: false,
     });
   });
@@ -267,6 +270,7 @@ describe("config load", async () => {
       websocket: false,
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
+      crossOriginWhitelist: [],
       disableWebSecurity: true,
     });
   });
@@ -328,6 +332,7 @@ describe("config load", async () => {
       websocket: false,
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
+      crossOriginWhitelist: [],
       disableWebSecurity: true,
     });
   });
@@ -383,6 +388,7 @@ describe("config load", async () => {
       websocket: false,
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
+      crossOriginWhitelist: [],
       disableWebSecurity: true,
     });
   });
@@ -438,6 +444,7 @@ describe("config load", async () => {
       websocket: false,
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
+      crossOriginWhitelist: [],
       disableWebSecurity: true,
     });
   });
@@ -851,7 +858,7 @@ describe("server cruise", async () => {
         socketTimeout: 3,
         unwantedHeaderNamesInMocks: [],
         crossOriginUrlPattern: "${href}",
-      }),
+        crossOriginWhitelist: [],}),
     );
   });
 

@@ -78,13 +78,15 @@ npx local-traffic [location-of-the-local-traffic-config-file]
  node -e 'require("local-traffic").start({ /* configuration goes here */ })'
 ```
 
-### from a web container (>= 0.1.17)
+### from a web container (>= 0.1.18)
 
 1. Add `local-traffic` to the dependencies
 2. Use the notation `require('local-traffic').start({ /* configuration goes here */ })'`
-3. Downgrade downstream http to 1.1 only (`dontUseHttp2Downstream: true`)
-4. Don't forget to use a CORS proxy server : use the `crossOriginUrlPattern` parameter to specify it
+3. Disable web security to benefit from cross origin adequate config (`disableWebSecurity: true`)
+4. Downgrade downstream http to 1.1 only (`dontUseHttp2Downstream: true`)
+5. Don't forget to use a CORS proxy server : use the `crossOriginUrlPattern` parameter to specify it
 (example : `"https://corsproxy.io/?url=${href}"`)
+6. If you want to use local domain names in addition to remote domain names, add them to the `crossOriginWhitelist`
 
 ## how to change mappings to local / non-local
 
@@ -112,7 +114,8 @@ All boolean settings default to false when unspecified.
 - `connectTimeout`: (`number`) max time before aborting the connection (defaults to 3000ms)
 - `socketTimeout`: (`number`) max time waiting for a response (defaults to 3000ms)
 - `unwantedHeaderNamesInMocks`: (`string[]`) header names that won't get added to the mock request matchers
-- `crossOriginUrlPattern`: (`string`) change url to target a cors proxy, from a webcontainer (>= 0.1.17)
+- `crossOriginUrlPattern`: (`string`) change url to target a cors proxy, from a webcontainer (>= 0.1.18)
+- `crossOriginWhitelist` (`string[]`) domain names used in a webcontainer that should not go through cors proxy (>= 0.1.18)
 
 ## config API
 
