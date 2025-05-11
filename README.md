@@ -82,7 +82,8 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 
 1. Add `local-traffic` to the dependencies
 2. Use the notation `require('local-traffic').start({ /* configuration goes here */ })'`
-3. Don't forget to use a CORS proxy server : use the `crossOriginUrlPattern` parameter to specify it
+3. Downgrade downstream http to 1.1 only (`dontUseHttp2Downstream: true`)
+4. Don't forget to use a CORS proxy server : use the `crossOriginUrlPattern` parameter to specify it
 (example : `"https://corsproxy.io/?url=${href}"`)
 
 ## how to change mappings to local / non-local
