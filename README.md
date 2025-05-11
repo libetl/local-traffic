@@ -78,6 +78,13 @@ npx local-traffic [location-of-the-local-traffic-config-file]
  node -e 'require("local-traffic").start({ /* configuration goes here */ })'
 ```
 
+### from a web container (>= 0.1.17)
+
+1. Add `local-traffic` to the dependencies
+2. Use the notation `require('local-traffic').start({ /* configuration goes here */ })'`
+3. Don't forget to use a CORS proxy server : use the `crossOriginUrlPattern` parameter to specify it
+(example : `"https://corsproxy.io/?url=${href}"`)
+
 ## how to change mappings to local / non-local
 
 1. Open `.local-traffic.json` while running it, or use the config web editor
@@ -104,6 +111,7 @@ All boolean settings default to false when unspecified.
 - `connectTimeout`: (`number`) max time before aborting the connection (defaults to 3000ms)
 - `socketTimeout`: (`number`) max time waiting for a response (defaults to 3000ms)
 - `unwantedHeaderNamesInMocks`: (`string[]`) header names that won't get added to the mock request matchers
+- `crossOriginUrlPattern`: (`string`) change url to target a cors proxy, from a webcontainer (>= 0.1.17)
 
 ## config API
 

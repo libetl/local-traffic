@@ -120,6 +120,7 @@ describe("config load", async () => {
       logAccessInTerminal: false,
       websocket: true,
       unwantedHeaderNamesInMocks: [],
+      crossOriginUrlPattern: "${href}",
       disableWebSecurity: false,
     });
   });
@@ -149,6 +150,7 @@ describe("config load", async () => {
       simpleLogs: false,
       logAccessInTerminal: false,
       unwantedHeaderNamesInMocks: [],
+      crossOriginUrlPattern: "${href}",
       websocket: true,
       disableWebSecurity: false,
     });
@@ -177,6 +179,7 @@ describe("config load", async () => {
       logAccessInTerminal: false,
       websocket: true,
       unwantedHeaderNamesInMocks: [],
+      crossOriginUrlPattern: "${href}",
       disableWebSecurity: false,
     });
   });
@@ -209,6 +212,7 @@ describe("config load", async () => {
       simpleLogs: false,
       logAccessInTerminal: false,
       unwantedHeaderNamesInMocks: [],
+      crossOriginUrlPattern: "${href}",
       websocket: true,
       disableWebSecurity: false,
     });
@@ -262,6 +266,7 @@ describe("config load", async () => {
       logAccessInTerminal: true,
       websocket: false,
       unwantedHeaderNamesInMocks: [],
+      crossOriginUrlPattern: "${href}",
       disableWebSecurity: true,
     });
   });
@@ -322,6 +327,7 @@ describe("config load", async () => {
       logAccessInTerminal: true,
       websocket: false,
       unwantedHeaderNamesInMocks: [],
+      crossOriginUrlPattern: "${href}",
       disableWebSecurity: true,
     });
   });
@@ -376,6 +382,7 @@ describe("config load", async () => {
       logAccessInTerminal: true,
       websocket: false,
       unwantedHeaderNamesInMocks: [],
+      crossOriginUrlPattern: "${href}",
       disableWebSecurity: true,
     });
   });
@@ -430,6 +437,7 @@ describe("config load", async () => {
       logAccessInTerminal: true,
       websocket: false,
       unwantedHeaderNamesInMocks: [],
+      crossOriginUrlPattern: "${href}",
       disableWebSecurity: true,
     });
   });
@@ -842,6 +850,7 @@ describe("server cruise", async () => {
         connectTimeout: 3,
         socketTimeout: 3,
         unwantedHeaderNamesInMocks: [],
+        crossOriginUrlPattern: "${href}",
       }),
     );
   });

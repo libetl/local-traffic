@@ -108,6 +108,7 @@ interface LocalConfiguration {
   disableWebSecurity?: boolean;
   connectTimeout?: number;
   socketTimeout?: number;
+  crossOriginUrlPattern?: string;
 }
 
 type Mapping = {
@@ -1640,7 +1641,7 @@ const filePage = (
 
 const http2Page = async (
   state: State,
-  mappingAttributes: { target: URL; url: URL },
+  mappingAttributes: { target: URL; requestedUrl: URL },
 ): Promise<ClientHttp2Session | null> => {
   let error: Buffer | null = null;
   let http2IsSupported =
@@ -1674,7 +1675,7 @@ const http2Page = async (
                       thrown,
                       state.mode,
                       "connection",
-                      mappingAttributes.url,
+                      mappingAttributes.requestedUrl,
                       mappingAttributes.target,
                     ),
                   );
@@ -1692,8 +1693,8 @@ const http2Page = async (
 };
 
 const http1Page = async (
-  target: URL,
-  url: URL,
+  nextHopUrl: URL,
+  requestedUrl: URL,
   targetUrl: URL,
   fullPath: string,
   inboundRequest: IncomingMessage | Http2ServerRequest,
@@ -1703,10 +1704,10 @@ const http1Page = async (
   mode: ServerMode,
 ): Promise<ClientHttp2Session> => {
   const http1RequestOptions: RequestOptions = {
-    hostname: target.hostname,
+    hostname: nextHopUrl.hostname,
     path: fullPath,
-    port: target.port ? target.port : target.protocol === "https:" ? 443 : 80,
-    protocol: target.protocol,
+    port: nextHopUrl.port ? nextHopUrl.port : nextHopUrl.protocol === "https:" ? 443 : 80,
+    protocol: nextHopUrl.protocol,
     rejectUnauthorized: false,
     method: inboundRequest.method,
     headers: {
@@ -1719,23 +1720,23 @@ const http1Page = async (
           )
           .map(([key, value]) => ({ [key]: value })),
       ),
-      host: target.hostname,
+      host: nextHopUrl.hostname,
     },
   };
   let error: Buffer | null = null;
   const outboundHttp1Response: IncomingMessage | null = error
     ? null
-    : [...specialProtocols].includes(target.protocol)
+    : [...specialProtocols].includes(nextHopUrl.protocol)
       ? null
       : await new Promise(resolve => {
           const outboundHttp1Request: ClientRequest =
-            target.protocol === "https:"
+            nextHopUrl.protocol === "https:"
               ? httpsRequest(http1RequestOptions, resolve)
               : httpRequest(http1RequestOptions, resolve);
 
           outboundHttp1Request.on("error", thrown => {
             error = Buffer.from(
-              errorPage(thrown, mode, "request", url, targetUrl),
+              errorPage(thrown, mode, "request", requestedUrl, targetUrl),
             );
             resolve(null);
           });
@@ -1902,6 +1903,7 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   connectTimeout: 3000,
   socketTimeout: 3000,
   unwantedHeaderNamesInMocks: [],
+  crossOriginUrlPattern: "${href}"
 };
 const load = async (
   firstTime: boolean = true,
@@ -2937,6 +2939,9 @@ const serve = async function (
     );
     return;
   }
+  const isWebContainer = 'webcontainer' in process.versions;
+  const isCrossOrigin = referrerOrigin !== target.origin &&
+  target.hostname !== "localhost";
   const protocolSlashes = target.protocol === "data:" ? "" : "//";
   const targetHost = target.host.replace(RegExp(/\/+$/), "");
   const targetPrefix = target.href.substring(
@@ -2951,6 +2956,19 @@ const serve = async function (
   const targetUrl = new URL(
     `${target.protocol}${protocolSlashes}${targetHost}${fullPath}`,
   );
+  const shouldUseAnotherProxy =
+  isWebContainer &&
+  isCrossOrigin &&
+  state.config.crossOriginUrlPattern !== "${href}";
+  const nextHopUrl = shouldUseAnotherProxy
+  ? new URL(
+    state.config.crossOriginUrlPattern.replace(/\${([a-zA-Z]+)}/,
+      (_, m) => encodeURIComponent(targetUrl[m]))
+  )
+  : targetUrl;
+  const nextHopFullPath = shouldUseAnotherProxy
+  ? (nextHopUrl.pathname ?? "") + (nextHopUrl.search ?? "")
+  : fullPath;
   const targetUsesSpecialProtocol = specialProtocols.some(
     protocol => target.protocol === protocol,
   );
@@ -3174,9 +3192,9 @@ const serve = async function (
     referer: targetUrl.toString(),
     "content-length":
       requestBody?.length ?? inboundRequest.headers["content-length"] ?? 0,
-    ":authority": targetHost,
+    ":authority": nextHopUrl.host,
     ":method": inboundRequest.method,
-    ":path": fullPath,
+    ":path": nextHopFullPath,
     ":scheme": target.protocol.replace(":", ""),
   };
   const outboundRequest: ClientHttp2Session | null =
@@ -3197,16 +3215,16 @@ const serve = async function (
             },
           )
         : await http2Page(state, {
-            target: targetUrl,
-            url,
+            target: nextHopUrl,
+            requestedUrl: url,
           })
             .then(session => {
               if (session) return session;
               return http1Page(
-                target,
+                nextHopUrl,
                 url,
                 targetUrl,
-                fullPath,
+                nextHopFullPath,
                 inboundRequest,
                 outboundHeaders,
                 requestBody,
