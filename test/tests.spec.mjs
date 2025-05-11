@@ -216,7 +216,8 @@ describe("config load", async () => {
       logAccessInTerminal: false,
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
-      crossOriginWhitelist: [],websocket: true,
+      crossOriginWhitelist: [],
+      websocket: true,
       disableWebSecurity: false,
     });
   });
