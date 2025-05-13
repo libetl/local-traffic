@@ -2695,15 +2695,19 @@ const determineMapping = (
       1,
     );
   }
-
   const target =
     !match || !rawTarget
       ? null
       : new URL(
-          rawTarget.href.replace(
+        rawTarget.protocol === 'self:'
+        ? decodeURIComponent(rawTarget.href.replace(
             /\$\$(\d+)/g,
             (_, index) => match![parseInt(index)] ?? "",
-          ).replace(/^self:/, ""),
+          ).replace(/^self:/, ""))
+        : rawTarget.href.replace(
+            /\$\$(\d+)/g,
+            (_, index) => match![parseInt(index)] ?? "",
+          ),
         );
   return { proxyHostname, proxyHostnameAndPort, url, path, key, target };
 };

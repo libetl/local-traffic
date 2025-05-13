@@ -62,7 +62,7 @@ npx local-traffic
 11. From the web config editor, create a SSL keypair and start working with a self signed SSL certificate right away
 12. Your page will use /jquery-local/jquery.js instead of the CDN asset, and will serve the file from your hard drive
 13. Use the /local-traffic-worker.js service worker to walk around the CORS restrictions when your api does a request to some-cors-restricted-domain.com (>= 0.1.4)
-14. Use the /cors-proxy?url=https://example.com as a standard cors-proxy (>= 0.1.20)
+14. Use the /cors-proxy?url=https://example.com as a standard cors-proxy (>= 0.1.21)
 
 ## usage
 
