@@ -2954,6 +2954,10 @@ const serve = async function (
       !(state.config.crossOriginWhitelist ?? []).map(
         whitelistElement => whitelistElement.replace(/^[a-z]+:\/\//, '')
       ).includes(target.hostname);
+  const originCanUseCredentials =
+  (state.config.crossOriginWhitelist ?? []).includes(url.origin)
+  const isFailsafeOptions = inboundRequest.method === 'OPTIONS' &&
+        state.config.disableWebSecurity
   const protocolSlashes = target.protocol === "data:" ? "" : "//";
   const targetHost = target.host.replace(RegExp(/\/+$/), "");
   const targetPrefix = target.href.substring(
@@ -3406,6 +3410,13 @@ const serve = async function (
       if (specialProtocols.some(protocol => target.protocol === protocol))
         return payloadBuffer;
 
+      // we only proceed to the short exit here
+      // to make the downstream url believe
+      // that we have received the response
+      if (isFailsafeOptions) {
+        return Buffer.from("")
+      }
+
       return replaceBody(payloadBuffer, outboundResponseHeaders, {
         proxyHostnameAndPort,
         proxyHostname,
@@ -3431,24 +3442,31 @@ const serve = async function (
       ...(state.config.replaceResponseBodyUrls && !serverSentEvents
         ? { ["content-length"]: `${payload.byteLength}` }
         : {}),
-      ...((state.config.crossOriginWhitelist ?? [])
-      .map(
-        whitelistElement => whitelistElement.replace(/^[a-z]+:\/\//, '')
-      .includes(url.origin))
+      ...(originCanUseCredentials
       ? {
             ["cross-origin-resource-policy"]: "cross-origin"}
       : {}),
       ...(state.config.disableWebSecurity
         ? {
-            ["cross-origin-embedder-policy"]: "credentialless",
-            ["cross-origin-opener-policy"]: "same-origin",
-            ["service-worker-allowed"]: "/",
-            ["content-security-policy"]: "report only",
-            ["access-control-allow-headers"]: "*",
-            ["access-control-allow-method"]: "*",
-            ["access-control-allow-origin"]: referrerOrigin ?? "*",
-            ["access-control-allow-credentials"]: "true",
-            ["x-frame-options"]: "",
+          ["cross-origin-embedder-policy"]:
+            originCanUseCredentials
+              ? "require-corp"
+              : "credentialless",
+          ["cross-origin-opener-policy"]: "same-origin",
+          ["service-worker-allowed"]: "/",
+          ["access-control-allow-headers"]:
+            "accept,authorization,content-encoding," +
+            "content-security-policy," +
+            "date,server,x-frame-options,cookie," +
+            "upgrade-insecure-requests,x-requested-with," +
+            "x-forwarded-for,user-agent,accept-encoding," +
+            "proxy-authenticate,proxy-authorization," +
+            "www-authenticate,content-disposition," +
+            "location",
+          ["access-control-allow-methods"]:
+            "GET,POST,PUT,DELETE,PATCH,HEAD,TRACE,CONNECT",
+          ["access-control-allow-origin"]: referrerOrigin ?? "*",
+          ["access-control-allow-credentials"]: "true",
           }
         : {}),
       ...(serverSentEvents
@@ -3460,6 +3478,9 @@ const serve = async function (
     })
       .filter(
         ([h]) =>
+          (!["content-security-policy", "x-frame-options"]
+            .includes(h.toLowerCase()) ||
+            !state.config.disableWebSecurity) &&
           !h.startsWith(":") &&
           !disallowedHttp2HeaderNames.includes(h.toLowerCase()),
       )
@@ -3506,7 +3527,9 @@ const serve = async function (
   } catch (e) {
     // ERR_HTTP2_HEADERS_SENT
   }
-  const statusCode = outboundResponseHeaders[":status"] ?? 200;
+  const statusCode = isFailsafeOptions
+  ? 200
+  : outboundResponseHeaders[":status"] ?? 200;
   try {
     if (state.config.ssl) {
       inboundResponse.writeHead(statusCode, responseHeaders);
