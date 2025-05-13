@@ -2974,7 +2974,7 @@ const serve = async function (
     target.protocol === "file:" || target.protocol === "data:"
       ? targetPrefix
       : (state.config.mapping?.[key] ?? "").toString().match(/^\$\$[0-9]+/)
-      ? ""
+      ? target.href.substring(target.origin.length)
       :`${targetPrefix}${unixNorm(
           path.replace(RegExp(unixNorm(key)), ""),
         )}`.replace(/^\/*/, target.protocol === "data:" ? "" : "/");
