@@ -2480,6 +2480,7 @@ const replaceTextUsingMapping = (
       key,
       typeof value === "string" ? value : value.replaceBody,
     ])
+    .filter(([,value]) => !/^\$\$[0-9]+/.exec(value))
     .reduce((inProgress, [path, value]) => {
       const pathRegexes = path
         .split("")
@@ -2657,6 +2658,7 @@ const determineMapping = (
         try {
           url = new URL(value?.startsWith?.("data:") ? value : unixNorm(value));
         } catch (e) {}
+        if (value?.toString().match(/^\$\$[0-9]+/)) url = new URL(`self:$$1`)
         return {
           [matchedKey]: url,
           [key]: url,
@@ -2668,7 +2670,6 @@ const determineMapping = (
   const matchedElements = Object.entries(mappings).filter(
     ([key]) => path.match(RegExp(key.replace(/^\//, "^/"))) ?? null,
   );
-
   const [key, rawTarget] = matchedElements.find(matchedElement =>
     Object.values(matchedElement).every(v => v !== null),
   ) ?? ["/"];
@@ -2700,7 +2701,7 @@ const determineMapping = (
           rawTarget.href.replace(
             /\$\$(\d+)/g,
             (_, index) => match![parseInt(index)] ?? "",
-          ),
+          ).replace(/^self:/, ""),
         );
   return { proxyHostname, proxyHostnameAndPort, url, path, key, target };
 };
@@ -2966,7 +2967,9 @@ const serve = async function (
   const fullPath =
     target.protocol === "file:" || target.protocol === "data:"
       ? targetPrefix
-      : `${targetPrefix}${unixNorm(
+      : (state.config.mapping?.[key] ?? "").toString().match(/^\$\$[0-9]+/)
+      ? ""
+      :`${targetPrefix}${unixNorm(
           path.replace(RegExp(unixNorm(key)), ""),
         )}`.replace(/^\/*/, target.protocol === "data:" ? "" : "/");
   const targetUrl = new URL(
