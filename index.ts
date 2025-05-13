@@ -258,13 +258,13 @@ const log = async function (
       );
 
       await new Promise(resolve =>
-        stdout.moveCursor(-1000, -1, () => resolve(void 0)),
+        stdout.moveCursor?.(-1000, -1, () => resolve(void 0)),
       );
       let offset = 9;
       for (let i = 0; i < logTexts.length; i++) {
         await new Promise(resolve =>
-          stdout.moveCursor(-1000, 0, () =>
-            stdout.moveCursor(offset, 0, () => resolve(void 0)),
+          stdout.moveCursor?.(-1000, 0, () =>
+            stdout.moveCursor?.(offset, 0, () => resolve(void 0)),
           ),
         );
         stdout.write(logTexts[i]);
@@ -1794,6 +1794,8 @@ const workerPage = (
 const mapping = ${JSON.stringify(
       Object.entries(state.config.mapping!)
         .filter(key => key && key.length > 1)
+        .filter(([, value]) => typeof value !== "string" ||
+          !value.match(/^\$\$[0-9]+/))
         .map(([key, value]) => {
           if (typeof value === "string" && value.startsWith("data:"))
             return [key, "data:text/plain,..."];
@@ -3589,7 +3591,7 @@ const serve = async function (
     !targetUsesSpecialProtocol
   ) {
     state.mockConfig.mocks.set(uniqueHash, response);
-    stdout.moveCursor(0, -1, () => stdout.clearLine(-1, state.quickStatus));
+    stdout.moveCursor?.(0, -1, () => stdout.clearLine(-1, state.quickStatus));
   }
 };
 
