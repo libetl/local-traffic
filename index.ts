@@ -41,7 +41,7 @@ import {
 } from "zlib";
 import { resolve, normalize, sep } from "path";
 import { createHash, randomBytes } from "crypto";
-import { argv, cwd, exit, hrtime, stdout } from "process";
+import { argv, cwd, exit, hrtime, stdout, versions } from "process";
 import { homedir, tmpdir } from "os";
 import type { Duplex, Readable } from "stream";
 
@@ -1896,7 +1896,7 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   port: 8080,
   replaceRequestBodyUrls: false,
   replaceResponseBodyUrls: false,
-  dontUseHttp2Downstream: false,
+  dontUseHttp2Downstream: ('webcontainer' in versions),
   dontTranslateLocationHeader: false,
   logAccessInTerminal: false,
   simpleLogs: false,
@@ -2950,7 +2950,7 @@ const serve = async function (
     );
     return;
   }
-  const isWebContainer = 'webcontainer' in process.versions;
+  const isWebContainer = 'webcontainer' in versions;
   const isCrossOrigin = referrerOrigin !== target.origin &&
     // not localhost
     target.hostname !== "localhost" &&

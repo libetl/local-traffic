@@ -20,6 +20,7 @@ const Server = class {
   close = mock.fn(resolve => resolve());
 };
 
+export const versions = {node: '8.0.0'}
 export const argv = ["test-runner", "local-traffic"];
 export const cwd = mock.fn(() => "/home/user/fake-dir");
 export const exit = mock.fn(() => {});
