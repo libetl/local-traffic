@@ -31,7 +31,13 @@ import {
   writeFile,
   lstat,
 } from "fs";
-import {
+import * as zlib from "zlib";
+import { resolve, normalize, sep } from "path";
+import { createHash, randomBytes } from "crypto";
+import { argv, cwd, exit, hrtime, stdout, versions } from "process";
+import { homedir, tmpdir } from "os";
+import type { Duplex, Readable } from "stream";
+const {
   gzip,
   gunzip,
   inflate,
@@ -40,12 +46,7 @@ import {
   brotliDecompress,
   zstdDecompress,
   zstdCompress,
-} from "zlib";
-import { resolve, normalize, sep } from "path";
-import { createHash, randomBytes } from "crypto";
-import { argv, cwd, exit, hrtime, stdout, versions } from "process";
-import { homedir, tmpdir } from "os";
-import type { Duplex, Readable } from "stream";
+} = zlib;
 
 type ErrorWithErrno = NodeJS.ErrnoException;
 
