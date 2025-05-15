@@ -122,6 +122,7 @@ describe("config load", async () => {
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
       crossOriginWhitelist: [],
+      crossOriginServerSide: false,
       disableWebSecurity: false,
     });
   });
@@ -153,6 +154,7 @@ describe("config load", async () => {
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
       crossOriginWhitelist: [],
+      crossOriginServerSide: false,
       websocket: true,
       disableWebSecurity: false,
     });
@@ -183,6 +185,7 @@ describe("config load", async () => {
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
       crossOriginWhitelist: [],
+      crossOriginServerSide: false,
       disableWebSecurity: false,
     });
   });
@@ -217,6 +220,7 @@ describe("config load", async () => {
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
       crossOriginWhitelist: [],
+      crossOriginServerSide: false,
       websocket: true,
       disableWebSecurity: false,
     });
@@ -272,6 +276,7 @@ describe("config load", async () => {
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
       crossOriginWhitelist: [],
+      crossOriginServerSide: false,
       disableWebSecurity: true,
     });
   });
@@ -334,6 +339,7 @@ describe("config load", async () => {
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
       crossOriginWhitelist: [],
+      crossOriginServerSide: false,
       disableWebSecurity: true,
     });
   });
@@ -390,6 +396,7 @@ describe("config load", async () => {
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
       crossOriginWhitelist: [],
+      crossOriginServerSide: false,
       disableWebSecurity: true,
     });
   });
@@ -446,6 +453,7 @@ describe("config load", async () => {
       unwantedHeaderNamesInMocks: [],
       crossOriginUrlPattern: "${href}",
       crossOriginWhitelist: [],
+      crossOriginServerSide: false,
       disableWebSecurity: true,
     });
   });
@@ -859,7 +867,8 @@ describe("server cruise", async () => {
         socketTimeout: 3,
         unwantedHeaderNamesInMocks: [],
         crossOriginUrlPattern: "${href}",
-        crossOriginWhitelist: [],}),
+        crossOriginWhitelist: [],
+        crossOriginServerSide: false,}),
     );
   });
 

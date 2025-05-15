@@ -118,6 +118,7 @@ All boolean settings default to false when unspecified.
 - `unwantedHeaderNamesInMocks`: (`string[]`) header names that won't get added to the mock request matchers
 - `crossOriginUrlPattern`: (`string`) change url to target a cors proxy, from a webcontainer (>= 0.1.18)
 - `crossOriginWhitelist` (`string[]`) domain names used in a webcontainer that should not go through cors proxy (>= 0.1.18)
+- `crossOriginServerSide` (`boolean`) activates the CORS proxy even while running as a server (>= 0.1.25)
 
 ## config API
 

@@ -38,6 +38,8 @@ import {
   deflate,
   brotliCompress,
   brotliDecompress,
+  zstdDecompress,
+  zstdCompress,
 } from "zlib";
 import { resolve, normalize, sep } from "path";
 import { createHash, randomBytes } from "crypto";
@@ -110,6 +112,7 @@ interface LocalConfiguration {
   socketTimeout?: number;
   crossOriginUrlPattern?: string;
   crossOriginWhitelist?: string[];
+  crossOriginServerSide?: boolean;
 }
 
 type Mapping = {
@@ -258,14 +261,14 @@ const log = async function (
           .join("▐")}\u001b[0m\n`,
       );
 
-      await new Promise(resolve =>
-        stdout.moveCursor?.(-1000, -1, () => resolve(void 0)),
+      if(stdout.moveCursor) await new Promise(resolve =>
+        stdout.moveCursor(-1000, -1, () => resolve(void 0)),
       );
       let offset = 9;
       for (let i = 0; i < logTexts.length; i++) {
-        await new Promise(resolve =>
-          stdout.moveCursor?.(-1000, 0, () =>
-            stdout.moveCursor?.(offset, 0, () => resolve(void 0)),
+        if(stdout.moveCursor) await new Promise(resolve =>
+          stdout.moveCursor(-1000, 0, () =>
+            stdout.moveCursor(offset, 0, () => resolve(void 0)),
           ),
         );
         stdout.write(logTexts[i]);
@@ -1919,7 +1922,8 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   socketTimeout: 3000,
   unwantedHeaderNamesInMocks: [],
   crossOriginUrlPattern: "${href}",
-  crossOriginWhitelist: []
+  crossOriginWhitelist: [],
+  crossOriginServerSide: false,
 };
 const load = async (
   firstTime: boolean = true,
@@ -2358,14 +2362,16 @@ const replaceBody = async (
             ? inflate
             : format === "br"
               ? brotliDecompress
-              : format === "identity" || format === ""
-                ? (
+              : format === "zstd" && zstdDecompress
+                ? zstdDecompress
+                : format === "identity" || format === ""
+                  ? (
                     input: Buffer,
                     callback: (err: Error | null, data?: Buffer) => void,
                   ) => {
                     callback(null, input);
                   }
-                : null
+                  : null
       ) as (
         input: Buffer,
         callback: (error: Error | null, data: Buffer) => void,
@@ -2442,14 +2448,16 @@ const replaceBody = async (
                   ? deflate
                   : format === "br"
                     ? brotliCompress
-                    : format === "identity" || format === ""
-                      ? (
+                    : format === "zstd" && zstdCompress
+                      ? zstdCompress
+                      : format === "identity" || format === ""
+                        ? (
                           input: Buffer,
                           callback: (err: Error | null, data?: Buffer) => void,
                         ) => {
                           callback(null, input);
                         }
-                      : null
+                        : null
             ) as (
               input: Buffer,
               callback: (error: Error | null, data: Buffer) => void,
@@ -2963,7 +2971,12 @@ const serve = async function (
     );
     return;
   }
+  const targetUsesSpecialProtocol = specialProtocols.some(
+    protocol => target.protocol === protocol,
+  );
   const isCrossOrigin = referrerOrigin !== target.origin &&
+  // not special page
+  !targetUsesSpecialProtocol &&
     // not localhost
     target.hostname !== "localhost" &&
     // not local ip
@@ -2994,21 +3007,18 @@ const serve = async function (
     `${target.protocol}${protocolSlashes}${targetHost}${fullPath}`,
   );
   const shouldUseAnotherProxy =
-    isWebContainer &&
+    (isWebContainer || state.config.crossOriginServerSide) &&
     isCrossOrigin &&
     state.config.crossOriginUrlPattern !== "${href}";
   const nextHopUrl = shouldUseAnotherProxy
   ? new URL(
-    state.config.crossOriginUrlPattern.replace(/\${([a-zA-Z]+)}/,
+    state.config.crossOriginUrlPattern.replace(/\${([a-zA-Z]+)}/g,
       (_, m) => encodeURIComponent(targetUrl[m]))
   )
   : targetUrl;
   const nextHopFullPath = shouldUseAnotherProxy
   ? (nextHopUrl.pathname ?? "") + (nextHopUrl.search ?? "")
   : fullPath;
-  const targetUsesSpecialProtocol = specialProtocols.some(
-    protocol => target.protocol === protocol,
-  );
 
   const randomId = randomBytes(20).toString("hex");
   let requestBody: Buffer | string | null = null;
@@ -3470,7 +3480,7 @@ const serve = async function (
       ...(state.config.disableWebSecurity
         ? {
           ["cross-origin-embedder-policy"]:
-            originCanUseCredentials
+            originCanUseCredentials && isWebContainer
               ? "require-corp"
               : "credentialless",
           ["cross-origin-opener-policy"]: "same-origin",
