@@ -180,6 +180,7 @@ const filename = !runAsMainProgram
         : resolve(homedir(), ".local-traffic.json"),
     );
 const crashTest = argv.some(arg => arg === "--crash-test");
+const isWebContainer = 'webcontainer' in versions;
 const screenWidth = 64;
 const instantTime = (): bigint => {
   return (
@@ -1538,7 +1539,19 @@ const filePage = (
         : new Promise(promiseResolve =>
             readFile(file, (error, data) => {
               this.hasRun = true;
-              if (!error || error.code !== "EISDIR") {
+              if ((!error || error.code !== "EISDIR") &&
+                  !isWebContainer) {
+                this.error = error;
+                this.data = data;
+                promiseResolve(void 0);
+                return;
+              }
+              // webcontainers will pretend
+              // that the file size is zero
+              // when they know that it is a
+              // directory.
+              if (!error && isWebContainer &&
+                data?.byteLength > 0) {
                 this.error = error;
                 this.data = data;
                 promiseResolve(void 0);
@@ -1896,7 +1909,7 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   port: 8080,
   replaceRequestBodyUrls: false,
   replaceResponseBodyUrls: false,
-  dontUseHttp2Downstream: ('webcontainer' in versions),
+  dontUseHttp2Downstream: isWebContainer,
   dontTranslateLocationHeader: false,
   logAccessInTerminal: false,
   simpleLogs: false,
@@ -2950,7 +2963,6 @@ const serve = async function (
     );
     return;
   }
-  const isWebContainer = 'webcontainer' in versions;
   const isCrossOrigin = referrerOrigin !== target.origin &&
     // not localhost
     target.hostname !== "localhost" &&
