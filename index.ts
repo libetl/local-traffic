@@ -2996,10 +2996,12 @@ const serve = async function (
   const targetPrefix = target.href.substring(
     `${target.protocol}${protocolSlashes}`.length + target.host.length,
   );
+  const mappingIsCorsProxy =
+    (state.config.mapping?.[key] ?? "").toString().match(/^\$\$[0-9]+/);
   const fullPath =
     target.protocol === "file:" || target.protocol === "data:"
       ? targetPrefix
-      : (state.config.mapping?.[key] ?? "").toString().match(/^\$\$[0-9]+/)
+      : mappingIsCorsProxy
       ? target.href.substring(target.origin.length)
       :`${targetPrefix}${unixNorm(
           path.replace(RegExp(unixNorm(key)), ""),
@@ -3408,9 +3410,14 @@ const serve = async function (
     : replacedRedirectUrl?.origin !== redirectUrl.origin ||
         state.config.dontTranslateLocationHeader
       ? replacedRedirectUrl
-      : `${url.origin}${replacedRedirectUrl.href.substring(
+      : new URL(`${url.origin}${replacedRedirectUrl.href.substring(
           replacedRedirectUrl.origin.length,
-        )}`;
+      )}`);
+  const nextProxyRedirectUrl = !mappingIsCorsProxy ||
+    !redirectUrl
+    ? translatedReplacedRedirectUrl
+    : new URL(`${proxyOrigin}${key.replace('(.*)',
+      encodeURIComponent(translatedReplacedRedirectUrl.href))}`)
 
   // phase : response body
   const payload: Buffer =
@@ -3546,8 +3553,8 @@ const serve = async function (
         },
         {},
       ),
-    ...(translatedReplacedRedirectUrl
-      ? { location: [translatedReplacedRedirectUrl] }
+    ...(nextProxyRedirectUrl
+      ? { location: [nextProxyRedirectUrl] }
       : {}),
   };
   try {
