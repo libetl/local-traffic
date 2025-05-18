@@ -3521,13 +3521,15 @@ const serve = async function (
           }
         : {}),
       ...(state.config.disableWebSecurity 
-        && !originCanUseCredentials
+        && (!originCanUseCredentials
+        || !(isWebContainer || state.config.crossOrigin?.serverSide))
         ? {
           ["cross-origin-embedder-policy"]: "credentialless",
         }
         : {}),
       ...(state.config.disableWebSecurity 
         && originCanUseCredentials
+        && (isWebContainer || state.config.crossOrigin?.serverSide)
         ? {
           ["cross-origin-embedder-policy"]: "require-corp"
         }
