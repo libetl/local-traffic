@@ -113,6 +113,7 @@ interface LocalConfiguration {
   socketTimeout?: number;
   crossOriginUrlPattern?: string;
   crossOriginWhitelist?: string[];
+  crossOriginCredentials?: string[];
   crossOriginServerSide?: boolean;
 }
 
@@ -857,7 +858,8 @@ const configPage = (
             ([property, exampleValue]) =>
               `${property}:${
                 property === "unwantedHeaderNamesInMocks" ||
-                property === "crossOriginWhitelist"
+                property === "crossOriginWhitelist" ||
+                property === "crossOriginCredentials"
                   ? '{type:"array","items":{"type":"string"}}'
                   : property === "logAccessInTerminal"
                     ? '{"oneOf":[{type:"boolean"},{enum:["with-mapping"]}]}'
@@ -1924,6 +1926,7 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   unwantedHeaderNamesInMocks: [],
   crossOriginUrlPattern: "${href}",
   crossOriginWhitelist: [],
+  crossOriginCredentials: [],
   crossOriginServerSide: false,
 };
 const load = async (
@@ -2951,8 +2954,11 @@ const serve = async function (
     referrerOrigin = new URL(
       inboundRequest.headers["referer"] ??
       inboundRequest.headers["origin"] ??
-      "about:blank").origin;
-  } catch (e) {}
+      inboundRequest.headers[":scheme"] + "://" +
+      inboundRequest.headers[":authority"]).origin;
+  } catch (e) {
+    referrerOrigin = "null";
+  }
   const target =
     targetFromProxy ??
     (state.mode === "mock" ? new URL(proxyOrigin) : null);
@@ -2975,20 +2981,6 @@ const serve = async function (
   const targetUsesSpecialProtocol = specialProtocols.some(
     protocol => target.protocol === protocol,
   );
-  const isCrossOrigin = referrerOrigin !== target.origin &&
-  // not special page
-  !targetUsesSpecialProtocol &&
-    // not localhost
-    target.hostname !== "localhost" &&
-    // not local ip
-    !["1.", "10.", "127.", "172.", "192."].some(ipPrefix =>
-      target.hostname.startsWith(ipPrefix)) &&
-      // not whitelisted
-      !(state.config.crossOriginWhitelist ?? []).map(
-        whitelistElement => whitelistElement.replace(/^[a-z]+:\/\//, '')
-      ).includes(target.hostname);
-  const originCanUseCredentials =
-  (state.config.crossOriginWhitelist ?? []).includes(url.origin)
   const isFailsafeOptions = inboundRequest.method === 'OPTIONS' &&
         state.config.disableWebSecurity
   const protocolSlashes = target.protocol === "data:" ? "" : "//";
@@ -3009,6 +3001,24 @@ const serve = async function (
   const targetUrl = new URL(
     `${target.protocol}${protocolSlashes}${targetHost}${fullPath}`,
   );
+  const isCrossOrigin = referrerOrigin !== target.origin &&
+  // not special page
+  !targetUsesSpecialProtocol &&
+    // not localhost
+    target.hostname !== "localhost" &&
+    // not local ip
+    !["1.", "10.", "127.", "172.", "192."].some(ipPrefix =>
+      target.hostname.startsWith(ipPrefix)) &&
+    // not whitelisted
+    !(state.config.crossOriginWhitelist ?? [])
+      .some(textOrRegex => textOrRegex.includes('(')
+        ? new RegExp(textOrRegex).test(targetUrl.href)
+        : targetUrl.href.includes(textOrRegex));
+  const originCanUseCredentials =
+    (state.config.crossOriginCredentials ?? [])
+      .some(textOrRegex => textOrRegex.includes('(')
+        ? new RegExp(textOrRegex).test(targetUrl.href)
+        : targetUrl.href.includes(textOrRegex))
   const shouldUseAnotherProxy =
     (isWebContainer || state.config.crossOriginServerSide) &&
     isCrossOrigin &&
@@ -3481,16 +3491,9 @@ const serve = async function (
       ...(state.config.replaceResponseBodyUrls && !serverSentEvents
         ? { ["content-length"]: `${payload.byteLength}` }
         : {}),
-      ...(originCanUseCredentials
-      ? {
-            ["cross-origin-resource-policy"]: "cross-origin"}
-      : {}),
       ...(state.config.disableWebSecurity
         ? {
-          ["cross-origin-embedder-policy"]:
-            originCanUseCredentials && isWebContainer
-              ? "require-corp"
-              : "credentialless",
+          ["cross-origin-resource-policy"]: "cross-origin",
           ["cross-origin-opener-policy"]: "same-origin",
           ["service-worker-allowed"]: "/",
           ["access-control-allow-headers"]:
@@ -3507,6 +3510,16 @@ const serve = async function (
           ["access-control-allow-origin"]: referrerOrigin ?? "*",
           ["access-control-allow-credentials"]: "true",
           }
+        : {}),
+      ...(state.config.disableWebSecurity && !originCanUseCredentials
+        ? {
+          ["cross-origin-embedder-policy"]: "credentialless",
+        }
+        : {}),
+      ...(state.config.disableWebSecurity && originCanUseCredentials
+        ? {
+          ["cross-origin-embedder-policy"]: "require-corp"
+        }
         : {}),
       ...(serverSentEvents
         ? {
