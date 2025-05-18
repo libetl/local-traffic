@@ -111,10 +111,12 @@ interface LocalConfiguration {
   disableWebSecurity?: boolean;
   connectTimeout?: number;
   socketTimeout?: number;
-  crossOriginUrlPattern?: string;
-  crossOriginWhitelist?: string[];
-  crossOriginCredentials?: string[];
-  crossOriginServerSide?: boolean;
+  crossOrigin?: {
+    urlPattern?: string;
+    whitelist?: string[];
+    credentials?: string[];
+    serverSide?: boolean;
+  }
 }
 
 type Mapping = {
@@ -852,14 +854,19 @@ const configPage = (
     const container = document.getElementById("jsoneditor")
     const options = {mode: "code", allowSchemaSuggestions: true, schema: {
       type: "object",
-      properties: {
+      properties:{
         ${Object.entries({ ...defaultConfig, ssl: { cert: "", key: "" } })
           .map(
             ([property, exampleValue]) =>
               `${property}:${
-                property === "unwantedHeaderNamesInMocks" ||
-                property === "crossOriginWhitelist" ||
-                property === "crossOriginCredentials"
+                property === "crossOrigin" 
+                ? '{type:"object",properties:{' +
+                'whitelist:{type:"array","items":{"type":"string"}},'+
+                'credentials:{type:"array","items":{"type":"string"}},'+
+                'serverSide:{type:"boolean"},'+
+                'urlPattern:{type:"string"}'+
+                '}}'
+                : property === "unwantedHeaderNamesInMocks"
                   ? '{type:"array","items":{"type":"string"}}'
                   : property === "logAccessInTerminal"
                     ? '{"oneOf":[{type:"boolean"},{enum:["with-mapping"]}]}'
@@ -1924,10 +1931,12 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   connectTimeout: 3000,
   socketTimeout: 3000,
   unwantedHeaderNamesInMocks: [],
-  crossOriginUrlPattern: "${href}",
-  crossOriginWhitelist: [],
-  crossOriginCredentials: [],
-  crossOriginServerSide: false,
+  crossOrigin: {
+    urlPattern: "${href}",
+    whitelist: [],
+    credentials: [],
+    serverSide: false,
+  }
 };
 const load = async (
   firstTime: boolean = true,
@@ -3010,22 +3019,22 @@ const serve = async function (
     !["1.", "10.", "127.", "172.", "192."].some(ipPrefix =>
       target.hostname.startsWith(ipPrefix)) &&
     // not whitelisted
-    !(state.config.crossOriginWhitelist ?? [])
+    !(state.config.crossOrigin?.whitelist ?? [])
       .some(textOrRegex => textOrRegex.includes('(')
         ? new RegExp(textOrRegex).test(targetUrl.href)
         : targetUrl.href.includes(textOrRegex));
   const originCanUseCredentials =
-    (state.config.crossOriginCredentials ?? [])
+    (state.config.crossOrigin?.credentials ?? [])
       .some(textOrRegex => textOrRegex.includes('(')
         ? new RegExp(textOrRegex).test(targetUrl.href)
         : targetUrl.href.includes(textOrRegex))
   const shouldUseAnotherProxy =
-    (isWebContainer || state.config.crossOriginServerSide) &&
+    (isWebContainer || state.config.crossOrigin?.serverSide) &&
     isCrossOrigin &&
-    state.config.crossOriginUrlPattern !== "${href}";
+    state.config.crossOrigin?.urlPattern !== "${href}";
   const nextHopUrl = shouldUseAnotherProxy
   ? new URL(
-    state.config.crossOriginUrlPattern.replace(/\${([a-zA-Z]+)}/g,
+    state.config.crossOrigin?.urlPattern?.replace(/\${([a-zA-Z]+)}/g,
       (_, m) => encodeURIComponent(targetUrl[m]))
   )
   : targetUrl;
