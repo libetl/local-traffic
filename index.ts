@@ -3588,7 +3588,7 @@ const serve = async function (
         outboundExchange?.close?.();
       } catch (e) { }
     });
-    (inboundResponse.write as any)(payload)
+    (inboundResponse.write as any)(payload);
     (outboundExchange as ClientHttp2Stream | Duplex)?.on?.(
       "data",
       (chunk: Buffer | string) =>
