@@ -3442,6 +3442,7 @@ const serve = async function (
   const payload: Buffer =
     error ??
     (await new Promise<Buffer>(resolve => {
+      let ended = false;
       let partialBody = Buffer.alloc(0);
       if (!outboundExchange) {
         resolve(partialBody);
@@ -3460,9 +3461,36 @@ const serve = async function (
         },
       );
       outboundExchange?.on?.("end", () => {
+        ended = true;
         resolve(partialBody);
       });
+      outboundExchange?.on?.("close", () => {
+        if(ended) return;
+        error = Buffer.from(
+            errorPage(
+            new Error("downstream has closed the connection prematurely"),
+            state.mode, "stream", url, targetUrl));
+        send(
+          502,
+          inboundResponse,
+          error,
+        );
+
+        state.log([
+          [
+            {
+              text: `${EMOJIS.ERROR_4} unexpected closed connection ${(
+                url.href ?? ""
+              ).slice(-31)}`,
+              color: LogLevel.WARNING,
+            },
+          ],
+        ]);
+        console.log("empty")
+        resolve(Buffer.from(""))
+      });
     }).then((payloadBuffer: Buffer) => {
+      if (error) return payloadBuffer;
       if (!state.config.replaceResponseBodyUrls) return payloadBuffer;
       if (!payloadBuffer.length) return payloadBuffer;
       if (specialProtocols.some(protocol => target.protocol === protocol))
@@ -3513,7 +3541,7 @@ const serve = async function (
             "x-forwarded-for,user-agent,accept-encoding," +
             "proxy-authenticate,proxy-authorization," +
             "www-authenticate,content-disposition," +
-            "location",
+            "location,priority",
           ["access-control-allow-methods"]:
             "GET,POST,PUT,DELETE,PATCH,HEAD,TRACE,CONNECT",
           ["access-control-allow-origin"]: referrerOrigin ?? "*",

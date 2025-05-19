@@ -86,9 +86,9 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 2. Use the notation `require('local-traffic').start({ /* configuration goes here */ })'`
 3. Disable web security to benefit from cross origin adequate config (`disableWebSecurity: true`)
 4. Downgrade downstream http to 1.1 only (`dontUseHttp2Downstream: true`)
-5. Don't forget to use a CORS proxy server : use the `crossOrigin.UrlPattern` parameter to specify it. Placeholders correspond to URL object properties.
+5. Don't forget to use a CORS proxy server : use the `crossOrigin.urlPattern` parameter to specify it. Placeholders correspond to URL object properties.
 (`"https://<my-example-cors-proxy-domain>.com/?url=${href}"`)
-6. If you want to use local domain names in addition to remote domain names, add them to the `crossOrigin.Whitelist`
+6. If you want to use local domain names in addition to remote domain names, add them to the `crossOrigin.whitelist`
 
 ## how to change mappings to local / non-local
 
