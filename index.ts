@@ -3082,7 +3082,7 @@ const serve = async function (
           resolve(void 0);
           return;
         }
-        requestBodyReadable.resume();
+        requestBodyReadable.resume?.();
         requestBodyReadable.on("data", chunk => {
           requestBodyBuffer = Buffer.concat([requestBodyBuffer, chunk]);
         });
