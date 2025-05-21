@@ -1912,6 +1912,7 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   Pick<LocalConfiguration, "ssl"> = {
   mapping: Object.assign(
     {},
+    isWebContainer ? {"/dir/(.*)": "file:///$$1"} : {},
     ...specialPages
       .filter(page => page !== "data" && page !== "file")
       .map(page => ({
@@ -3045,9 +3046,11 @@ const serve = async function (
   const randomId = randomBytes(20).toString("hex");
   let requestBody: Buffer | string | null = null;
   const bufferedRequestBody =
-    state.config.replaceRequestBodyUrls || !!state.logsListeners.length;
+    state.config.replaceRequestBodyUrls || !!state.logsListeners.length ||
+    (shouldUseAnotherProxy && isWebContainer);
   // sounds ridiculous, but yes, I need to wait until the HTTP/2 stream gets read
-  if (state.config.ssl) await new Promise(resolve => setTimeout(resolve, 1));
+  if (state.config.ssl && !isWebContainer)
+    await new Promise(resolve => setTimeout(resolve, 1));
   const hasImmediateOrDeferredRequestBody =
     parseInt(inboundRequest.headers["content-length"] ?? "0") > 0;
   const http1WithRequestBody =
@@ -3071,7 +3074,6 @@ const serve = async function (
     const requestBodyReadable: Readable =
       (inboundRequest as Http2ServerRequest)?.stream ??
       (inboundRequest as IncomingMessage);
-
     let requestBodyBuffer: Buffer = Buffer.from([]);
     await Promise.race([
       new Promise(resolve => setTimeout(resolve, state.config.connectTimeout)),
@@ -3080,6 +3082,7 @@ const serve = async function (
           resolve(void 0);
           return;
         }
+        requestBodyReadable.resume();
         requestBodyReadable.on("data", chunk => {
           requestBodyBuffer = Buffer.concat([requestBodyBuffer, chunk]);
         });
