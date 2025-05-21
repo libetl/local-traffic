@@ -111,9 +111,12 @@ interface LocalConfiguration {
   disableWebSecurity?: boolean;
   connectTimeout?: number;
   socketTimeout?: number;
-  crossOriginUrlPattern?: string;
-  crossOriginWhitelist?: string[];
-  crossOriginServerSide?: boolean;
+  crossOrigin?: {
+    urlPattern?: string;
+    whitelist?: string[];
+    credentials?: string[];
+    serverSide?: boolean;
+  }
 }
 
 type Mapping = {
@@ -851,13 +854,19 @@ const configPage = (
     const container = document.getElementById("jsoneditor")
     const options = {mode: "code", allowSchemaSuggestions: true, schema: {
       type: "object",
-      properties: {
+      properties:{
         ${Object.entries({ ...defaultConfig, ssl: { cert: "", key: "" } })
           .map(
             ([property, exampleValue]) =>
               `${property}:${
-                property === "unwantedHeaderNamesInMocks" ||
-                property === "crossOriginWhitelist"
+                property === "crossOrigin" 
+                ? '{type:"object",properties:{' +
+                'whitelist:{type:"array","items":{"type":"string"}},'+
+                'credentials:{type:"array","items":{"type":"string"}},'+
+                'serverSide:{type:"boolean"},'+
+                'urlPattern:{type:"string"}'+
+                '}}'
+                : property === "unwantedHeaderNamesInMocks"
                   ? '{type:"array","items":{"type":"string"}}'
                   : property === "logAccessInTerminal"
                     ? '{"oneOf":[{type:"boolean"},{enum:["with-mapping"]}]}'
@@ -1903,6 +1912,7 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   Pick<LocalConfiguration, "ssl"> = {
   mapping: Object.assign(
     {},
+    isWebContainer ? {"/dir/(.*)": "file:///$$1"} : {},
     ...specialPages
       .filter(page => page !== "data" && page !== "file")
       .map(page => ({
@@ -1922,9 +1932,12 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   connectTimeout: 3000,
   socketTimeout: 3000,
   unwantedHeaderNamesInMocks: [],
-  crossOriginUrlPattern: "${href}",
-  crossOriginWhitelist: [],
-  crossOriginServerSide: false,
+  crossOrigin: {
+    urlPattern: "${href}",
+    whitelist: [],
+    credentials: [],
+    serverSide: false,
+  }
 };
 const load = async (
   firstTime: boolean = true,
@@ -2951,8 +2964,11 @@ const serve = async function (
     referrerOrigin = new URL(
       inboundRequest.headers["referer"] ??
       inboundRequest.headers["origin"] ??
-      "about:blank").origin;
-  } catch (e) {}
+      inboundRequest.headers[":scheme"] + "://" +
+      inboundRequest.headers[":authority"]).origin;
+  } catch (e) {
+    referrerOrigin = "null";
+  }
   const target =
     targetFromProxy ??
     (state.mode === "mock" ? new URL(proxyOrigin) : null);
@@ -2975,20 +2991,6 @@ const serve = async function (
   const targetUsesSpecialProtocol = specialProtocols.some(
     protocol => target.protocol === protocol,
   );
-  const isCrossOrigin = referrerOrigin !== target.origin &&
-  // not special page
-  !targetUsesSpecialProtocol &&
-    // not localhost
-    target.hostname !== "localhost" &&
-    // not local ip
-    !["1.", "10.", "127.", "172.", "192."].some(ipPrefix =>
-      target.hostname.startsWith(ipPrefix)) &&
-      // not whitelisted
-      !(state.config.crossOriginWhitelist ?? []).map(
-        whitelistElement => whitelistElement.replace(/^[a-z]+:\/\//, '')
-      ).includes(target.hostname);
-  const originCanUseCredentials =
-  (state.config.crossOriginWhitelist ?? []).includes(url.origin)
   const isFailsafeOptions = inboundRequest.method === 'OPTIONS' &&
         state.config.disableWebSecurity
   const protocolSlashes = target.protocol === "data:" ? "" : "//";
@@ -3009,13 +3011,31 @@ const serve = async function (
   const targetUrl = new URL(
     `${target.protocol}${protocolSlashes}${targetHost}${fullPath}`,
   );
+  const isCrossOrigin = referrerOrigin !== target.origin &&
+  // not special page
+  !targetUsesSpecialProtocol &&
+    // not localhost
+    target.hostname !== "localhost" &&
+    // not local ip
+    !["1.", "10.", "127.", "172.", "192."].some(ipPrefix =>
+      target.hostname.startsWith(ipPrefix)) &&
+    // not whitelisted
+    !(state.config.crossOrigin?.whitelist ?? [])
+      .some(textOrRegex => textOrRegex.includes('(')
+        ? new RegExp(textOrRegex).test(targetUrl.href)
+        : targetUrl.href.includes(textOrRegex));
+  const originCanUseCredentials =
+    (state.config.crossOrigin?.credentials ?? [])
+      .some(textOrRegex => textOrRegex.includes('(')
+        ? new RegExp(textOrRegex).test(targetUrl.href)
+        : targetUrl.href.includes(textOrRegex))
   const shouldUseAnotherProxy =
-    (isWebContainer || state.config.crossOriginServerSide) &&
+    (isWebContainer || state.config.crossOrigin?.serverSide) &&
     isCrossOrigin &&
-    state.config.crossOriginUrlPattern !== "${href}";
+    state.config.crossOrigin?.urlPattern !== "${href}";
   const nextHopUrl = shouldUseAnotherProxy
   ? new URL(
-    state.config.crossOriginUrlPattern.replace(/\${([a-zA-Z]+)}/g,
+    state.config.crossOrigin?.urlPattern?.replace(/\${([a-zA-Z]+)}/g,
       (_, m) => encodeURIComponent(targetUrl[m]))
   )
   : targetUrl;
@@ -3026,9 +3046,11 @@ const serve = async function (
   const randomId = randomBytes(20).toString("hex");
   let requestBody: Buffer | string | null = null;
   const bufferedRequestBody =
-    state.config.replaceRequestBodyUrls || !!state.logsListeners.length;
+    state.config.replaceRequestBodyUrls || !!state.logsListeners.length ||
+    (shouldUseAnotherProxy && isWebContainer);
   // sounds ridiculous, but yes, I need to wait until the HTTP/2 stream gets read
-  if (state.config.ssl) await new Promise(resolve => setTimeout(resolve, 1));
+  if (state.config.ssl && !isWebContainer)
+    await new Promise(resolve => setTimeout(resolve, 1));
   const hasImmediateOrDeferredRequestBody =
     parseInt(inboundRequest.headers["content-length"] ?? "0") > 0;
   const http1WithRequestBody =
@@ -3052,7 +3074,6 @@ const serve = async function (
     const requestBodyReadable: Readable =
       (inboundRequest as Http2ServerRequest)?.stream ??
       (inboundRequest as IncomingMessage);
-
     let requestBodyBuffer: Buffer = Buffer.from([]);
     await Promise.race([
       new Promise(resolve => setTimeout(resolve, state.config.connectTimeout)),
@@ -3061,6 +3082,7 @@ const serve = async function (
           resolve(void 0);
           return;
         }
+        requestBodyReadable.resume?.();
         requestBodyReadable.on("data", chunk => {
           requestBodyBuffer = Buffer.concat([requestBodyBuffer, chunk]);
         });
@@ -3423,6 +3445,7 @@ const serve = async function (
   const payload: Buffer =
     error ??
     (await new Promise<Buffer>(resolve => {
+      let ended = false;
       let partialBody = Buffer.alloc(0);
       if (!outboundExchange) {
         resolve(partialBody);
@@ -3441,9 +3464,35 @@ const serve = async function (
         },
       );
       outboundExchange?.on?.("end", () => {
+        ended = true;
         resolve(partialBody);
       });
+      outboundExchange?.on?.("close", () => {
+        if(ended) return;
+        error = Buffer.from(
+            errorPage(
+            new Error("downstream has closed the connection prematurely"),
+            state.mode, "stream", url, targetUrl));
+        send(
+          502,
+          inboundResponse,
+          error,
+        );
+
+        state.log([
+          [
+            {
+              text: `${EMOJIS.ERROR_4} unexpected closed connection ${(
+                url.href ?? ""
+              ).slice(-31)}`,
+              color: LogLevel.WARNING,
+            },
+          ],
+        ]);
+        resolve(Buffer.from(""))
+      });
     }).then((payloadBuffer: Buffer) => {
+      if (error) return payloadBuffer;
       if (!state.config.replaceResponseBodyUrls) return payloadBuffer;
       if (!payloadBuffer.length) return payloadBuffer;
       if (specialProtocols.some(protocol => target.protocol === protocol))
@@ -3481,16 +3530,9 @@ const serve = async function (
       ...(state.config.replaceResponseBodyUrls && !serverSentEvents
         ? { ["content-length"]: `${payload.byteLength}` }
         : {}),
-      ...(originCanUseCredentials
-      ? {
-            ["cross-origin-resource-policy"]: "cross-origin"}
-      : {}),
       ...(state.config.disableWebSecurity
         ? {
-          ["cross-origin-embedder-policy"]:
-            originCanUseCredentials && isWebContainer
-              ? "require-corp"
-              : "credentialless",
+          ["cross-origin-resource-policy"]: "cross-origin",
           ["cross-origin-opener-policy"]: "same-origin",
           ["service-worker-allowed"]: "/",
           ["access-control-allow-headers"]:
@@ -3501,12 +3543,26 @@ const serve = async function (
             "x-forwarded-for,user-agent,accept-encoding," +
             "proxy-authenticate,proxy-authorization," +
             "www-authenticate,content-disposition," +
-            "location",
+            "location,priority",
           ["access-control-allow-methods"]:
             "GET,POST,PUT,DELETE,PATCH,HEAD,TRACE,CONNECT",
           ["access-control-allow-origin"]: referrerOrigin ?? "*",
           ["access-control-allow-credentials"]: "true",
           }
+        : {}),
+      ...(state.config.disableWebSecurity 
+        && (!originCanUseCredentials
+        || !(isWebContainer || state.config.crossOrigin?.serverSide))
+        ? {
+          ["cross-origin-embedder-policy"]: "credentialless",
+        }
+        : {}),
+      ...(state.config.disableWebSecurity 
+        && originCanUseCredentials
+        && (isWebContainer || state.config.crossOrigin?.serverSide)
+        ? {
+          ["cross-origin-embedder-policy"]: "require-corp"
+        }
         : {}),
       ...(serverSentEvents
         ? {

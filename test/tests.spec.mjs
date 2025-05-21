@@ -65,8 +65,8 @@ const localTraffic = await (async () => {
   const base64Module = useTemporaryFile
     ? temporaryFileLocation
     : `data:text/javascript;base64,${Buffer.from(javascriptWithMocks).toString(
-        "base64url",
-      )}`;
+      "base64url",
+    )}`;
   return await import(base64Module);
 })();
 
@@ -120,9 +120,12 @@ describe("config load", async () => {
       logAccessInTerminal: false,
       websocket: true,
       unwantedHeaderNamesInMocks: [],
-      crossOriginUrlPattern: "${href}",
-      crossOriginWhitelist: [],
-      crossOriginServerSide: false,
+      crossOrigin: {
+        urlPattern: "${href}",
+        whitelist: [],
+        credentials: [],
+        serverSide: false,
+      },
       disableWebSecurity: false,
     });
   });
@@ -152,9 +155,12 @@ describe("config load", async () => {
       simpleLogs: false,
       logAccessInTerminal: false,
       unwantedHeaderNamesInMocks: [],
-      crossOriginUrlPattern: "${href}",
-      crossOriginWhitelist: [],
-      crossOriginServerSide: false,
+      crossOrigin: {
+        urlPattern: "${href}",
+        whitelist: [],
+        credentials: [],
+        serverSide: false,
+      },
       websocket: true,
       disableWebSecurity: false,
     });
@@ -183,9 +189,12 @@ describe("config load", async () => {
       logAccessInTerminal: false,
       websocket: true,
       unwantedHeaderNamesInMocks: [],
-      crossOriginUrlPattern: "${href}",
-      crossOriginWhitelist: [],
-      crossOriginServerSide: false,
+      crossOrigin: {
+        urlPattern: "${href}",
+        whitelist: [],
+        credentials: [],
+        serverSide: false,
+      },
       disableWebSecurity: false,
     });
   });
@@ -218,9 +227,12 @@ describe("config load", async () => {
       simpleLogs: false,
       logAccessInTerminal: false,
       unwantedHeaderNamesInMocks: [],
-      crossOriginUrlPattern: "${href}",
-      crossOriginWhitelist: [],
-      crossOriginServerSide: false,
+      crossOrigin: {
+        urlPattern: "${href}",
+        whitelist: [],
+        credentials: [],
+        serverSide: false,
+      },
       websocket: true,
       disableWebSecurity: false,
     });
@@ -274,9 +286,12 @@ describe("config load", async () => {
       logAccessInTerminal: true,
       websocket: false,
       unwantedHeaderNamesInMocks: [],
-      crossOriginUrlPattern: "${href}",
-      crossOriginWhitelist: [],
-      crossOriginServerSide: false,
+      crossOrigin: {
+        urlPattern: "${href}",
+        whitelist: [],
+        credentials: [],
+        serverSide: false,
+      },
       disableWebSecurity: true,
     });
   });
@@ -337,9 +352,12 @@ describe("config load", async () => {
       logAccessInTerminal: true,
       websocket: false,
       unwantedHeaderNamesInMocks: [],
-      crossOriginUrlPattern: "${href}",
-      crossOriginWhitelist: [],
-      crossOriginServerSide: false,
+      crossOrigin: {
+        urlPattern: "${href}",
+        whitelist: [],
+        credentials: [],
+        serverSide: false,
+      },
       disableWebSecurity: true,
     });
   });
@@ -394,9 +412,12 @@ describe("config load", async () => {
       logAccessInTerminal: true,
       websocket: false,
       unwantedHeaderNamesInMocks: [],
-      crossOriginUrlPattern: "${href}",
-      crossOriginWhitelist: [],
-      crossOriginServerSide: false,
+      crossOrigin: {
+        urlPattern: "${href}",
+        whitelist: [],
+        credentials: [],
+        serverSide: false,
+      },
       disableWebSecurity: true,
     });
   });
@@ -451,9 +472,12 @@ describe("config load", async () => {
       logAccessInTerminal: true,
       websocket: false,
       unwantedHeaderNamesInMocks: [],
-      crossOriginUrlPattern: "${href}",
-      crossOriginWhitelist: [],
-      crossOriginServerSide: false,
+      crossOrigin: {
+        urlPattern: "${href}",
+        whitelist: [],
+        credentials: [],
+        serverSide: false,
+      },
       disableWebSecurity: true,
     });
   });
@@ -866,9 +890,13 @@ describe("server cruise", async () => {
         connectTimeout: 3,
         socketTimeout: 3,
         unwantedHeaderNamesInMocks: [],
-        crossOriginUrlPattern: "${href}",
-        crossOriginWhitelist: [],
-        crossOriginServerSide: false,}),
+        crossOrigin: {
+          urlPattern: "${href}",
+          whitelist: [],
+          credentials: [],
+          serverSide: false,
+        },
+      }),
     );
   });
 
@@ -1134,11 +1162,11 @@ describe("Internal features of the server", () => {
           ssl: true,
           mapping: {
             "/the-entire-cdn-on-my-hard-drive/js/([a-z-]+)/v([0-9.]+)/([A-Z0-9a-z_-]+).js":
-              {
-                replaceBody: "https://some-cdn.js/js/$$1/v$$2/$$3.js",
-                downstreamUrl:
-                  "file:///Users/me/my-big-directory/js/$$1/v$$2/$$3.js",
-              },
+            {
+              replaceBody: "https://some-cdn.js/js/$$1/v$$2/$$3.js",
+              downstreamUrl:
+                "file:///Users/me/my-big-directory/js/$$1/v$$2/$$3.js",
+            },
           },
         },
       );
@@ -1160,11 +1188,11 @@ describe("Internal features of the server", () => {
         mapping: {
           // there are two right-paren instead of one, so we cannot build a successful pattern here
           "/the-entire-cdn-on-my-hard-drive/js/([a-z-]+))/v([0-9.]+)/([A-Z0-9a-z_-]+).js":
-            {
-              replaceBody: "https://some-cdn.js/js/$$1/v$$2/$$3.js",
-              downstreamUrl:
-                "file:///Users/me/my-big-directory/js/$$1/v$$2/$$3.js",
-            },
+          {
+            replaceBody: "https://some-cdn.js/js/$$1/v$$2/$$3.js",
+            downstreamUrl:
+              "file:///Users/me/my-big-directory/js/$$1/v$$2/$$3.js",
+          },
         },
       },
     );
@@ -1200,7 +1228,7 @@ describe("Recorder switches logic", () => {
       mockConfig: {
         autoRecord: true,
       },
-      log: () => {},
+      log: () => { },
     };
     recorderHandler(state, Buffer.from('{"mode":"proxy"}'), false);
 
@@ -1219,7 +1247,7 @@ describe("Recorder switches logic", () => {
       mockConfig: {
         autoRecord: true,
       },
-      log: () => {},
+      log: () => { },
     };
     recorderHandler(
       state,
@@ -1266,8 +1294,8 @@ describe("Mock server matcher", () => {
         },
         logsListeners: [],
         mode: "mock",
-        log: () => {},
-        notifyLogsListeners: () => {},
+        log: () => { },
+        notifyLogsListeners: () => { },
       },
       {
         method: "GET",
@@ -1278,7 +1306,7 @@ describe("Mock server matcher", () => {
         readableLength: 0,
       },
       {
-        writeHead: () => {},
+        writeHead: () => { },
         end: payload => {
           body = payload.toString("ascii");
         },
@@ -1318,8 +1346,8 @@ describe("Mock server matcher", () => {
         },
         logsListeners: [],
         mode: "mock",
-        log: () => {},
-        notifyLogsListeners: () => {},
+        log: () => { },
+        notifyLogsListeners: () => { },
       },
       {
         method: "GET",
@@ -1331,7 +1359,7 @@ describe("Mock server matcher", () => {
         readableLength: 0,
       },
       {
-        writeHead: () => {},
+        writeHead: () => { },
         end: payload => {
           body = payload.toString("ascii");
         },
@@ -1375,8 +1403,8 @@ describe("Mock server matcher", () => {
         },
         logsListeners: [],
         mode: "mock",
-        log: () => {},
-        notifyLogsListeners: () => {},
+        log: () => { },
+        notifyLogsListeners: () => { },
       },
       {
         method: "GET",
@@ -1388,7 +1416,7 @@ describe("Mock server matcher", () => {
         readableLength: 0,
       },
       {
-        writeHead: () => {},
+        writeHead: () => { },
         end: payload => {
           body = payload.toString("ascii");
         },
@@ -1474,8 +1502,8 @@ describe("Mock server matcher", () => {
         },
         logsListeners: [],
         mode: "mock",
-        log: () => {},
-        notifyLogsListeners: () => {},
+        log: () => { },
+        notifyLogsListeners: () => { },
       },
       {
         method: "GET",
@@ -1490,7 +1518,7 @@ describe("Mock server matcher", () => {
         readableLength: 0,
       },
       {
-        writeHead: () => {},
+        writeHead: () => { },
         end: payload => {
           body = payload.toString("ascii");
         },
@@ -1533,8 +1561,8 @@ describe("Mock server matcher", () => {
         },
         logsListeners: [],
         mode: "mock",
-        log: () => {},
-        notifyLogsListeners: () => {},
+        log: () => { },
+        notifyLogsListeners: () => { },
       },
       {
         method: "GET",
@@ -1545,7 +1573,7 @@ describe("Mock server matcher", () => {
         readableLength: 0,
       },
       {
-        writeHead: () => {},
+        writeHead: () => { },
         end: payload => {
           body = payload.toString("ascii");
         },

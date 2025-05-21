@@ -62,7 +62,7 @@ npx local-traffic
 11. From the web config editor, create a SSL keypair and start working with a self signed SSL certificate right away
 12. Your page will use /jquery-local/jquery.js instead of the CDN asset, and will serve the file from your hard drive
 13. Use the /local-traffic-worker.js service worker to walk around the CORS restrictions when your api does a request to some-cors-restricted-domain.com (>= 0.1.4)
-14. Use the /cors-proxy?url=https://example.com route as a standard cors-proxy (>= 0.1.22)
+14. Use the /cors-proxy?url=https://example.com route as a standard cors-proxy (>= 0.1.29)
 
 ## usage
 
@@ -86,9 +86,9 @@ npx local-traffic [location-of-the-local-traffic-config-file]
 2. Use the notation `require('local-traffic').start({ /* configuration goes here */ })'`
 3. Disable web security to benefit from cross origin adequate config (`disableWebSecurity: true`)
 4. Downgrade downstream http to 1.1 only (`dontUseHttp2Downstream: true`)
-5. Don't forget to use a CORS proxy server : use the `crossOriginUrlPattern` parameter to specify it
-(example : `"https://corsproxy.io/?url=${href}"`)
-6. If you want to use local domain names in addition to remote domain names, add them to the `crossOriginWhitelist`
+5. Don't forget to use a CORS proxy server : use the `crossOrigin.urlPattern` parameter to specify it. Placeholders correspond to URL object properties.
+(`"https://<my-example-cors-proxy-domain>.com/?url=${href}"`)
+6. If you want to use local domain names in addition to remote domain names, add them to the `crossOrigin.whitelist`
 
 ## how to change mappings to local / non-local
 
@@ -116,9 +116,10 @@ All boolean settings default to false when unspecified.
 - `connectTimeout`: (`number`) max time before aborting the connection (defaults to 3000ms)
 - `socketTimeout`: (`number`) max time waiting for a response (defaults to 3000ms)
 - `unwantedHeaderNamesInMocks`: (`string[]`) header names that won't get added to the mock request matchers
-- `crossOriginUrlPattern`: (`string`) change url to target a cors proxy, from a webcontainer (>= 0.1.18)
-- `crossOriginWhitelist` (`string[]`) domain names used in a webcontainer that should not go through cors proxy (>= 0.1.18)
-- `crossOriginServerSide` (`boolean`) activates the CORS proxy even while running as a server (>= 0.1.25)
+- `crossOrigin.urlPattern`: (`string`) change url to target a cors proxy (>= 0.1.29)
+- `crossOrigin.credentials`: (`string[]`) domain names or regexes that can use credentials (>= 0.1.29)
+- `crossOrigin.whitelist` (`string[]`) domain names or regexes that should not go through cors proxy (>= 0.1.29)
+- `crossOrigin.serverSide` (`boolean`) activates the CORS proxy even while running as a server, to walk around webapp firewalls. Otherwise it will only work from a webcontainer (>= 0.1.29)
 
 ## config API
 
