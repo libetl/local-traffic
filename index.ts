@@ -3489,7 +3489,6 @@ const serve = async function (
             },
           ],
         ]);
-        console.log("empty")
         resolve(Buffer.from(""))
       });
     }).then((payloadBuffer: Buffer) => {
