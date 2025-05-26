@@ -933,6 +933,13 @@ const configPage = (
       bindKey: {win: 'Ctrl-S',  mac: 'Command-S'},
       exec: save,
     });
+    if(window.matchMedia('(prefers-color-scheme: dark)').matches){
+      document.head.innerHTML +=
+        '<link href="${cdn}github-ace-dark/github-dark.css" type="text/css"' +
+        ' rel="stylesheet" type="text/css"/>';
+      document.querySelector('.ace_editor').classList.add('ace-github-dark');
+      document.querySelector('.ace_editor').classList.remove('ace-jsoneditor');
+    }
     function startSocket() {
       if (socket != null) return;
       socket = new WebSocket("ws${
@@ -1224,10 +1231,10 @@ const recorderPage = (
       <label class="btn btn-outline-primary" for="mock-mode">&#x1F310; Mock</label>
     </div>
     <span>Actions : </span>
-    <button type="button" class="btn btn-light" id="add-mock">&#x2795; Mock from dummy request</button>
-    <button type="button" class="btn btn-light" id="upload-mocks">&#x1F4E5; Upload mocks</button>
-    <button type="button" class="btn btn-light" id="download-mocks">&#x1F4E6; Download mocks</button>
-    <button type="button" class="btn btn-light" id="delete-mocks">&#x1F5D1; Delete mocks</button>
+    <button type="button" class="btn btn-outline-secondary" id="add-mock">&#x2795; Mock from dummy request</button>
+    <button type="button" class="btn btn-outline-secondary" id="upload-mocks">&#x1F4E5; Upload mocks</button>
+    <button type="button" class="btn btn-outline-secondary" id="download-mocks">&#x1F4E6; Download mocks</button>
+    <button type="button" class="btn btn-outline-secondary" id="delete-mocks">&#x1F5D1; Delete mocks</button>
   </div>
   <div class="row">
     <div class="col-lg" style="max-width: 200px">
@@ -1500,6 +1507,16 @@ setTimeout(() => {
         ".style.filter='blur(8px)';" +
         ";document.getElementById('table-access').style.filter='blur(8px)';"
       : ""
+  }
+
+  if(window.matchMedia('(prefers-color-scheme: dark)').matches){
+    document.head.innerHTML +=
+      '<link href="${cdn}github-ace-dark/github-dark.css" type="text/css"' +
+      ' rel="stylesheet" type="text/css"/>';
+      [...document.querySelectorAll('.ace_editor')].forEach(editor => {
+        editor.classList.add('ace-github-dark');
+        editor.classList.remove('ace-jsoneditor');
+      })
   }
   document.forms[0].reset();
 }, 10)
@@ -2227,6 +2244,10 @@ const header = (
 <link href="${cdn}bootstrap/dist/css/bootstrap.min.css" rel="stylesheet"/>
 <script src="${cdn}jquery/dist/jquery.min.js"></script>
 <script src="${cdn}bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+if(window.matchMedia('(prefers-color-scheme: dark)').matches)
+document.documentElement.dataset.bsTheme = 'dark';
+</script>
 </head>
 <body><div class="container"><h1>&#x${icon.toString(
   16,
