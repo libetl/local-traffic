@@ -1646,18 +1646,17 @@ const filePage = (
       this.events[name] = action;
       this.run().then(() => {
         if (name === "response")
-          this.events["response"](
-            file.endsWith(".svg")
-              ? {
-                  Server: "local",
-                  "Content-Type": "image/svg+xml",
-                }
-              : file.endsWith(".js") || file.endsWith(".jsx")
-                ? {
-                  Server: "local",
-                  "Content-Type": "application/javascript",
-                }
-                : { Server: "local" },
+          this.events["response"]([
+                  ["Server", "local"],
+                  ["Content-Type", file.endsWith(".svg")
+                    ? "image/svg+xml"
+                    : file.endsWith(".js") || file.endsWith(".jsx")
+                    ? "application/javascript"
+                    : file.endsWith(".css")
+                    ? "text/css"
+                    : "text/plain"]
+             ].map(([k, v]) => v === "text/plain" ? undefined : [k, v])
+             .filter(Boolean).reduce((acc, [k, v]) => ({...acc, [k]: v}), {}),
             0,
           );
         if (name === "data" && this.data) {
