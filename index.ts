@@ -230,17 +230,34 @@ const renderBtopDisplay = (state: State): string => {
   if (!state.btopMetrics) return "";
   
   const metrics = state.btopMetrics;
-  const width = Math.min(process.stdout.columns || 80, 120);
-  const height = Math.min(process.stdout.rows || 24, 40);
+  const termWidth = process.stdout.columns || 80;
+  const termHeight = process.stdout.rows || 24;
+  
+  // Reserve left side for logs (60% of terminal width)
+  const leftWidth = Math.floor(termWidth * 0.6);
+  const rightWidth = termWidth - leftWidth;
+  
+  // Don't display if terminal is too narrow for side-by-side layout
+  if (rightWidth < 30) return "";
   
   let output = "";
   
-  // Clear screen and move cursor to top
-  output += "\x1b[2J\x1b[H";
+  // Position cursor at top-right corner of the terminal
+  output += `\x1b[1;${leftWidth + 1}H`;
   
-  // Header
-  output += `\x1b[1m🌐 Local Traffic Dashboard\x1b[0m\n`;
-  output += `\x1b[36mTime: ${new Date().toLocaleTimeString()}\x1b[0m\n\n`;
+  // Clear the right side area
+  for (let i = 0; i < Math.min(termHeight - 1, 25); i++) {
+    output += `\x1b[${i + 1};${leftWidth + 1}H\x1b[0K`;
+  }
+  
+  // Reset cursor to top-right
+  output += `\x1b[1;${leftWidth + 1}H`;
+  
+  // Header with border
+  const headerText = "🌐 Dashboard";
+  const timeText = new Date().toLocaleTimeString();
+  output += `\x1b[1m${headerText.padEnd(rightWidth - 1)}\x1b[0m\n`;
+  output += `\x1b[${2};${leftWidth + 1}H\x1b[36m${timeText.padEnd(rightWidth - 1)}\x1b[0m\n`;
   
   // Statistics
   const totalReqs = metrics.totalRequests;
@@ -248,62 +265,82 @@ const renderBtopDisplay = (state: State): string => {
   const avgRPS = metrics.requestCounts.reduce((a, b) => a + b, 0) / 60;
   const errorRate = metrics.errorCounts.reduce((a, b) => a + b, 0) / Math.max(totalReqs, 1) * 100;
   
-  output += `\x1b[32mTotal Requests:\x1b[0m ${totalReqs.toLocaleString()}\n`;
-  output += `\x1b[33mCurrent RPS:\x1b[0m ${currentRPS}\n`;
-  output += `\x1b[34mAverage RPS:\x1b[0m ${avgRPS.toFixed(2)}\n`;
-  output += `\x1b[31mError Rate:\x1b[0m ${errorRate.toFixed(2)}%\n\n`;
+  let line = 4;
+  output += `\x1b[${line};${leftWidth + 1}H\x1b[32mReqs:\x1b[0m ${totalReqs.toString().padEnd(rightWidth - 6)}\n`;
+  line++;
+  output += `\x1b[${line};${leftWidth + 1}H\x1b[33mRPS:\x1b[0m ${currentRPS.toString().padEnd(rightWidth - 5)}\n`;
+  line++;
+  output += `\x1b[${line};${leftWidth + 1}H\x1b[34mAvg:\x1b[0m ${avgRPS.toFixed(2).padEnd(rightWidth - 5)}\n`;
+  line++;
+  output += `\x1b[${line};${leftWidth + 1}H\x1b[31mErr:\x1b[0m ${errorRate.toFixed(1)}%\n`;
+  line += 2;
   
-  // Request Rate Histogram (last 60 seconds)
-  output += `\x1b[1mRequest Rate (RPS) - Last 60 seconds:\x1b[0m\n`;
+  // Request Rate Histogram (compact version)
   const maxRequests = Math.max(...metrics.requestCounts, 1);
-  const histogramHeight = Math.min(8, height - 15);
+  const histogramHeight = Math.min(4, termHeight - line - 8);
+  const chartWidth = Math.min(rightWidth - 6, 30);
   
-  for (let row = histogramHeight; row > 0; row--) {
-    const threshold = (maxRequests * row) / histogramHeight;
-    output += `${threshold.toFixed(0).padStart(3)} │`;
+  if (histogramHeight > 0) {
+    output += `\x1b[${line};${leftWidth + 1}H\x1b[1mRPS Chart:\x1b[0m\n`;
+    line++;
     
-    for (let i = 0; i < Math.min(60, width - 10); i++) {
-      const value = metrics.requestCounts[i] || 0;
-      if (value >= threshold) {
-        output += value > avgRPS * 2 ? "\x1b[41m \x1b[0m" : "\x1b[42m \x1b[0m";
-      } else {
-        output += " ";
+    for (let row = histogramHeight; row > 0; row--) {
+      const threshold = (maxRequests * row) / histogramHeight;
+      output += `\x1b[${line};${leftWidth + 1}H${threshold.toFixed(0).padStart(2)}│`;
+      
+      for (let i = 0; i < chartWidth; i++) {
+        const value = metrics.requestCounts[i] || 0;
+        if (value >= threshold) {
+          output += value > avgRPS * 2 ? "\x1b[41m \x1b[0m" : "\x1b[42m \x1b[0m";
+        } else {
+          output += " ";
+        }
       }
+      line++;
     }
-    output += "\n";
+    
+    output += `\x1b[${line};${leftWidth + 1}H  └`;
+    for (let i = 0; i < chartWidth; i++) {
+      output += "─";
+    }
+    line += 2;
   }
   
-  output += "    └";
-  for (let i = 0; i < Math.min(60, width - 10); i++) {
-    output += "─";
-  }
-  output += "\n";
-  
-  // Status Code Distribution
-  output += `\n\x1b[1mStatus Code Distribution:\x1b[0m\n`;
+  // Status Code Distribution (compact)
   const sortedStatusCodes = Array.from(metrics.statusCodes.entries())
     .sort(([a], [b]) => a - b);
   
-  for (const [statusCode, count] of sortedStatusCodes.slice(0, 8)) {
-    const percentage = (count / totalReqs * 100).toFixed(1);
-    const color = statusCode < 300 ? "\x1b[32m" : statusCode < 400 ? "\x1b[33m" : "\x1b[31m";
-    output += `${color}${statusCode}\x1b[0m: ${count.toLocaleString()} (${percentage}%)\n`;
+  if (sortedStatusCodes.length > 0) {
+    output += `\x1b[${line};${leftWidth + 1}H\x1b[1mStatus:\x1b[0m\n`;
+    line++;
+    
+    for (const [statusCode, count] of sortedStatusCodes.slice(0, 4)) {
+      const percentage = (count / totalReqs * 100).toFixed(0);
+      const color = statusCode < 300 ? "\x1b[32m" : statusCode < 400 ? "\x1b[33m" : "\x1b[31m";
+      const statusText = `${color}${statusCode}\x1b[0m:${count}(${percentage}%)`;
+      output += `\x1b[${line};${leftWidth + 1}H${statusText.substring(0, rightWidth - 1)}\n`;
+      line++;
+    }
+    line++;
   }
   
-  // Response Time Stats
+  // Response Time Stats (compact)
   if (metrics.responseTimes.length > 0) {
     const sorted = [...metrics.responseTimes].sort((a, b) => a - b);
     const p50 = sorted[Math.floor(sorted.length * 0.5)];
     const p95 = sorted[Math.floor(sorted.length * 0.95)];
-    const p99 = sorted[Math.floor(sorted.length * 0.99)];
     const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length;
     
-    output += `\n\x1b[1mResponse Times (ms):\x1b[0m\n`;
-    output += `Average: ${avg.toFixed(1)}ms\n`;
-    output += `P50: ${p50}ms  P95: ${p95}ms  P99: ${p99}ms\n`;
+    output += `\x1b[${line};${leftWidth + 1}H\x1b[1mTimes:\x1b[0m\n`;
+    line++;
+    output += `\x1b[${line};${leftWidth + 1}HAvg:${avg.toFixed(1)}ms P50:${p50}ms\n`;
+    line++;
+    output += `\x1b[${line};${leftWidth + 1}HP95:${p95}ms\n`;
+    line++;
   }
   
-  output += `\n\x1b[36mPress Ctrl+C to exit dashboard\x1b[0m\n`;
+  // Position cursor back to left side for logs
+  output += `\x1b[${Math.min(termHeight, line + 1)};1H`;
   
   return output;
 };
@@ -314,9 +351,20 @@ const stopBtopDisplay = (state: State) => {
     state.btopDisplayInterval = undefined;
   }
   
-  // Restore terminal
-  process.stdout.write("\x1b[?25h");   // Show cursor
-  process.stdout.write("\x1b[?1049l"); // Exit alternate screen
+  // Clear the right side area and restore cursor
+  const termWidth = process.stdout.columns || 80;
+  const termHeight = process.stdout.rows || 24;
+  const leftWidth = Math.floor(termWidth * 0.6);
+  const rightWidth = termWidth - leftWidth;
+  
+  // Clear right side area
+  for (let i = 0; i < Math.min(termHeight - 1, 25); i++) {
+    process.stdout.write(`\x1b[${i + 1};${leftWidth + 1}H\x1b[0K`);
+  }
+  
+  // Restore cursor
+  process.stdout.write("\x1b[?25h"); // Show cursor
+  process.stdout.write(`\x1b[${termHeight};1H`); // Position cursor at bottom left
 };
 
 const startBtopDisplay = (state: State) => {
@@ -330,9 +378,9 @@ const startBtopDisplay = (state: State) => {
     state.btopMetrics = createBtopMetrics();
   }
   
-  // Set up terminal for full-screen display
-  process.stdout.write("\x1b[?1049h"); // Enter alternate screen
-  process.stdout.write("\x1b[?25l");   // Hide cursor
+  // Don't use alternate screen buffer - we want side-by-side display
+  // Just hide the cursor in the dashboard area
+  process.stdout.write("\x1b[?25l"); // Hide cursor
   
   const refreshDisplay = () => {
     if (state.config.btopDisplay && !state.config.simpleLogs) {
