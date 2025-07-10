@@ -285,13 +285,13 @@ const renderBtopDisplay = (state: State): string => {
     line++;
     
     for (let row = histogramHeight; row > 0; row--) {
-      const threshold = (maxRequests * row) / histogramHeight;
+      const threshold = Math.max(1, (maxRequests * row) / histogramHeight);
       output += `\x1b[${line};${leftWidth + 1}H${threshold.toFixed(0).padStart(2)}│`;
       
       for (let i = 0; i < chartWidth; i++) {
         const value = metrics.requestCounts[i] || 0;
         if (value >= threshold) {
-          output += value > avgRPS * 2 ? "\x1b[41m \x1b[0m" : "\x1b[42m \x1b[0m";
+          output += value > avgRPS * 2 ? "\x1b[91m█\x1b[0m" : "\x1b[92m█\x1b[0m";
         } else {
           output += " ";
         }
@@ -339,8 +339,8 @@ const renderBtopDisplay = (state: State): string => {
     line++;
   }
   
-  // Position cursor back to left side for logs
-  output += `\x1b[${Math.min(termHeight, line + 1)};1H`;
+  // Position cursor back to top-left for logs
+  output += `\x1b[1;1H`;
   
   return output;
 };
