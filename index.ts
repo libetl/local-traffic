@@ -4049,6 +4049,9 @@ const update = async (
 
   // Get the previous config before state is updated
   const previousConfig = currentState.config;
+  
+  // Check if this is an initial startup (no previous server)
+  const isInitialStartup = !currentState.server;
 
   const state: State = currentState as State;
   Object.assign(state, {
@@ -4104,7 +4107,10 @@ const update = async (
   const previousBtopEnabled = previousConfig?.btopDisplay && !previousConfig?.simpleLogs;
   const newBtopEnabled = config?.btopDisplay && !config?.simpleLogs;
   
-  if (previousBtopEnabled !== newBtopEnabled) {
+  // Start btop display if enabled in config (including initial startup)
+  if (isInitialStartup && newBtopEnabled) {
+    startBtopDisplay(state);
+  } else if (previousBtopEnabled !== newBtopEnabled) {
     if (newBtopEnabled) {
       startBtopDisplay(state);
     } else {
