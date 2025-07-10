@@ -111,6 +111,7 @@ interface LocalConfiguration {
   disableWebSecurity?: boolean;
   connectTimeout?: number;
   socketTimeout?: number;
+  btopDisplay?: boolean;
   crossOrigin?: {
     urlPattern?: string;
     whitelist?: string[];
@@ -160,7 +161,189 @@ interface State {
   notifyLogsListeners: (data: Record<string, unknown>) => void;
   buildQuickStatus: () => LogElement[];
   quickStatus: (otherLogElements?: LogElement[][]) => Promise<void>;
+  btopMetrics?: BtopMetrics;
 }
+
+interface BtopMetrics {
+  requestCounts: number[];
+  statusCodes: Map<number, number>;
+  responseTimes: number[];
+  errorCounts: number[];
+  lastUpdateTime: number;
+  totalRequests: number;
+  activeConnections: number;
+}
+
+interface BtopDisplayOptions {
+  width: number;
+  height: number;
+  histogramHeight: number;
+  refreshInterval: number;
+}
+
+const createBtopMetrics = (): BtopMetrics => ({
+  requestCounts: Array(60).fill(0), // Last 60 seconds
+  statusCodes: new Map(),
+  responseTimes: [],
+  errorCounts: Array(60).fill(0),
+  lastUpdateTime: Date.now(),
+  totalRequests: 0,
+  activeConnections: 0,
+});
+
+const updateBtopMetrics = (metrics: BtopMetrics, statusCode: number, responseTime: number) => {
+  const now = Date.now();
+  const secondsElapsed = Math.floor((now - metrics.lastUpdateTime) / 1000);
+  
+  // Shift arrays if time has passed
+  if (secondsElapsed > 0) {
+    for (let i = 0; i < Math.min(secondsElapsed, 60); i++) {
+      metrics.requestCounts.shift();
+      metrics.requestCounts.push(0);
+      metrics.errorCounts.shift();
+      metrics.errorCounts.push(0);
+    }
+    metrics.lastUpdateTime = now;
+  }
+  
+  // Update current second
+  metrics.requestCounts[metrics.requestCounts.length - 1]++;
+  metrics.totalRequests++;
+  
+  // Track status codes
+  metrics.statusCodes.set(statusCode, (metrics.statusCodes.get(statusCode) || 0) + 1);
+  
+  // Track response times (keep last 1000)
+  metrics.responseTimes.push(responseTime);
+  if (metrics.responseTimes.length > 1000) {
+    metrics.responseTimes.shift();
+  }
+  
+  // Track errors (4xx, 5xx)
+  if (statusCode >= 400) {
+    metrics.errorCounts[metrics.errorCounts.length - 1]++;
+  }
+};
+
+const renderBtopDisplay = (state: State): string => {
+  if (!state.btopMetrics) return "";
+  
+  const metrics = state.btopMetrics;
+  const width = Math.min(process.stdout.columns || 80, 120);
+  const height = Math.min(process.stdout.rows || 24, 40);
+  
+  let output = "";
+  
+  // Clear screen and move cursor to top
+  output += "\x1b[2J\x1b[H";
+  
+  // Header
+  output += `\x1b[1m🌐 Local Traffic Dashboard\x1b[0m\n`;
+  output += `\x1b[36mTime: ${new Date().toLocaleTimeString()}\x1b[0m\n\n`;
+  
+  // Statistics
+  const totalReqs = metrics.totalRequests;
+  const currentRPS = metrics.requestCounts[metrics.requestCounts.length - 1];
+  const avgRPS = metrics.requestCounts.reduce((a, b) => a + b, 0) / 60;
+  const errorRate = metrics.errorCounts.reduce((a, b) => a + b, 0) / Math.max(totalReqs, 1) * 100;
+  
+  output += `\x1b[32mTotal Requests:\x1b[0m ${totalReqs.toLocaleString()}\n`;
+  output += `\x1b[33mCurrent RPS:\x1b[0m ${currentRPS}\n`;
+  output += `\x1b[34mAverage RPS:\x1b[0m ${avgRPS.toFixed(2)}\n`;
+  output += `\x1b[31mError Rate:\x1b[0m ${errorRate.toFixed(2)}%\n\n`;
+  
+  // Request Rate Histogram (last 60 seconds)
+  output += `\x1b[1mRequest Rate (RPS) - Last 60 seconds:\x1b[0m\n`;
+  const maxRequests = Math.max(...metrics.requestCounts, 1);
+  const histogramHeight = Math.min(8, height - 15);
+  
+  for (let row = histogramHeight; row > 0; row--) {
+    const threshold = (maxRequests * row) / histogramHeight;
+    output += `${threshold.toFixed(0).padStart(3)} │`;
+    
+    for (let i = 0; i < Math.min(60, width - 10); i++) {
+      const value = metrics.requestCounts[i] || 0;
+      if (value >= threshold) {
+        output += value > avgRPS * 2 ? "\x1b[41m \x1b[0m" : "\x1b[42m \x1b[0m";
+      } else {
+        output += " ";
+      }
+    }
+    output += "\n";
+  }
+  
+  output += "    └";
+  for (let i = 0; i < Math.min(60, width - 10); i++) {
+    output += "─";
+  }
+  output += "\n";
+  
+  // Status Code Distribution
+  output += `\n\x1b[1mStatus Code Distribution:\x1b[0m\n`;
+  const sortedStatusCodes = Array.from(metrics.statusCodes.entries())
+    .sort(([a], [b]) => a - b);
+  
+  for (const [statusCode, count] of sortedStatusCodes.slice(0, 8)) {
+    const percentage = (count / totalReqs * 100).toFixed(1);
+    const color = statusCode < 300 ? "\x1b[32m" : statusCode < 400 ? "\x1b[33m" : "\x1b[31m";
+    output += `${color}${statusCode}\x1b[0m: ${count.toLocaleString()} (${percentage}%)\n`;
+  }
+  
+  // Response Time Stats
+  if (metrics.responseTimes.length > 0) {
+    const sorted = [...metrics.responseTimes].sort((a, b) => a - b);
+    const p50 = sorted[Math.floor(sorted.length * 0.5)];
+    const p95 = sorted[Math.floor(sorted.length * 0.95)];
+    const p99 = sorted[Math.floor(sorted.length * 0.99)];
+    const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length;
+    
+    output += `\n\x1b[1mResponse Times (ms):\x1b[0m\n`;
+    output += `Average: ${avg.toFixed(1)}ms\n`;
+    output += `P50: ${p50}ms  P95: ${p95}ms  P99: ${p99}ms\n`;
+  }
+  
+  output += `\n\x1b[36mPress Ctrl+C to exit dashboard\x1b[0m\n`;
+  
+  return output;
+};
+
+const startBtopDisplay = (state: State) => {
+  if (!state.config.btopDisplay || state.config.simpleLogs) return;
+  
+  // Initialize metrics if not already done
+  if (!state.btopMetrics) {
+    state.btopMetrics = createBtopMetrics();
+  }
+  
+  // Set up terminal for full-screen display
+  process.stdout.write("\x1b[?1049h"); // Enter alternate screen
+  process.stdout.write("\x1b[?25l");   // Hide cursor
+  
+  const refreshDisplay = () => {
+    if (state.config.btopDisplay && !state.config.simpleLogs) {
+      process.stdout.write(renderBtopDisplay(state));
+    }
+  };
+  
+  // Initial render
+  refreshDisplay();
+  
+  // Set up refresh interval
+  const intervalId = setInterval(refreshDisplay, 1000);
+  
+  // Clean up on exit
+  const cleanup = () => {
+    clearInterval(intervalId);
+    process.stdout.write("\x1b[?25h");   // Show cursor
+    process.stdout.write("\x1b[?1049l"); // Exit alternate screen
+  };
+  
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+  process.on('exit', cleanup);
+  
+  return intervalId;
+};
 
 const mainProgram =
   argv
@@ -870,6 +1053,8 @@ const configPage = (
                   ? '{type:"array","items":{"type":"string"}}'
                   : property === "logAccessInTerminal"
                     ? '{"oneOf":[{type:"boolean"},{enum:["with-mapping"]}]}'
+                    : property === "btopDisplay"
+                      ? '{type:"boolean"}'
                     : typeof exampleValue === "number"
                       ? '{type:"integer"}'
                       : typeof exampleValue === "string"
@@ -1948,6 +2133,7 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   connectTimeout: 3000,
   socketTimeout: 3000,
   unwantedHeaderNamesInMocks: [],
+  btopDisplay: false,
   crossOrigin: {
     urlPattern: "${href}",
     whitelist: [],
@@ -3694,6 +3880,15 @@ const serve = async function (
     response,
   });
 
+  // Update btop metrics if enabled
+  if (state.config.btopDisplay && state.btopMetrics) {
+    updateBtopMetrics(
+      state.btopMetrics,
+      statusCode,
+      Math.floor(Number(endTime - startTime) / 1000000)
+    );
+  }
+
   // not using quick status if logAccessInTerminal is enabled
   if (
     autoRecordModeEnabled &&
@@ -3882,6 +4077,12 @@ const update = async (
           ? null
           : state.server,
   });
+  
+  // Start btop display if enabled
+  if (config?.btopDisplay && !config?.simpleLogs && newState?.server === null) {
+    startBtopDisplay(state);
+  }
+  
   return state;
 };
 
