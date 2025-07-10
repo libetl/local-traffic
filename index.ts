@@ -162,6 +162,7 @@ interface State {
   buildQuickStatus: () => LogElement[];
   quickStatus: (otherLogElements?: LogElement[][]) => Promise<void>;
   btopMetrics?: BtopMetrics;
+  btopDisplayInterval?: NodeJS.Timeout;
 }
 
 interface BtopMetrics {
@@ -307,8 +308,22 @@ const renderBtopDisplay = (state: State): string => {
   return output;
 };
 
+const stopBtopDisplay = (state: State) => {
+  if (state.btopDisplayInterval) {
+    clearInterval(state.btopDisplayInterval);
+    state.btopDisplayInterval = undefined;
+  }
+  
+  // Restore terminal
+  process.stdout.write("\x1b[?25h");   // Show cursor
+  process.stdout.write("\x1b[?1049l"); // Exit alternate screen
+};
+
 const startBtopDisplay = (state: State) => {
   if (!state.config.btopDisplay || state.config.simpleLogs) return;
+  
+  // Stop existing display first
+  stopBtopDisplay(state);
   
   // Initialize metrics if not already done
   if (!state.btopMetrics) {
@@ -330,12 +345,11 @@ const startBtopDisplay = (state: State) => {
   
   // Set up refresh interval
   const intervalId = setInterval(refreshDisplay, 1000);
+  state.btopDisplayInterval = intervalId;
   
   // Clean up on exit
   const cleanup = () => {
-    clearInterval(intervalId);
-    process.stdout.write("\x1b[?25h");   // Show cursor
-    process.stdout.write("\x1b[?1049l"); // Exit alternate screen
+    stopBtopDisplay(state);
   };
   
   process.on('SIGINT', cleanup);
@@ -3982,6 +3996,11 @@ const update = async (
   }
 
   if (newState?.server === null && currentState.server) {
+    // Stop btop display when server is stopping
+    if (currentState.btopDisplayInterval) {
+      stopBtopDisplay(currentState as State);
+    }
+    
     const stopped = await Promise.race([
       new Promise(resolve => currentState.server?.close(resolve)).then(
         () => true,
@@ -4027,6 +4046,9 @@ const update = async (
       ? []
       : newState?.logsListeners ?? currentState.logsListeners ?? []
   ).filter(l => !l.stream.errored && !l.stream.closed);
+
+  // Get the previous config before state is updated
+  const previousConfig = currentState.config;
 
   const state: State = currentState as State;
   Object.assign(state, {
@@ -4078,9 +4100,16 @@ const update = async (
           : state.server,
   });
   
-  // Start btop display if enabled
-  if (config?.btopDisplay && !config?.simpleLogs && newState?.server === null) {
-    startBtopDisplay(state);
+  // Handle btop display changes
+  const previousBtopEnabled = previousConfig?.btopDisplay && !previousConfig?.simpleLogs;
+  const newBtopEnabled = config?.btopDisplay && !config?.simpleLogs;
+  
+  if (previousBtopEnabled !== newBtopEnabled) {
+    if (newBtopEnabled) {
+      startBtopDisplay(state);
+    } else {
+      stopBtopDisplay(state);
+    }
   }
   
   return state;
