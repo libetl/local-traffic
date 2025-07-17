@@ -68,6 +68,7 @@ const EMOJIS = Object.assign(...[
   {"LOGS": "📝"},
   {"RESTART": "🔄"},
   {"WEBSOCKET": "☄️ "},
+  {"MONITORING": "📊"},
   {"COLORED": "✨"},
   {"SHIELD": "🛡️ "},
   {"NO": "⛔"},
@@ -111,7 +112,7 @@ interface LocalConfiguration {
   disableWebSecurity?: boolean;
   connectTimeout?: number;
   socketTimeout?: number;
-  btopDisplay?: boolean;
+  monitoringDisplay?: boolean;
   crossOrigin?: {
     urlPattern?: string;
     whitelist?: string[];
@@ -161,11 +162,15 @@ interface State {
   notifyLogsListeners: (data: Record<string, unknown>) => void;
   buildQuickStatus: () => LogElement[];
   quickStatus: (otherLogElements?: LogElement[][]) => Promise<void>;
-  btopMetrics?: BtopMetrics;
-  btopDisplayInterval?: NodeJS.Timeout;
+  monitoring: MonitoringConfig;
 }
 
-interface BtopMetrics {
+interface MonitoringConfig {
+  metrics?: MonitoringMetrics;
+  cleanup: () => {}
+}
+
+interface MonitoringMetrics {
   requestCounts: number[];
   statusCodes: Map<number, number>;
   responseTimes: number[];
@@ -175,14 +180,7 @@ interface BtopMetrics {
   activeConnections: number;
 }
 
-interface BtopDisplayOptions {
-  width: number;
-  height: number;
-  histogramHeight: number;
-  refreshInterval: number;
-}
-
-const createBtopMetrics = (): BtopMetrics => ({
+const createMonitoringMetrics = (): MonitoringMetrics => ({
   requestCounts: Array(60).fill(0), // Last 60 seconds
   statusCodes: new Map(),
   responseTimes: [],
@@ -192,7 +190,7 @@ const createBtopMetrics = (): BtopMetrics => ({
   activeConnections: 0,
 });
 
-const updateBtopMetrics = (metrics: BtopMetrics, statusCode: number, responseTime: number) => {
+const updateMonitoringMetrics = (metrics: MonitoringMetrics, statusCode: number, responseTime: number) => {
   const now = Date.now();
   const secondsElapsed = Math.floor((now - metrics.lastUpdateTime) / 1000);
   
@@ -226,10 +224,7 @@ const updateBtopMetrics = (metrics: BtopMetrics, statusCode: number, responseTim
   }
 };
 
-const renderBtopDisplay = (state: State): string => {
-  if (!state.btopMetrics) return "";
-  
-  const metrics = state.btopMetrics;
+const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {  
   const width = Math.min(process.stdout.columns || 80, 120);
   const height = Math.min(process.stdout.rows || 24, 40);
   
@@ -239,7 +234,7 @@ const renderBtopDisplay = (state: State): string => {
   output += "\x1b[2J\x1b[H";
   
   // Header
-  output += `\x1b[1m🌐 Local Traffic Dashboard\x1b[0m\n`;
+  output += `\x1b[1m${EMOJIS.MONITORING} local-traffic monitoring\x1b[0m\n`;
   output += `\x1b[36mTime: ${new Date().toLocaleTimeString()}\x1b[0m\n\n`;
   
   // Statistics
@@ -249,12 +244,12 @@ const renderBtopDisplay = (state: State): string => {
   const errorRate = metrics.errorCounts.reduce((a, b) => a + b, 0) / Math.max(totalReqs, 1) * 100;
   
   output += `\x1b[32mTotal Requests:\x1b[0m ${totalReqs.toLocaleString()}\n`;
-  output += `\x1b[33mCurrent RPS:\x1b[0m ${currentRPS}\n`;
-  output += `\x1b[34mAverage RPS:\x1b[0m ${avgRPS.toFixed(2)}\n`;
+  output += `\x1b[33mCurrent requests/second:\x1b[0m ${currentRPS}\n`;
+  output += `\x1b[34mAverage requests/second:\x1b[0m ${avgRPS.toFixed(2)}\n`;
   output += `\x1b[31mError Rate:\x1b[0m ${errorRate.toFixed(2)}%\n\n`;
   
   // Request Rate Histogram (last 60 seconds)
-  output += `\x1b[1mRequest Rate (RPS) - Last 60 seconds:\x1b[0m\n`;
+  output += `\x1b[1mRequest Rate - Last 60 seconds:\x1b[0m\n`;
   const maxRequests = Math.max(...metrics.requestCounts, 1);
   const histogramHeight = Math.min(8, height - 15);
   
@@ -308,55 +303,44 @@ const renderBtopDisplay = (state: State): string => {
   return output;
 };
 
-const stopBtopDisplay = (state: State) => {
-  if (state.btopDisplayInterval) {
-    clearInterval(state.btopDisplayInterval);
-    state.btopDisplayInterval = undefined;
+const updateMonitoring = ({ 
+  monitoringDisplay,
+  toggledOff,
+  cleanup, 
+  metricsAccessor }:
+  {
+    monitoringDisplay?: boolean,
+    toggledOff: boolean,
+    cleanup?: () => void,
+    metricsAccessor: () => {metrics: MonitoringMetrics}
+  }): (() => void) | null => {
+  if(toggledOff) {
+    process.stdout.write("\x1b[?25h");
+    process.stdout.write("\x1b[?1049l");
   }
-  
-  // Restore terminal
-  process.stdout.write("\x1b[?25h");   // Show cursor
-  process.stdout.write("\x1b[?1049l"); // Exit alternate screen
-};
-
-const startBtopDisplay = (state: State) => {
-  if (!state.config.btopDisplay || state.config.simpleLogs) return;
-  
-  // Stop existing display first
-  stopBtopDisplay(state);
-  
-  // Initialize metrics if not already done
-  if (!state.btopMetrics) {
-    state.btopMetrics = createBtopMetrics();
+  if (typeof cleanup === "function") {
+    process.off('SIGTERM', cleanup);
+    process.off('exit', cleanup);
+    cleanup();
   }
-  
-  // Set up terminal for full-screen display
-  process.stdout.write("\x1b[?1049h"); // Enter alternate screen
-  process.stdout.write("\x1b[?25l");   // Hide cursor
-  
+  if (!monitoringDisplay) {
+    return null
+  }
   const refreshDisplay = () => {
-    if (state.config.btopDisplay && !state.config.simpleLogs) {
-      process.stdout.write(renderBtopDisplay(state));
-    }
+    if (!monitoringDisplay) return;
+    const metrics = metricsAccessor().metrics;
+    process.stdout.write(renderMonitoringDisplay(metrics));
   };
-  
-  // Initial render
   refreshDisplay();
-  
-  // Set up refresh interval
   const intervalId = setInterval(refreshDisplay, 1000);
-  state.btopDisplayInterval = intervalId;
-  
-  // Clean up on exit
-  const cleanup = () => {
-    stopBtopDisplay(state);
-  };
-  
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
-  process.on('exit', cleanup);
-  
-  return intervalId;
+  const newCleanup = () => {
+    clearInterval(intervalId)
+  }
+  process.stdout.write("\x1b[?1049h");
+  process.stdout.write("\x1b[?25l");
+  process.on('SIGTERM', newCleanup);
+  process.on('exit', newCleanup);
+  return newCleanup;
 };
 
 const mainProgram =
@@ -1067,7 +1051,7 @@ const configPage = (
                   ? '{type:"array","items":{"type":"string"}}'
                   : property === "logAccessInTerminal"
                     ? '{"oneOf":[{type:"boolean"},{enum:["with-mapping"]}]}'
-                    : property === "btopDisplay"
+                    : property === "monitoringDisplay"
                       ? '{type:"boolean"}'
                     : typeof exampleValue === "number"
                       ? '{type:"integer"}'
@@ -2147,7 +2131,7 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   connectTimeout: 3000,
   socketTimeout: 3000,
   unwantedHeaderNamesInMocks: [],
-  btopDisplay: false,
+  monitoringDisplay: false,
   crossOrigin: {
     urlPattern: "${href}",
     whitelist: [],
@@ -2336,6 +2320,12 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
       color: LogLevel.INFO,
     });
   }
+  if (config.monitoringDisplay !== previousConfig.monitoringDisplay) {
+    logElements.push({
+      text: `${EMOJIS.MONITORING} ${config.monitoringDisplay ? 'showing' : 'hidding'} monitoring`,
+      color: LogLevel.INFO,
+    });
+  } 
   if (config.dontUseHttp2Downstream !== previousConfig.dontUseHttp2Downstream) {
     logElements.push({
       text: `${EMOJIS.OUTBOUND} http/2 ${config.dontUseHttp2Downstream ? "de" : ""}activated downstream`,
@@ -3894,10 +3884,10 @@ const serve = async function (
     response,
   });
 
-  // Update btop metrics if enabled
-  if (state.config.btopDisplay && state.btopMetrics) {
-    updateBtopMetrics(
-      state.btopMetrics,
+  // Update monitoring metrics if enabled
+  if (state.config.monitoringDisplay && state.monitoring.metrics) {
+    updateMonitoringMetrics(
+      state.monitoring.metrics,
       statusCode,
       Math.floor(Number(endTime - startTime) / 1000000)
     );
@@ -3996,12 +3986,7 @@ const update = async (
   }
 
   if (newState?.server === null && currentState.server) {
-    // Stop btop display when server is stopping
-    if (currentState.btopDisplayInterval) {
-      stopBtopDisplay(currentState as State);
-    }
-    
-    const stopped = await Promise.race([
+      const stopped = await Promise.race([
       new Promise(resolve => currentState.server?.close(resolve)).then(
         () => true,
       ),
@@ -4030,6 +4015,8 @@ const update = async (
     newState?.mockConfig?.autoRecord ??
     currentState.mockConfig?.autoRecord ??
     false;
+  const monitoringMetrics = newState.monitoring?.metrics ?? currentState.monitoring?.metrics ??
+    createMonitoringMetrics()
   const strict =
     newState?.mockConfig?.strict ?? currentState.mockConfig?.strict ?? false;
   const mocks =
@@ -4047,13 +4034,15 @@ const update = async (
       : newState?.logsListeners ?? currentState.logsListeners ?? []
   ).filter(l => !l.stream.errored && !l.stream.closed);
 
-  // Get the previous config before state is updated
-  const previousConfig = currentState.config;
-  
-  // Check if this is an initial startup (no previous server)
-  const isInitialStartup = !currentState.server;
-
   const state: State = currentState as State;
+  const monitoringCleanup = updateMonitoring({
+    monitoringDisplay: config?.monitoringDisplay ?? false,
+    toggledOff: newState?.config?.monitoringDisplay === false &&
+      currentState?.config?.monitoringDisplay === true,
+    cleanup: currentState.monitoring?.cleanup ?? null,
+    metricsAccessor: () => ({metrics: monitoringMetrics})
+  })
+
   Object.assign(state, {
     config,
     logsListeners,
@@ -4074,6 +4063,10 @@ const update = async (
           })
         : state.configFileWatcher,
     log: log.bind(state, state),
+    monitoring: {
+      metrics: monitoringMetrics,
+      cleanup: monitoringCleanup
+    },
     notifyConfigListeners: notifyConfigListeners.bind(state),
     notifyLogsListeners: notifyLogsListeners.bind(state),
     buildQuickStatus: buildQuickStatus.bind(state),
@@ -4102,22 +4095,6 @@ const update = async (
           ? null
           : state.server,
   });
-  
-  // Handle btop display changes
-  const previousBtopEnabled = previousConfig?.btopDisplay && !previousConfig?.simpleLogs;
-  const newBtopEnabled = config?.btopDisplay && !config?.simpleLogs;
-  
-  // Start btop display if enabled in config (including initial startup)
-  if (isInitialStartup && newBtopEnabled) {
-    startBtopDisplay(state);
-  } else if (previousBtopEnabled !== newBtopEnabled) {
-    if (newBtopEnabled) {
-      startBtopDisplay(state);
-    } else {
-      stopBtopDisplay(state);
-    }
-  }
-  
   return state;
 };
 
