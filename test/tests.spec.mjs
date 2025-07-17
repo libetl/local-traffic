@@ -120,7 +120,7 @@ describe("config load", async () => {
       logAccessInTerminal: false,
       websocket: true,
       unwantedHeaderNamesInMocks: [],
-      btopDisplay: false,
+      monitoringDisplay: false,
       crossOrigin: {
         urlPattern: "${href}",
         whitelist: [],
@@ -156,7 +156,7 @@ describe("config load", async () => {
       simpleLogs: false,
       logAccessInTerminal: false,
       unwantedHeaderNamesInMocks: [],
-      btopDisplay: false,
+      monitoringDisplay: false,
       crossOrigin: {
         urlPattern: "${href}",
         whitelist: [],
@@ -191,7 +191,7 @@ describe("config load", async () => {
       logAccessInTerminal: false,
       websocket: true,
       unwantedHeaderNamesInMocks: [],
-      btopDisplay: false,
+      monitoringDisplay: false,
       crossOrigin: {
         urlPattern: "${href}",
         whitelist: [],
@@ -230,7 +230,7 @@ describe("config load", async () => {
       simpleLogs: false,
       logAccessInTerminal: false,
       unwantedHeaderNamesInMocks: [],
-      btopDisplay: false,
+      monitoringDisplay: false,
       crossOrigin: {
         urlPattern: "${href}",
         whitelist: [],
@@ -290,7 +290,7 @@ describe("config load", async () => {
       logAccessInTerminal: true,
       websocket: false,
       unwantedHeaderNamesInMocks: [],
-      btopDisplay: false,
+      monitoringDisplay: false,
       crossOrigin: {
         urlPattern: "${href}",
         whitelist: [],
@@ -357,7 +357,7 @@ describe("config load", async () => {
       logAccessInTerminal: true,
       websocket: false,
       unwantedHeaderNamesInMocks: [],
-      btopDisplay: false,
+      monitoringDisplay: false,
       crossOrigin: {
         urlPattern: "${href}",
         whitelist: [],
@@ -418,7 +418,7 @@ describe("config load", async () => {
       logAccessInTerminal: true,
       websocket: false,
       unwantedHeaderNamesInMocks: [],
-      btopDisplay: false,
+      monitoringDisplay: false,
       crossOrigin: {
         urlPattern: "${href}",
         whitelist: [],
@@ -479,7 +479,7 @@ describe("config load", async () => {
       logAccessInTerminal: true,
       websocket: false,
       unwantedHeaderNamesInMocks: [],
-      btopDisplay: false,
+      monitoringDisplay: false,
       crossOrigin: {
         urlPattern: "${href}",
         whitelist: [],
@@ -898,7 +898,7 @@ describe("server cruise", async () => {
         connectTimeout: 3,
         socketTimeout: 3,
         unwantedHeaderNamesInMocks: [],
-      btopDisplay: false,
+      monitoringDisplay: false,
         crossOrigin: {
           urlPattern: "${href}",
           whitelist: [],

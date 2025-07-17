@@ -1,18 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-test("btop display configuration", async (t) => {
-  await t.test("should have btopDisplay option in default config", () => {
-    // Test that the btopDisplay option exists and defaults to false
+test("monitoring display configuration", async (t) => {
+  await t.test("should have monitoringDisplay option in default config", () => {
+    // Test that the monitoringDisplay option exists and defaults to false
     const expectedConfig = {
-      btopDisplay: false,
+      monitoringDisplay: false,
       // ... other config options
     };
     
-    assert.equal(expectedConfig.btopDisplay, false);
+    assert.equal(expectedConfig.monitoringDisplay, false);
   });
 
-  await t.test("should validate btop metrics structure", () => {
+  await t.test("should validate monitoring metrics structure", () => {
     // Test that our metrics structure is valid
     const metrics = {
       requestCounts: Array(60).fill(0),
