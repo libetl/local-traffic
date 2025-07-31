@@ -43,6 +43,11 @@ best_practices:
   - Avoid unnecessary abstractions; keep logic straightforward.
   - Use clear comments for any complex logic, especially around mapping and protocol handling.
   - Maintain compatibility with Node.js >=8.
+  - Provide and maintain an automated crash-test mode that can be run on demand to validate the robustness of the server.
+  - Export all critical utility functions (helpers) to ensure testability and ease of maintenance.
+  - Generate detailed, user-friendly HTML error pages that include relevant context to facilitate debugging.
+  - Ensure all embedded web pages (config, logs, mocks, etc.) deliver an interactive and ergonomic user experience, leveraging tools such as JSONEditor or WebSocket synchronization where appropriate.
+  - Guarantee that configuration is always hot-reloaded dynamically, with any changes reflected live without requiring a server restart.
 
 features_to_focus:
   - HTTP/2 and HTTP/1.1 proxying, with optional TLS.
@@ -80,3 +85,14 @@ exclude:
   - Do not bloat the bundle or add unrelated features.
   - Do not split code into multiple files or modules; keep everything in index.ts.
   - Do not export web resources (pages, assets) as separate files. Keep everything in the single file, even if this seems naive.
+  - Do not add native GUI toolkits or desktop application frameworks (such as Electron, Qt, GTK, WPF, or JavaFX). All user interfaces must remain terminal-based or browser-based web UIs (HTML/CSS/JS/Bootstrap).
+  - Do not add dynamic plugin loading, code evaluation, or runtime code execution features (such as eval, new Function, or require-from-string).
+  - Do not implement analytics, telemetry, or any kind of usage tracking in mock mode. Any future telemetry or analytics features must be strictly limited to proxy mode and must be opt-in.
+  - Do not persist any data or logs outside of the specified configuration or mapping files.
+  - Do not add support for cloud-specific APIs or integrations (AWS, GCP, Azure, etc).
+  - Do not implement automatic updates, self-modifying code, or code that changes itself at runtime.
+  - Do not use global variables or assign/mutate any data on global, globalThis, or the global object. All state must be explicit and scoped.
+  - Do not design features that only work via the CLI; all core functionality must be accessible programmatically as a library.
+  - Do not expose or rely on undocumented or internal Node.js APIs.
+  - Do not implement multi-threading, worker threads, or spawn child processes unless strictly required by Node.js core APIs.
+  - Do not add support for running as a system service, Windows service, or background daemon. While local-traffic does not register itself as a service, users are free to adapt and run it in any environment (such as Docker, Kubernetes, Windows services, or via cron jobs) if desired.
