@@ -1,25 +1,29 @@
 # Copilot Instructions for local-traffic
 
-description: |
+## description
+
   local-traffic is a tiny, dependency-free HTTP/2 (or HTTP/1.1) reverse proxy designed to run locally.
   It targets fast startup, minimal footprint, and simple installation. Configuration is via a JSON mapping file (.local-traffic.json)
   that routes URL paths to destinations (URLs, files, data URIs, etc.). The project is implemented in TypeScript, targets Node.js >=8,
   and strictly avoids transitive dependencies.
 
-goals:
+## goals
+
   - Keep the codebase minimal, maintainable, and easy to audit (single file, no dependencies).
   - Ensure proxy logic is robust, secure, and highly performant.
   - Support advanced mapping (regex, interpolation, special protocols).
   - Offer seamless local development for mapping, mocking, and proxying requests.
 
-main_function: |
-  The main function is called serve. Its workflow is strictly chronological and follows a clear phase mechanism:
+## main function
+
+The main function is called serve. Its workflow is strictly chronological and follows a clear phase mechanism:
     1. Mapping phase: Determine the destination from the incoming request using .local-traffic.json.
     2. Connection phase: Establish the appropriate connection to the mapped destination (file, URL, worker, mock, etc.).
     3. Data sending phase: Forward the client request data to the destination.
     4. Data retrieval phase: Retrieve and return the response data to the client.
 
-best_practices:
+## best practices
+
   - The overwhelming majority of features must be implemented using functional programming style. Prefer the use of const, pure functions, and set-theoretic operations (such as map, filter, reduce, etc.) to create new values, rather than relying on imperative algorithms or mutable state. This applies in all cases where imperative vs. functional coding is a draw in terms of performance and clarity.
   - Prefer short exits (early returns) in code to avoid unnecessary nesting of code blocks. If a value is null or a precondition fails, exit the function immediately to keep the rest of the function clean and readable.
   - Never add any external or third-party dependencies; use only Node.js built-in modules.
@@ -49,7 +53,8 @@ best_practices:
   - Ensure all embedded web pages (config, logs, mocks, etc.) deliver an interactive and ergonomic user experience, leveraging tools such as JSONEditor or WebSocket synchronization where appropriate.
   - Guarantee that configuration is always hot-reloaded dynamically, with any changes reflected live without requiring a server restart.
 
-features_to_focus:
+## features to focus
+
   - HTTP/2 and HTTP/1.1 proxying, with optional TLS.
   - Flexible mapping via .local-traffic.json (URL, file, data, config, logs, recorder, worker, mock, etc.).
   - Regex and string interpolation in mapping.
@@ -69,7 +74,8 @@ features_to_focus:
   - unit tests that don't require the network
   - crash-test mode
 
-examples:
+## examples of features to implement
+
   - "Add support for a new mapping protocol (e.g., 'worker://')."
   - "Improve the performance of HTTP/2 stream handling."
   - "Add a utility to validate .local-traffic.json mappings."
@@ -79,7 +85,8 @@ examples:
   - "Add crash-test mode for robustness testing."
   - "Write unit tests that do not require network connectivity."
 
-exclude:
+## exclude
+
   - Do not add third-party dependencies or external modules. Use only Node.js built-ins.
   - Do not use features unavailable in Node.js >=8.
   - Do not bloat the bundle or add unrelated features.
