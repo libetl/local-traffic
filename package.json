@@ -30,9 +30,9 @@
     "test": "node ./test/tests.spec.mjs"
   },
   "devDependencies": {
-    "@types/node": "^24.1.0",
+    "@types/node": "^24.3.0",
     "terser": "^5.43.1",
-    "typescript": "^5.8.3"
+    "typescript": "^5.9.2"
   },
   "bin": {
     "local-traffic": "dist/local-traffic.js"
