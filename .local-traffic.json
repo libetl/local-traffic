@@ -1,0 +1,9 @@
+{
+  "port": 8080,
+  "monitoringDisplay": true,
+  "mapping": {
+    "/test(.*)": "https://httpbin.org/status/200",
+    "/config/": "config://",
+    "/logs/": "logs://"
+  }
+}
