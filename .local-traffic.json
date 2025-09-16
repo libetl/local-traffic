@@ -2,8 +2,10 @@
   "port": 8080,
   "monitoringDisplay": true,
   "mapping": {
-    "/test(.*)": "https://httpbin.org/status/200",
+    "/test(.*)": "data:text/plain;charset=utf-8,Hello Test",
     "/config/": "config://",
-    "/logs/": "logs://"
+    "/logs/": "logs://",
+    "/api/(.*)": "data:application/json,{\"message\":\"API response\"}",
+    "/health": "data:text/plain,OK"
   }
 }

@@ -431,6 +431,20 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
       output += `\x1b[36m${domain.domain.padEnd(25)}\x1b[0m ${domain.requestCount.toString().padStart(4)} reqs (${percentage}%) ${avgResponseTime.toFixed(0)}ms avg\n`;
     }
   }
+
+  // Mapping Usage Analytics
+  const sortedMappings = Array.from(metrics.mappingUsage.entries())
+    .sort(([,a], [,b]) => b - a)
+    .slice(0, 5);
+  
+  if (sortedMappings.length > 0) {
+    output += `\n\x1b[1mTop Mapping Rules:\x1b[0m\n`;
+    for (const [mappingKey, count] of sortedMappings) {
+      const percentage = (count / totalReqs * 100).toFixed(1);
+      const truncatedKey = mappingKey.length > 30 ? mappingKey.substring(0, 27) + '...' : mappingKey;
+      output += `\x1b[35m${truncatedKey.padEnd(30)}\x1b[0m ${count.toString().padStart(4)} reqs (${percentage}%)\n`;
+    }
+  }
   
   // Status Code Distribution
   output += `\n\x1b[1mStatus Code Distribution:\x1b[0m\n`;
