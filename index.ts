@@ -1003,7 +1003,7 @@ id="websocket-disconnected">
               updateDomainStats(url.hostname);
             } catch(e) {
               // Extract domain from path if possible
-              const match = data.upstreamPath.match(/^(?:https?:\/\/)?([^\/]+)/);
+              const match = data.upstreamPath.match(/^(?:https?:\\/\\/)?([^\\/]+)/);
               if (match) updateDomainStats(match[1]);
             }
           }
@@ -1270,7 +1270,7 @@ id="websocket-disconnected">
 
 const analyticsView = () =>
   `<div id="analytics-view" style="display:none; padding: 20px">
-    <h4>📊 Domain Analytics</h4>
+    <h4>&#x1f4ca; Domain Analytics</h4>
     <div class="row">
       <div class="col-md-6">
         <h5>Top Domains</h5>
@@ -1304,15 +1304,15 @@ const analyticsView = () =>
 const networkView = (state: State) => {
   const networkInfo = state.monitoring?.metrics?.networkInterfaces || [];
   return `<div id="network-view" style="display:none; padding: 20px">
-    <h4>🌐 Network Information</h4>
+    <h4>&#x1f310; Network Information</h4>
     <div class="row">
       <div class="col-md-6">
         <h5>Network Interfaces</h5>
         <div class="list-group">
           ${networkInfo.map(iface => {
-            const typeIcon = iface.type === 'ethernet' ? '🔌' : 
-                           iface.type === 'wifi' ? '📡' : 
-                           iface.type === 'loopback' ? '🔄' : '🌐';
+            const typeIcon = iface.type === 'ethernet' ? '&#x1f50c;' : 
+                           iface.type === 'wifi' ? '&#x1f4e1;' : 
+                           iface.type === 'loopback' ? '&#x1f504;' : '&#x1f310;';
             const statusBadge = iface.isActive ? 
               '<span class="badge bg-success">Active</span>' : 
               '<span class="badge bg-secondary">Inactive</span>';
