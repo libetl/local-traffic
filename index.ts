@@ -35,7 +35,7 @@ import * as zlib from "zlib";
 import { resolve, normalize, sep } from "path";
 import { createHash, randomBytes } from "crypto";
 import { argv, cwd, exit, hrtime, stdout, versions } from "process";
-import { homedir, tmpdir } from "os";
+import { homedir, tmpdir, networkInterfaces } from "os";
 import type { Duplex, Readable } from "stream";
 const {
   gzip,
@@ -170,6 +170,27 @@ interface MonitoringConfig {
   cleanup: () => {}
 }
 
+interface NetworkInterfaceInfo {
+  name: string;
+  type: string; // 'ethernet', 'wifi', 'loopback', 'other'
+  addresses: Array<{
+    address: string;
+    family: string;
+    cidr: string;
+    internal: boolean;
+  }>;
+  mac: string;
+  isActive: boolean;
+}
+
+interface DomainStats {
+  domain: string;
+  requestCount: number;
+  responseTimeSum: number;
+  lastSeen: number;
+  statusCodes: Map<number, number>;
+}
+
 interface MonitoringMetrics {
   requestCounts: number[];
   statusCodes: Map<number, number>;
@@ -178,7 +199,45 @@ interface MonitoringMetrics {
   lastUpdateTime: number;
   totalRequests: number;
   activeConnections: number;
+  // Enhanced network metrics
+  networkInterfaces: NetworkInterfaceInfo[];
+  networkLoad: {
+    bytesIn: number[];
+    bytesOut: number[];
+    lastUpdate: number;
+  };
+  domainStats: Map<string, DomainStats>;
+  mappingUsage: Map<string, number>; // Track which mapping rules are used most
 }
+
+const detectNetworkInterfaceType = (name: string, addresses: any[]): string => {
+  if (name.startsWith('lo') || addresses.some(addr => addr.internal)) {
+    return 'loopback';
+  }
+  if (name.startsWith('eth') || name.startsWith('en')) {
+    return 'ethernet';
+  }
+  if (name.startsWith('wl') || name.startsWith('wi') || name.startsWith('wlan')) {
+    return 'wifi';
+  }
+  return 'other';
+};
+
+const getNetworkInterfaceInfo = (): NetworkInterfaceInfo[] => {
+  const interfaces = networkInterfaces();
+  return Object.entries(interfaces).map(([name, addresses]) => ({
+    name,
+    type: detectNetworkInterfaceType(name, addresses || []),
+    addresses: (addresses || []).map(addr => ({
+      address: addr.address,
+      family: addr.family,
+      cidr: addr.cidr || `${addr.address}/${addr.family === 'IPv4' ? '32' : '128'}`,
+      internal: addr.internal,
+    })),
+    mac: addresses?.[0]?.mac || '00:00:00:00:00:00',
+    isActive: !!(addresses?.some(addr => !addr.internal)),
+  }));
+};
 
 const createMonitoringMetrics = (): MonitoringMetrics => ({
   requestCounts: Array(60).fill(0), // Last 60 seconds
@@ -188,9 +247,27 @@ const createMonitoringMetrics = (): MonitoringMetrics => ({
   lastUpdateTime: Date.now(),
   totalRequests: 0,
   activeConnections: 0,
+  networkInterfaces: getNetworkInterfaceInfo(),
+  networkLoad: {
+    bytesIn: Array(60).fill(0),
+    bytesOut: Array(60).fill(0),
+    lastUpdate: Date.now(),
+  },
+  domainStats: new Map(),
+  mappingUsage: new Map(),
 });
 
-const updateMonitoringMetrics = (metrics: MonitoringMetrics, statusCode: number, responseTime: number) => {
+const updateMonitoringMetrics = (
+  metrics: MonitoringMetrics, 
+  statusCode: number, 
+  responseTime: number,
+  options: {
+    domain?: string;
+    mappingKey?: string;
+    requestSize?: number;
+    responseSize?: number;
+  } = {}
+) => {
   const now = Date.now();
   const secondsElapsed = Math.floor((now - metrics.lastUpdateTime) / 1000);
   
@@ -201,6 +278,10 @@ const updateMonitoringMetrics = (metrics: MonitoringMetrics, statusCode: number,
       metrics.requestCounts.push(0);
       metrics.errorCounts.shift();
       metrics.errorCounts.push(0);
+      metrics.networkLoad.bytesIn.shift();
+      metrics.networkLoad.bytesIn.push(0);
+      metrics.networkLoad.bytesOut.shift();
+      metrics.networkLoad.bytesOut.push(0);
     }
     metrics.lastUpdateTime = now;
   }
@@ -221,6 +302,48 @@ const updateMonitoringMetrics = (metrics: MonitoringMetrics, statusCode: number,
   // Track errors (4xx, 5xx)
   if (statusCode >= 400) {
     metrics.errorCounts[metrics.errorCounts.length - 1]++;
+  }
+
+  // Track network load
+  if (options.requestSize) {
+    metrics.networkLoad.bytesIn[metrics.networkLoad.bytesIn.length - 1] += options.requestSize;
+  }
+  if (options.responseSize) {
+    metrics.networkLoad.bytesOut[metrics.networkLoad.bytesOut.length - 1] += options.responseSize;
+  }
+
+  // Track domain statistics
+  if (options.domain) {
+    const domainKey = options.domain.toLowerCase();
+    const existing = metrics.domainStats.get(domainKey);
+    if (existing) {
+      existing.requestCount++;
+      existing.responseTimeSum += responseTime;
+      existing.lastSeen = now;
+      existing.statusCodes.set(statusCode, (existing.statusCodes.get(statusCode) || 0) + 1);
+    } else {
+      metrics.domainStats.set(domainKey, {
+        domain: domainKey,
+        requestCount: 1,
+        responseTimeSum: responseTime,
+        lastSeen: now,
+        statusCodes: new Map([[statusCode, 1]]),
+      });
+    }
+  }
+
+  // Track mapping usage
+  if (options.mappingKey) {
+    metrics.mappingUsage.set(
+      options.mappingKey,
+      (metrics.mappingUsage.get(options.mappingKey) || 0) + 1
+    );
+  }
+
+  // Refresh network interfaces periodically (every 30 seconds)
+  if (now - metrics.networkLoad.lastUpdate > 30000) {
+    metrics.networkInterfaces = getNetworkInterfaceInfo();
+    metrics.networkLoad.lastUpdate = now;
   }
 };
 
@@ -247,11 +370,32 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
   output += `\x1b[33mCurrent requests/second:\x1b[0m ${currentRPS}\n`;
   output += `\x1b[34mAverage requests/second:\x1b[0m ${avgRPS.toFixed(2)}\n`;
   output += `\x1b[31mError Rate:\x1b[0m ${errorRate.toFixed(2)}%\n\n`;
+
+  // Network Interface Information
+  output += `\x1b[1mNetwork Interfaces:\x1b[0m\n`;
+  const activeInterfaces = metrics.networkInterfaces.filter(iface => iface.isActive);
+  for (const iface of activeInterfaces.slice(0, 3)) {
+    const typeColor = iface.type === 'ethernet' ? '\x1b[32m' : 
+                     iface.type === 'wifi' ? '\x1b[34m' : '\x1b[36m';
+    const mainAddress = iface.addresses.find(addr => addr.family === 'IPv4' && !addr.internal) || 
+                       iface.addresses[0];
+    if (mainAddress) {
+      output += `${typeColor}${iface.type.toUpperCase()}\x1b[0m ${iface.name}: ${mainAddress.address} (${mainAddress.cidr})\n`;
+    }
+  }
+  
+  // Network Load
+  const currentBytesIn = metrics.networkLoad.bytesIn[metrics.networkLoad.bytesIn.length - 1];
+  const currentBytesOut = metrics.networkLoad.bytesOut[metrics.networkLoad.bytesOut.length - 1];
+  const totalBytesIn = metrics.networkLoad.bytesIn.reduce((a, b) => a + b, 0);
+  const totalBytesOut = metrics.networkLoad.bytesOut.reduce((a, b) => a + b, 0);
+  
+  output += `\x1b[35mNetwork Load (current/total):\x1b[0m ↓${formatBytes(currentBytesIn)}/${formatBytes(totalBytesIn)} ↑${formatBytes(currentBytesOut)}/${formatBytes(totalBytesOut)}\n\n`;
   
   // Request Rate Histogram (last 60 seconds)
   output += `\x1b[1mRequest Rate - Last 60 seconds:\x1b[0m\n`;
   const maxRequests = Math.max(...metrics.requestCounts, 1);
-  const histogramHeight = Math.min(8, height - 15);
+  const histogramHeight = Math.min(6, height - 25);
   
   for (let row = histogramHeight; row > 0; row--) {
     const threshold = (maxRequests * row) / histogramHeight;
@@ -274,16 +418,45 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
   }
   output += "\n";
   
+  // Top Domains
+  const sortedDomains = Array.from(metrics.domainStats.values())
+    .sort((a, b) => b.requestCount - a.requestCount)
+    .slice(0, 5);
+  
+  if (sortedDomains.length > 0) {
+    output += `\n\x1b[1mTop Domains:\x1b[0m\n`;
+    for (const domain of sortedDomains) {
+      const avgResponseTime = domain.responseTimeSum / domain.requestCount;
+      const percentage = (domain.requestCount / totalReqs * 100).toFixed(1);
+      output += `\x1b[36m${domain.domain.padEnd(25)}\x1b[0m ${domain.requestCount.toString().padStart(4)} reqs (${percentage}%) ${avgResponseTime.toFixed(0)}ms avg\n`;
+    }
+  }
+
+  // Mapping Usage Analytics
+  const sortedMappings = Array.from(metrics.mappingUsage.entries())
+    .sort(([,a], [,b]) => b - a)
+    .slice(0, 5);
+  
+  if (sortedMappings.length > 0) {
+    output += `\n\x1b[1mTop Mapping Rules:\x1b[0m\n`;
+    for (const [mappingKey, count] of sortedMappings) {
+      const percentage = (count / totalReqs * 100).toFixed(1);
+      const truncatedKey = mappingKey.length > 30 ? mappingKey.substring(0, 27) + '...' : mappingKey;
+      output += `\x1b[35m${truncatedKey.padEnd(30)}\x1b[0m ${count.toString().padStart(4)} reqs (${percentage}%)\n`;
+    }
+  }
+  
   // Status Code Distribution
   output += `\n\x1b[1mStatus Code Distribution:\x1b[0m\n`;
   const sortedStatusCodes = Array.from(metrics.statusCodes.entries())
     .sort(([a], [b]) => a - b);
   
-  for (const [statusCode, count] of sortedStatusCodes.slice(0, 8)) {
+  for (const [statusCode, count] of sortedStatusCodes.slice(0, 6)) {
     const percentage = (count / totalReqs * 100).toFixed(1);
     const color = statusCode < 300 ? "\x1b[32m" : statusCode < 400 ? "\x1b[33m" : "\x1b[31m";
-    output += `${color}${statusCode}\x1b[0m: ${count.toLocaleString()} (${percentage}%)\n`;
+    output += `${color}${statusCode}\x1b[0m: ${count.toLocaleString()} (${percentage}%) `;
   }
+  output += "\n";
   
   // Response Time Stats
   if (metrics.responseTimes.length > 0) {
@@ -294,13 +467,20 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
     const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length;
     
     output += `\n\x1b[1mResponse Times (ms):\x1b[0m\n`;
-    output += `Average: ${avg.toFixed(1)}ms\n`;
-    output += `P50: ${p50}ms  P95: ${p95}ms  P99: ${p99}ms\n`;
+    output += `Average: ${avg.toFixed(1)}ms  P50: ${p50}ms  P95: ${p95}ms  P99: ${p99}ms\n`;
   }
   
   output += `\n\x1b[36mPress Ctrl+C to exit dashboard\x1b[0m\n`;
   
   return output;
+};
+
+const formatBytes = (bytes: number): string => {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 };
 
 const updateMonitoring = ({ 
@@ -815,6 +995,21 @@ id="websocket-disconnected">
           if (replayColumn) {
             replayColumn.innerHTML = actions;
           }
+          
+          // Update analytics data
+          if (data.upstreamPath) {
+            try {
+              const url = new URL(data.upstreamPath.startsWith('http') ? data.upstreamPath : 'http://localhost' + data.upstreamPath);
+              updateDomainStats(url.hostname);
+            } catch(e) {
+              // Extract domain from path if possible
+              const match = data.upstreamPath.match(/^(?:https?:\/\/)?([^\/]+)/);
+              if (match) updateDomainStats(match[1]);
+            }
+          }
+          if (data.mappingKey) {
+            updateMappingStats(data.mappingKey);
+          }
         } else if (uniqueHash) {
           addNewRequest(data.randomId, actions, time, data.level, data.protocol, data.method, 
             '<span class="badge bg-secondary">...</span>', '&#x23F1;',
@@ -844,13 +1039,163 @@ id="websocket-disconnected">
         setTimeout(start, 1000);
       };
     };
+    let domainStats = new Map();
+    let mappingStats = new Map();
+    
     function show(id) {
       [...document.querySelectorAll('table')].forEach((table, index) => {
         table.style.display = index === id ? 'block': 'none'
       });
+      [...document.querySelectorAll('[id$="-view"]')].forEach((view, index) => {
+        view.style.display = index === (id - 2) ? 'block': 'none'
+      });
       [...document.querySelectorAll('.navbar-nav .nav-item .nav-link')].forEach((link, index) => {
         if (index === id) { link.classList.add('active') } else link.classList.remove('active');
       });
+      
+      if (id === 2) { // Analytics tab
+        updateAnalytics();
+      } else if (id === 3) { // Network tab
+        updateNetworkCharts();
+      }
+    }
+    
+    function updateDomainStats(domain) {
+      if (!domain || domain === 'unknown') return;
+      const existing = domainStats.get(domain) || { count: 0, responseTimeSum: 0, responseCount: 0, errors: 0 };
+      existing.count++;
+      domainStats.set(domain, existing);
+    }
+    
+    function updateMappingStats(mappingKey) {
+      if (!mappingKey) return;
+      mappingStats.set(mappingKey, (mappingStats.get(mappingKey) || 0) + 1);
+    }
+    
+    function updateAnalytics() {
+      updateDomainsChart();
+      updateMappingChart();
+      updateDomainTable();
+    }
+    
+    function updateDomainsChart() {
+      const canvas = document.getElementById('domainsChart');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      
+      const sortedDomains = Array.from(domainStats.entries())
+        .sort(([,a], [,b]) => b.count - a.count)
+        .slice(0, 10);
+      
+      // Simple bar chart
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const maxCount = Math.max(...sortedDomains.map(([,stats]) => stats.count), 1);
+      const barWidth = canvas.width / Math.max(sortedDomains.length, 1);
+      const barMaxHeight = canvas.height - 40;
+      
+      sortedDomains.forEach(([domain, stats], index) => {
+        const barHeight = (stats.count / maxCount) * barMaxHeight;
+        const x = index * barWidth;
+        const y = canvas.height - barHeight - 20;
+        
+        // Draw bar
+        ctx.fillStyle = \`hsl(\${index * 30}, 70%, 50%)\`;
+        ctx.fillRect(x + 5, y, barWidth - 10, barHeight);
+        
+        // Draw label
+        ctx.fillStyle = '#333';
+        ctx.font = '10px Arial';
+        ctx.save();
+        ctx.translate(x + barWidth/2, canvas.height - 5);
+        ctx.rotate(-Math.PI/4);
+        ctx.textAlign = 'right';
+        ctx.fillText(domain.substring(0, 15), 0, 0);
+        ctx.restore();
+        
+        // Draw count
+        ctx.fillStyle = '#666';
+        ctx.textAlign = 'center';
+        ctx.fillText(stats.count.toString(), x + barWidth/2, y - 5);
+      });
+    }
+    
+    function updateMappingChart() {
+      const canvas = document.getElementById('mappingChart');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      
+      const sortedMappings = Array.from(mappingStats.entries())
+        .sort(([,a], [,b]) => b - a)
+        .slice(0, 8);
+      
+      // Simple bar chart
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const maxCount = Math.max(...sortedMappings.map(([,count]) => count), 1);
+      const barWidth = canvas.width / Math.max(sortedMappings.length, 1);
+      const barMaxHeight = canvas.height - 40;
+      
+      sortedMappings.forEach(([mapping, count], index) => {
+        const barHeight = (count / maxCount) * barMaxHeight;
+        const x = index * barWidth;
+        const y = canvas.height - barHeight - 20;
+        
+        // Draw bar
+        ctx.fillStyle = \`hsl(\${index * 45}, 60%, 45%)\`;
+        ctx.fillRect(x + 5, y, barWidth - 10, barHeight);
+        
+        // Draw label
+        ctx.fillStyle = '#333';
+        ctx.font = '10px Arial';
+        ctx.save();
+        ctx.translate(x + barWidth/2, canvas.height - 5);
+        ctx.rotate(-Math.PI/4);
+        ctx.textAlign = 'right';
+        ctx.fillText(mapping.substring(0, 20), 0, 0);
+        ctx.restore();
+        
+        // Draw count
+        ctx.fillStyle = '#666';
+        ctx.textAlign = 'center';
+        ctx.fillText(count.toString(), x + barWidth/2, y - 5);
+      });
+    }
+    
+    function updateDomainTable() {
+      const tbody = document.getElementById('domainStatsTable');
+      if (!tbody) return;
+      
+      const sortedDomains = Array.from(domainStats.entries())
+        .sort(([,a], [,b]) => b.count - a.count)
+        .slice(0, 20);
+      
+      tbody.innerHTML = sortedDomains.map(([domain, stats]) => {
+        const avgResponseTime = stats.responseCount > 0 ? 
+          Math.round(stats.responseTimeSum / stats.responseCount) : 0;
+        const errorRate = stats.count > 0 ? 
+          Math.round((stats.errors / stats.count) * 100) : 0;
+        
+        return \`<tr>
+          <td>\${domain}</td>
+          <td>\${stats.count}</td>
+          <td>\${avgResponseTime}ms</td>
+          <td>\${errorRate}%</td>
+          <td>Just now</td>
+        </tr>\`;
+      }).join('');
+    }
+    
+    function updateNetworkCharts() {
+      // Simple network load visualization
+      const canvas = document.getElementById('networkLoadChart');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#007bff';
+      ctx.fillRect(10, 10, 100, 20);
+      ctx.fillStyle = '#333';
+      ctx.font = '12px Arial';
+      ctx.fillText('Network Load: Active', 120, 25);
     }
     function remove(event) {
       event.target.closest('tr').remove();
@@ -923,6 +1268,88 @@ id="websocket-disconnected">
     window.addEventListener("DOMContentLoaded", start);
 </script>`;
 
+const analyticsView = () =>
+  `<div id="analytics-view" style="display:none; padding: 20px">
+    <h4>📊 Domain Analytics</h4>
+    <div class="row">
+      <div class="col-md-6">
+        <h5>Top Domains</h5>
+        <canvas id="domainsChart" width="400" height="200"></canvas>
+      </div>
+      <div class="col-md-6">
+        <h5>Mapping Usage</h5>
+        <canvas id="mappingChart" width="400" height="200"></canvas>
+      </div>
+    </div>
+    <div class="row mt-4">
+      <div class="col-12">
+        <h5>Domain Statistics</h5>
+        <table class="table table-striped">
+          <thead>
+            <tr>
+              <th>Domain</th>
+              <th>Requests</th>
+              <th>Avg Response Time</th>
+              <th>Error Rate</th>
+              <th>Last Seen</th>
+            </tr>
+          </thead>
+          <tbody id="domainStatsTable">
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+
+const networkView = (state: State) => {
+  const networkInfo = state.monitoring?.metrics?.networkInterfaces || [];
+  return `<div id="network-view" style="display:none; padding: 20px">
+    <h4>🌐 Network Information</h4>
+    <div class="row">
+      <div class="col-md-6">
+        <h5>Network Interfaces</h5>
+        <div class="list-group">
+          ${networkInfo.map(iface => {
+            const typeIcon = iface.type === 'ethernet' ? '🔌' : 
+                           iface.type === 'wifi' ? '📡' : 
+                           iface.type === 'loopback' ? '🔄' : '🌐';
+            const statusBadge = iface.isActive ? 
+              '<span class="badge bg-success">Active</span>' : 
+              '<span class="badge bg-secondary">Inactive</span>';
+            
+            return `<div class="list-group-item">
+              <div class="d-flex w-100 justify-content-between">
+                <h6 class="mb-1">${typeIcon} ${iface.name} ${statusBadge}</h6>
+                <small class="text-muted">${iface.type}</small>
+              </div>
+              ${iface.addresses.map(addr => 
+                `<p class="mb-1"><strong>${addr.family}:</strong> ${addr.address} (${addr.cidr})</p>`
+              ).join('')}
+              <small class="text-muted">MAC: ${iface.mac}</small>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+      <div class="col-md-6">
+        <h5>Network Load</h5>
+        <canvas id="networkLoadChart" width="400" height="200"></canvas>
+        <div class="mt-3">
+          <div class="card">
+            <div class="card-body">
+              <h6 class="card-title">CIDR Ranges</h6>
+              ${networkInfo.filter(iface => iface.isActive).map(iface => 
+                iface.addresses.filter(addr => !addr.internal).map(addr => 
+                  `<span class="badge bg-info me-1">${addr.cidr}</span>`
+                ).join('')
+              ).join('')}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+};
+
 const logsPage = (
   state: State,
   _,
@@ -938,6 +1365,12 @@ const logsPage = (
       <li class="nav-item">
         <a class="nav-link" href="javascript:show(1)">Proxy</a>
       </li>
+      <li class="nav-item">
+        <a class="nav-link" href="javascript:show(2)">Analytics</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" href="javascript:show(3)">Network</a>
+      </li>
     </ul>
     <span class="navbar-text">
       Limit : <select id="limit" onchange="javascript:cleanup()"><option value="-1">0 (clear)</option><option value="10">10</option>
@@ -950,6 +1383,8 @@ const logsPage = (
 ${logsView(mappingAttributes.proxyHostnameAndPort, state.config, {
   captureResponseBody: false,
 })}
+${analyticsView()}
+${networkView(state)}
 </body></html>`);
 
 const configPage = (
@@ -3882,14 +4317,28 @@ const serve = async function (
     duration: Math.floor(Number(endTime - startTime) / 1000000),
     uniqueHash,
     response,
+    upstreamPath: inboundRequest.url,
+    downstreamPath: target?.href,
+    mappingKey: key,
   });
 
   // Update monitoring metrics if enabled
   if (state.config.monitoringDisplay && state.monitoring.metrics) {
+    const domain = target?.hostname || inboundRequest.headers.host?.split(':')[0] || 'unknown';
+    const requestSize = typeof requestBody === 'string' ? Buffer.byteLength(requestBody) : 
+                       requestBody ? requestBody.length : 0;
+    const responseSize = payload ? payload.length : 0;
+    
     updateMonitoringMetrics(
       state.monitoring.metrics,
       statusCode,
-      Math.floor(Number(endTime - startTime) / 1000000)
+      Math.floor(Number(endTime - startTime) / 1000000),
+      {
+        domain,
+        mappingKey: key,
+        requestSize,
+        responseSize,
+      }
     );
   }
 
