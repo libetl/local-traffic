@@ -2658,7 +2658,7 @@ const send = (
   inboundResponse: Http2ServerResponse | ServerResponse,
   errorBuffer: Buffer,
 ) => {
-  inboundResponse.writeHead(code, {
+  (inboundResponse as Http2ServerResponse).writeHead(code, {
     "content-type": "text/html",
     "content-length": errorBuffer.length,
   });
@@ -3647,9 +3647,10 @@ const serve = async function (
   : outboundResponseHeaders[":status"] ?? 200;
   try {
     if (state.config.ssl) {
-      inboundResponse.writeHead(statusCode, responseHeaders);
+      (inboundResponse as Http2ServerResponse).writeHead(
+        statusCode, responseHeaders);
     } else {
-      inboundResponse.writeHead(
+      (inboundResponse as ServerResponse).writeHead(
         statusCode,
         protocol === "HTTP/2"
           ? ""
