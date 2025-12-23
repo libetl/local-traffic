@@ -208,6 +208,20 @@ interface MonitoringMetrics {
   };
   domainStats: Map<string, DomainStats>;
   mappingUsage: Map<string, number>; // Track which mapping rules are used most
+  // New comprehensive routing and destination tracking
+  routeStats: Map<string, RouteStats>; // Track source -> destination routing
+  protocolStats: Map<string, number>; // Track HTTP vs HTTPS vs other protocols
+  methodStats: Map<string, number>; // Track HTTP methods (GET, POST, etc.)
+  cidrStats: Map<string, number>; // Track requests by CIDR ranges
+}
+
+interface RouteStats {
+  sourceIp: string;
+  destinationHost: string;
+  protocol: string;
+  requestCount: number;
+  totalResponseTime: number;
+  lastAccessed: number;
 }
 
 const detectNetworkInterfaceType = (name: string, addresses: any[]): string => {
@@ -255,6 +269,11 @@ const createMonitoringMetrics = (): MonitoringMetrics => ({
   },
   domainStats: new Map(),
   mappingUsage: new Map(),
+  // Initialize new comprehensive metrics
+  routeStats: new Map(),
+  protocolStats: new Map(),
+  methodStats: new Map(),
+  cidrStats: new Map(),
 });
 
 const updateMonitoringMetrics = (
@@ -266,6 +285,10 @@ const updateMonitoringMetrics = (
     mappingKey?: string;
     requestSize?: number;
     responseSize?: number;
+    sourceIp?: string;
+    protocol?: string;
+    method?: string;
+    targetUrl?: string;
   } = {}
 ) => {
   const now = Date.now();
@@ -340,10 +363,73 @@ const updateMonitoringMetrics = (
     );
   }
 
+  // Track new comprehensive metrics
+  
+  // Track protocol statistics  
+  if (options.protocol) {
+    const protocolKey = options.protocol.toUpperCase();
+    metrics.protocolStats.set(protocolKey, (metrics.protocolStats.get(protocolKey) || 0) + 1);
+  }
+  
+  // Track HTTP method statistics
+  if (options.method) {
+    const methodKey = options.method.toUpperCase();
+    metrics.methodStats.set(methodKey, (metrics.methodStats.get(methodKey) || 0) + 1);
+  }
+  
+  // Track route statistics (source -> destination routing)
+  if (options.sourceIp && options.domain) {
+    const routeKey = `${options.sourceIp} -> ${options.domain}`;
+    const existing = metrics.routeStats.get(routeKey);
+    if (existing) {
+      existing.requestCount++;
+      existing.totalResponseTime += responseTime;
+      existing.lastAccessed = now;
+    } else {
+      metrics.routeStats.set(routeKey, {
+        sourceIp: options.sourceIp,
+        destinationHost: options.domain,
+        protocol: options.protocol || 'HTTP',
+        requestCount: 1,
+        totalResponseTime: responseTime,
+        lastAccessed: now,
+      });
+    }
+  }
+  
+  // Track CIDR ranges (extract network from source IP)
+  if (options.sourceIp) {
+    const cidr = extractCidrFromIp(options.sourceIp);
+    if (cidr) {
+      metrics.cidrStats.set(cidr, (metrics.cidrStats.get(cidr) || 0) + 1);
+    }
+  }
+
   // Refresh network interfaces periodically (every 30 seconds)
   if (now - metrics.networkLoad.lastUpdate > 30000) {
     metrics.networkInterfaces = getNetworkInterfaceInfo();
     metrics.networkLoad.lastUpdate = now;
+  }
+};
+
+// Helper function to extract CIDR network from IP address
+const extractCidrFromIp = (ip: string): string | null => {
+  try {
+    const parts = ip.split('.');
+    if (parts.length === 4) {
+      // For IPv4, create /24 network (class C)
+      return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+    }
+    // For IPv6, create /64 network (simplified)
+    if (ip.includes(':')) {
+      const ipv6Parts = ip.split(':');
+      if (ipv6Parts.length >= 4) {
+        return `${ipv6Parts.slice(0, 4).join(':')}::/64`;
+      }
+    }
+    return null;
+  } catch {
+    return null;
   }
 };
 
@@ -484,6 +570,67 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
     statusLine += `${color}${statusCode}\x1b[0m: ${count.toLocaleString()} (${percentage}%) `;
   }
   output += formatLine(statusLine);
+  
+  // Protocol Distribution
+  if (metrics.protocolStats.size > 0) {
+    output += formatLine("");
+    output += formatLine(`\x1b[1mProtocol Distribution:\x1b[0m`);
+    const sortedProtocols = Array.from(metrics.protocolStats.entries())
+      .sort(([,a], [,b]) => b - a);
+    let protocolLine = "";
+    for (const [protocol, count] of sortedProtocols.slice(0, 4)) {
+      const percentage = (count / totalReqs * 100).toFixed(1);
+      const color = protocol === 'HTTPS' ? '\x1b[32m' : protocol === 'HTTP' ? '\x1b[33m' : '\x1b[36m';
+      protocolLine += `${color}${protocol}\x1b[0m: ${count} (${percentage}%) `;
+    }
+    output += formatLine(protocolLine);
+  }
+  
+  // HTTP Methods Distribution  
+  if (metrics.methodStats.size > 0) {
+    output += formatLine("");
+    output += formatLine(`\x1b[1mHTTP Methods:\x1b[0m`);
+    const sortedMethods = Array.from(metrics.methodStats.entries())
+      .sort(([,a], [,b]) => b - a);
+    let methodLine = "";
+    for (const [method, count] of sortedMethods.slice(0, 6)) {
+      const percentage = (count / totalReqs * 100).toFixed(1);
+      const color = method === 'GET' ? '\x1b[32m' : method === 'POST' ? '\x1b[33m' : '\x1b[36m';
+      methodLine += `${color}${method}\x1b[0m: ${count} (${percentage}%) `;
+    }
+    output += formatLine(methodLine);
+  }
+  
+  // Top Routes (Source -> Destination)
+  const sortedRoutes = Array.from(metrics.routeStats.values())
+    .sort((a, b) => b.requestCount - a.requestCount)
+    .slice(0, 5);
+    
+  if (sortedRoutes.length > 0) {
+    output += formatLine("");
+    output += formatLine(`\x1b[1mTop Routes (Source -> Destination):\x1b[0m`);
+    for (const route of sortedRoutes) {
+      const avgResponseTime = route.totalResponseTime / route.requestCount;
+      const percentage = (route.requestCount / totalReqs * 100).toFixed(1);
+      const truncatedSource = route.sourceIp.length > 15 ? route.sourceIp.substring(0, 12) + '...' : route.sourceIp;
+      const truncatedDest = route.destinationHost.length > 25 ? route.destinationHost.substring(0, 22) + '...' : route.destinationHost;
+      output += formatLine(`\x1b[90m${truncatedSource.padEnd(15)}\x1b[0m → \x1b[36m${truncatedDest.padEnd(25)}\x1b[0m ${route.requestCount.toString().padStart(4)} reqs (${percentage}%) ${avgResponseTime.toFixed(0)}ms avg`);
+    }
+  }
+  
+  // CIDR Ranges Distribution
+  const sortedCidrs = Array.from(metrics.cidrStats.entries())
+    .sort(([,a], [,b]) => b - a)
+    .slice(0, 5);
+    
+  if (sortedCidrs.length > 0) {
+    output += formatLine("");
+    output += formatLine(`\x1b[1mTop CIDR Ranges:\x1b[0m`);
+    for (const [cidr, count] of sortedCidrs) {
+      const percentage = (count / totalReqs * 100).toFixed(1);
+      output += formatLine(`\x1b[34m${cidr.padEnd(18)}\x1b[0m ${count.toString().padStart(4)} reqs (${percentage}%)`);
+    }
+  }
   
   // Response Time Stats
   if (metrics.responseTimes.length > 0) {
@@ -4376,6 +4523,13 @@ const serve = async function (
                        requestBody ? requestBody.length : 0;
     const responseSize = payload ? payload.length : 0;
     
+    // Extract client IP from various possible sources
+    const sourceIp = (inboundRequest as any).socket?.remoteAddress || 
+                     (inboundRequest as any).connection?.remoteAddress ||
+                     inboundRequest.headers['x-forwarded-for']?.toString().split(',')[0]?.trim() ||
+                     inboundRequest.headers['x-real-ip']?.toString() ||
+                     '127.0.0.1';
+    
     updateMonitoringMetrics(
       state.monitoring.metrics,
       statusCode,
@@ -4385,6 +4539,10 @@ const serve = async function (
         mappingKey: key,
         requestSize,
         responseSize,
+        sourceIp,
+        protocol: protocol?.replace(/[\/\d\.]/g, ''),
+        method: inboundRequest.method,
+        targetUrl: target?.href,
       }
     );
   }
