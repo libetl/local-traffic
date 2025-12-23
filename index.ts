@@ -356,9 +356,26 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
   // Clear screen and move cursor to top
   output += "\x1b[2J\x1b[H";
   
-  // Header
-  output += `\x1b[1m${EMOJIS.MONITORING} local-traffic monitoring\x1b[0m\n`;
-  output += `\x1b[36mTime: ${new Date().toLocaleTimeString()}\x1b[0m\n\n`;
+  // Decorative top border
+  const dashboardWidth = Math.min(width - 4, 76);
+  output += `\x1b[36m╔${'═'.repeat(dashboardWidth)}╗\x1b[0m\n`;
+  
+  // Header with border
+  const headerText = `${EMOJIS.MONITORING} local-traffic monitoring`;
+  const timeText = `Time: ${new Date().toLocaleTimeString()}`;
+  const headerPadding = Math.max(0, dashboardWidth - headerText.length);
+  const timePadding = Math.max(0, dashboardWidth - timeText.length);
+  
+  output += `\x1b[36m║\x1b[0m\x1b[1m${headerText}${' '.repeat(headerPadding)}\x1b[0m\x1b[36m║\x1b[0m\n`;
+  output += `\x1b[36m║\x1b[0m\x1b[36m${timeText}${' '.repeat(timePadding)}\x1b[0m\x1b[36m║\x1b[0m\n`;
+  output += `\x1b[36m╠${'═'.repeat(dashboardWidth)}╣\x1b[0m\n`;
+  
+  // Helper function to format content with borders
+  const formatLine = (content: string): string => {
+    const contentLength = content.replace(/\x1b\[[0-9;]*m/g, '').length; // Remove ANSI codes for length calculation
+    const padding = Math.max(0, dashboardWidth - contentLength);
+    return `\x1b[36m║\x1b[0m${content}${' '.repeat(padding)}\x1b[36m║\x1b[0m\n`;
+  };
   
   // Statistics
   const totalReqs = metrics.totalRequests;
@@ -366,13 +383,14 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
   const avgRPS = metrics.requestCounts.reduce((a, b) => a + b, 0) / 60;
   const errorRate = metrics.errorCounts.reduce((a, b) => a + b, 0) / Math.max(totalReqs, 1) * 100;
   
-  output += `\x1b[32mTotal Requests:\x1b[0m ${totalReqs.toLocaleString()}\n`;
-  output += `\x1b[33mCurrent requests/second:\x1b[0m ${currentRPS}\n`;
-  output += `\x1b[34mAverage requests/second:\x1b[0m ${avgRPS.toFixed(2)}\n`;
-  output += `\x1b[31mError Rate:\x1b[0m ${errorRate.toFixed(2)}%\n\n`;
+  output += formatLine(`\x1b[32mTotal Requests:\x1b[0m ${totalReqs.toLocaleString()}`);
+  output += formatLine(`\x1b[33mCurrent requests/second:\x1b[0m ${currentRPS}`);
+  output += formatLine(`\x1b[34mAverage requests/second:\x1b[0m ${avgRPS.toFixed(2)}`);
+  output += formatLine(`\x1b[31mError Rate:\x1b[0m ${errorRate.toFixed(2)}%`);
+  output += formatLine("");
 
   // Network Interface Information
-  output += `\x1b[1mNetwork Interfaces:\x1b[0m\n`;
+  output += formatLine(`\x1b[1mNetwork Interfaces:\x1b[0m`);
   const activeInterfaces = metrics.networkInterfaces.filter(iface => iface.isActive);
   for (const iface of activeInterfaces.slice(0, 3)) {
     const typeColor = iface.type === 'ethernet' ? '\x1b[32m' : 
@@ -380,7 +398,7 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
     const mainAddress = iface.addresses.find(addr => addr.family === 'IPv4' && !addr.internal) || 
                        iface.addresses[0];
     if (mainAddress) {
-      output += `${typeColor}${iface.type.toUpperCase()}\x1b[0m ${iface.name}: ${mainAddress.address} (${mainAddress.cidr})\n`;
+      output += formatLine(`${typeColor}${iface.type.toUpperCase()}\x1b[0m ${iface.name}: ${mainAddress.address} (${mainAddress.cidr})`);
     }
   }
   
@@ -390,33 +408,38 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
   const totalBytesIn = metrics.networkLoad.bytesIn.reduce((a, b) => a + b, 0);
   const totalBytesOut = metrics.networkLoad.bytesOut.reduce((a, b) => a + b, 0);
   
-  output += `\x1b[35mNetwork Load (current/total):\x1b[0m ↓${formatBytes(currentBytesIn)}/${formatBytes(totalBytesIn)} ↑${formatBytes(currentBytesOut)}/${formatBytes(totalBytesOut)}\n\n`;
+  output += formatLine(`\x1b[35mNetwork Load (current/total):\x1b[0m ↓${formatBytes(currentBytesIn)}/${formatBytes(totalBytesIn)} ↑${formatBytes(currentBytesOut)}/${formatBytes(totalBytesOut)}`);
+  output += formatLine("");
   
   // Request Rate Histogram (last 60 seconds)
-  output += `\x1b[1mRequest Rate - Last 60 seconds:\x1b[0m\n`;
+  output += formatLine(`\x1b[1mRequest Rate - Last 60 seconds:\x1b[0m`);
   const maxRequests = Math.max(...metrics.requestCounts, 1);
   const histogramHeight = Math.min(6, height - 25);
+  const chartWidth = Math.min(60, dashboardWidth - 10);
   
   for (let row = histogramHeight; row > 0; row--) {
     const threshold = (maxRequests * row) / histogramHeight;
-    output += `${threshold.toFixed(0).padStart(3)} │`;
+    let histLine = `${threshold.toFixed(0).padStart(3)} │`;
     
-    for (let i = 0; i < Math.min(60, width - 10); i++) {
+    for (let i = 0; i < chartWidth; i++) {
       const value = metrics.requestCounts[i] || 0;
       if (value >= threshold) {
-        output += value > avgRPS * 2 ? "\x1b[41m \x1b[0m" : "\x1b[42m \x1b[0m";
+        // Use different colored block characters for better visibility
+        if (value > avgRPS * 2) {
+          histLine += "\x1b[31m█\x1b[0m"; // Red for high values
+        } else {
+          histLine += "\x1b[32m█\x1b[0m"; // Green for normal values
+        }
       } else {
-        output += " ";
+        histLine += " ";
       }
     }
-    output += "\n";
+    
+    output += formatLine(histLine);
   }
   
-  output += "    └";
-  for (let i = 0; i < Math.min(60, width - 10); i++) {
-    output += "─";
-  }
-  output += "\n";
+  let bottomLine = "    └" + "─".repeat(chartWidth);
+  output += formatLine(bottomLine);
   
   // Top Domains
   const sortedDomains = Array.from(metrics.domainStats.values())
@@ -424,11 +447,12 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
     .slice(0, 5);
   
   if (sortedDomains.length > 0) {
-    output += `\n\x1b[1mTop Domains:\x1b[0m\n`;
+    output += formatLine("");
+    output += formatLine(`\x1b[1mTop Domains:\x1b[0m`);
     for (const domain of sortedDomains) {
       const avgResponseTime = domain.responseTimeSum / domain.requestCount;
       const percentage = (domain.requestCount / totalReqs * 100).toFixed(1);
-      output += `\x1b[36m${domain.domain.padEnd(25)}\x1b[0m ${domain.requestCount.toString().padStart(4)} reqs (${percentage}%) ${avgResponseTime.toFixed(0)}ms avg\n`;
+      output += formatLine(`\x1b[36m${domain.domain.padEnd(25)}\x1b[0m ${domain.requestCount.toString().padStart(4)} reqs (${percentage}%) ${avgResponseTime.toFixed(0)}ms avg`);
     }
   }
 
@@ -438,25 +462,28 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
     .slice(0, 5);
   
   if (sortedMappings.length > 0) {
-    output += `\n\x1b[1mTop Mapping Rules:\x1b[0m\n`;
+    output += formatLine("");
+    output += formatLine(`\x1b[1mTop Mapping Rules:\x1b[0m`);
     for (const [mappingKey, count] of sortedMappings) {
       const percentage = (count / totalReqs * 100).toFixed(1);
       const truncatedKey = mappingKey.length > 30 ? mappingKey.substring(0, 27) + '...' : mappingKey;
-      output += `\x1b[35m${truncatedKey.padEnd(30)}\x1b[0m ${count.toString().padStart(4)} reqs (${percentage}%)\n`;
+      output += formatLine(`\x1b[35m${truncatedKey.padEnd(30)}\x1b[0m ${count.toString().padStart(4)} reqs (${percentage}%)`);
     }
   }
   
   // Status Code Distribution
-  output += `\n\x1b[1mStatus Code Distribution:\x1b[0m\n`;
+  output += formatLine("");
+  output += formatLine(`\x1b[1mStatus Code Distribution:\x1b[0m`);
   const sortedStatusCodes = Array.from(metrics.statusCodes.entries())
     .sort(([a], [b]) => a - b);
   
+  let statusLine = "";
   for (const [statusCode, count] of sortedStatusCodes.slice(0, 6)) {
     const percentage = (count / totalReqs * 100).toFixed(1);
     const color = statusCode < 300 ? "\x1b[32m" : statusCode < 400 ? "\x1b[33m" : "\x1b[31m";
-    output += `${color}${statusCode}\x1b[0m: ${count.toLocaleString()} (${percentage}%) `;
+    statusLine += `${color}${statusCode}\x1b[0m: ${count.toLocaleString()} (${percentage}%) `;
   }
-  output += "\n";
+  output += formatLine(statusLine);
   
   // Response Time Stats
   if (metrics.responseTimes.length > 0) {
@@ -466,11 +493,15 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
     const p99 = sorted[Math.floor(sorted.length * 0.99)];
     const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length;
     
-    output += `\n\x1b[1mResponse Times (ms):\x1b[0m\n`;
-    output += `Average: ${avg.toFixed(1)}ms  P50: ${p50}ms  P95: ${p95}ms  P99: ${p99}ms\n`;
+    output += formatLine("");
+    output += formatLine(`\x1b[1mResponse Times (ms):\x1b[0m`);
+    output += formatLine(`Average: ${avg.toFixed(1)}ms  P50: ${p50}ms  P95: ${p95}ms  P99: ${p99}ms`);
   }
   
-  output += `\n\x1b[36mPress Ctrl+C to exit dashboard\x1b[0m\n`;
+  // Footer and closing border
+  output += formatLine("");
+  output += formatLine(`\x1b[36mPress Ctrl+C to exit dashboard\x1b[0m`);
+  output += `\x1b[36m╚${'═'.repeat(dashboardWidth)}╝\x1b[0m\n`;
   
   return output;
 };
@@ -506,6 +537,10 @@ const updateMonitoring = ({
   if (!monitoringDisplay) {
     return null
   }
+  
+  // Clear screen entirely on startup
+  process.stdout.write("\x1b[2J\x1b[H"); // Clear screen and move cursor to top
+  
   const refreshDisplay = () => {
     if (!monitoringDisplay) return;
     const metrics = metricsAccessor().metrics;
@@ -514,11 +549,22 @@ const updateMonitoring = ({
   refreshDisplay();
   const intervalId = setInterval(refreshDisplay, 1000);
   const newCleanup = () => {
-    clearInterval(intervalId)
-  }
-  process.stdout.write("\x1b[?1049h");
-  process.stdout.write("\x1b[?25l");
-  process.on('SIGTERM', newCleanup);
+    clearInterval(intervalId);
+    // Restore terminal state
+    process.stdout.write("\x1b[?25h"); // Show cursor
+    process.stdout.write("\x1b[?1049l"); // Exit alternate screen
+  };
+  
+  const signalHandler = () => {
+    newCleanup();
+    process.exit(0);
+  };
+  
+  process.stdout.write("\x1b[?1049h"); // Enter alternate screen
+  process.stdout.write("\x1b[?25l"); // Hide cursor
+  
+  process.on('SIGTERM', signalHandler);
+  process.on('SIGINT', signalHandler); // Handle Ctrl+C
   process.on('exit', newCleanup);
   return newCleanup;
 };
