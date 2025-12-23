@@ -417,14 +417,21 @@ const extractCidrFromIp = (ip: string): string | null => {
   try {
     const parts = ip.split('.');
     if (parts.length === 4) {
-      // For IPv4, create /24 network (class C)
-      return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+      // For IPv4, validate each octet is 0-255
+      const validOctets = parts.every(part => {
+        const num = parseInt(part, 10);
+        return !isNaN(num) && num >= 0 && num <= 255;
+      });
+      if (validOctets) {
+        return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+      }
     }
-    // For IPv6, create /64 network (simplified)
-    if (ip.includes(':')) {
-      const ipv6Parts = ip.split(':');
-      if (ipv6Parts.length >= 4) {
-        return `${ipv6Parts.slice(0, 4).join(':')}::/64`;
+    // For IPv6, use simple check and create /64 network
+    if (ip.includes(':') && ip.match(/^[0-9a-fA-F:]+$/)) {
+      // Simple IPv6 validation - just check for valid hex characters and colons
+      const segments = ip.split(':').filter(s => s !== '');
+      if (segments.length >= 2) {
+        return `${segments.slice(0, 4).join(':')}::/64`;
       }
     }
     return null;
@@ -456,9 +463,10 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
   output += `\x1b[36m║\x1b[0m\x1b[36m${timeText}${' '.repeat(timePadding)}\x1b[0m\x1b[36m║\x1b[0m\n`;
   output += `\x1b[36m╠${'═'.repeat(dashboardWidth)}╣\x1b[0m\n`;
   
-  // Helper function to format content with borders
+  // Helper function to format content with borders (cache regex for performance)
+  const ansiRegex = /\x1b\[[0-9;]*m/g;
   const formatLine = (content: string): string => {
-    const contentLength = content.replace(/\x1b\[[0-9;]*m/g, '').length; // Remove ANSI codes for length calculation
+    const contentLength = content.replace(ansiRegex, '').length; // Remove ANSI codes for length calculation
     const padding = Math.max(0, dashboardWidth - contentLength);
     return `\x1b[36m║\x1b[0m${content}${' '.repeat(padding)}\x1b[36m║\x1b[0m\n`;
   };
@@ -713,6 +721,7 @@ const updateMonitoring = ({
   }
   if (typeof cleanup === "function") {
     process.off('SIGTERM', cleanup);
+    process.off('SIGINT', cleanup);  
     process.off('exit', cleanup);
     cleanup();
   }
@@ -4575,7 +4584,7 @@ const serve = async function (
         requestSize,
         responseSize,
         sourceIp,
-        protocol: protocol?.replace(/[\/\d\.]/g, ''),
+        protocol: protocol?.replace(/[\/\.]/g, ''), // Remove slashes and dots from protocol names
         method: inboundRequest.method,
         targetUrl: target?.href,
       }
