@@ -34,9 +34,11 @@ import {
 import * as zlib from "zlib";
 import { resolve, normalize, sep } from "path";
 import { createHash, randomBytes } from "crypto";
-import { argv, cwd, exit, hrtime, stdout, versions } from "process";
+import { argv, cwd, exit, hrtime, stdin, stdout, versions } from "process";
 import { homedir, tmpdir, networkInterfaces } from "os";
 import type { Duplex, Readable } from "stream";
+import { emitKeypressEvents } from 'readline';
+
 const {
   gzip,
   gunzip,
@@ -154,6 +156,7 @@ interface State {
   server: Server | null;
   logsListeners: WebsocketLogsListener[];
   configListeners: WebsocketLogsListener[];
+  keypressListener: (...args: any[]) => void;
   configFileWatcher: StatWatcher | null;
   mode: ServerMode;
   mockConfig: MockConfig;
@@ -690,7 +693,7 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
   
   // Footer and closing border
   output += formatLine("");
-  output += formatLine(`\x1b[36mPress Ctrl+C to exit dashboard\x1b[0m`);
+  output += formatLine(`\x1b[36mPress <Tab> to switch to event logs\x1b[0m`);
   output += `\x1b[36m╚${'═'.repeat(dashboardWidth)}╝\x1b[0m\n`;
   
   return output;
@@ -729,8 +732,10 @@ const updateMonitoring = ({
     return null
   }
   
+  if (monitoringDisplay) {
   // Clear screen entirely on startup
-  process.stdout.write("\x1b[2J\x1b[H"); // Clear screen and move cursor to top
+    process.stdout.write("\x1b[2J\x1b[H"); // Clear screen and move cursor to top
+  }
   
   const refreshDisplay = () => {
     if (!monitoringDisplay) return;
@@ -4683,6 +4688,17 @@ const update = async (
     );
   }
 
+  if (!newState.keypressListener && 
+    !currentState.keypressListener &&
+    stdin.isTTY
+  ) {
+    stdin.setRawMode(true);
+  }
+  if (!newState.keypressListener && 
+    !currentState.keypressListener) {
+    emitKeypressEvents(process.stdin);
+  }
+
   if (newState?.server === null && currentState.server) {
       const stopped = await Promise.race([
       new Promise(resolve => currentState.server?.close(resolve)).then(
@@ -4731,6 +4747,21 @@ const update = async (
       ? []
       : newState?.logsListeners ?? currentState.logsListeners ?? []
   ).filter(l => !l.stream.errored && !l.stream.closed);
+  const previousKeypressListener =
+  newState.keypressListener ?? currentState.keypressListener
+  if (previousKeypressListener) stdin.off("keypress", previousKeypressListener);
+  const keypressListener =
+    function(this: State, str: any, key: any) {
+      if (key.name === 'tab') 
+        update(this, 
+          { config: { ...this.config, 
+            monitoringDisplay: !this.config.monitoringDisplay }})
+      else if (key.ctrl && key.name === 'c') {
+        stdin.off("keypress", keypressListener)
+        process.exit();
+      }
+    }.bind(currentState)
+  stdin.on("keypress", keypressListener)
 
   const state: State = currentState as State;
   const monitoringCleanup = updateMonitoring({
@@ -4769,6 +4800,7 @@ const update = async (
     notifyLogsListeners: notifyLogsListeners.bind(state),
     buildQuickStatus: buildQuickStatus.bind(state),
     quickStatus: quickStatus.bind(state),
+    keypressListener,
     server:
       newState?.server === null && !((newState?.config?.port ?? 0) < 0)
         ? (

@@ -110,7 +110,12 @@ export const stdout = {
   },
   write: () => {},
 };
-
+export const stdin = {
+  isTTY: true,
+  off: () => {},
+  on: () => {},
+  setRawMode: () => {}
+};
 let interval = null;
 export const watchFile = mock.fn((filename, callback) => {
   watchFileCallbacks.unshift(callback);
