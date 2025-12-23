@@ -499,22 +499,30 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
   
   // Request Rate Histogram (last 60 seconds)
   output += formatLine(`\x1b[1mRequest Rate - Last 60 seconds:\x1b[0m`);
-  const maxRequests = Math.max(...metrics.requestCounts, 1);
+  
+  // Ensure we have the most recent data (reverse to show latest on right)
+  const recentCounts = [...metrics.requestCounts].reverse();
+  const maxRequests = Math.max(...recentCounts, 1);
   const histogramHeight = Math.min(6, height - 25);
   const chartWidth = Math.min(60, dashboardWidth - 10);
+  
+  // Better thresholds for color coding
+  const highThreshold = Math.max(avgRPS * 1.5, maxRequests * 0.7);
   
   for (let row = histogramHeight; row > 0; row--) {
     const threshold = (maxRequests * row) / histogramHeight;
     let histLine = `${threshold.toFixed(0).padStart(3)} │`;
     
-    for (let i = 0; i < chartWidth; i++) {
-      const value = metrics.requestCounts[i] || 0;
+    for (let i = 0; i < chartWidth && i < recentCounts.length; i++) {
+      const value = recentCounts[i] || 0;
       if (value >= threshold) {
-        // Use different colored block characters for better visibility
-        if (value > avgRPS * 2) {
-          histLine += "\x1b[31m█\x1b[0m"; // Red for high values
+        // Better color logic with more nuanced thresholds
+        if (value >= highThreshold) {
+          histLine += "\x1b[31m█\x1b[0m"; // Red for high values  
+        } else if (value >= avgRPS) {
+          histLine += "\x1b[33m█\x1b[0m"; // Yellow for medium values
         } else {
-          histLine += "\x1b[32m█\x1b[0m"; // Green for normal values
+          histLine += "\x1b[32m█\x1b[0m"; // Green for low values
         }
       } else {
         histLine += " ";
@@ -524,8 +532,35 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
     output += formatLine(histLine);
   }
   
-  let bottomLine = "    └" + "─".repeat(chartWidth);
+  let bottomLine = "    └" + "─".repeat(Math.min(chartWidth, recentCounts.length));
   output += formatLine(bottomLine);
+  
+  // Domain Distribution Histogram
+  const sortedDomainsForHist = Array.from(metrics.domainStats.values())
+    .sort((a, b) => b.requestCount - a.requestCount)
+    .slice(0, 8);
+    
+  if (sortedDomainsForHist.length > 1) {
+    output += formatLine("");
+    output += formatLine(`\x1b[1mDomain Distribution:\x1b[0m`);
+    
+    const maxDomainRequests = Math.max(...sortedDomainsForHist.map(d => d.requestCount), 1);
+    const domainHistHeight = Math.min(4, sortedDomainsForHist.length);
+    
+    for (const domain of sortedDomainsForHist.slice(0, domainHistHeight)) {
+      const domainName = domain.domain.length > 20 ? domain.domain.substring(0, 17) + '...' : domain.domain;
+      const barLength = Math.floor((domain.requestCount / maxDomainRequests) * (chartWidth - 25));
+      const percentage = (domain.requestCount / totalReqs * 100).toFixed(1);
+      
+      let domainLine = `${domainName.padEnd(20)} │`;
+      for (let i = 0; i < barLength; i++) {
+        domainLine += "\x1b[36m█\x1b[0m";
+      }
+      domainLine += ` ${domain.requestCount} (${percentage}%)`;
+      
+      output += formatLine(domainLine);
+    }
+  }
   
   // Top Domains
   const sortedDomains = Array.from(metrics.domainStats.values())
