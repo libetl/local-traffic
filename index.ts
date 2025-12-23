@@ -4749,7 +4749,8 @@ const update = async (
   ).filter(l => !l.stream.errored && !l.stream.closed);
   const previousKeypressListener =
   newState.keypressListener ?? currentState.keypressListener
-  if (previousKeypressListener) stdin.off("keypress", previousKeypressListener);
+  // off and on are not defined on node@8
+  if (previousKeypressListener) stdin.off?.("keypress", previousKeypressListener);
   const keypressListener =
     function(this: State, str: any, key: any) {
       if (key.name === 'tab') 
@@ -4757,11 +4758,11 @@ const update = async (
           { config: { ...this.config, 
             monitoringDisplay: !this.config.monitoringDisplay }})
       else if (key.ctrl && key.name === 'c') {
-        stdin.off("keypress", keypressListener)
+        stdin.off?.("keypress", keypressListener)
         process.exit();
       }
     }.bind(currentState)
-  stdin.on("keypress", keypressListener)
+  stdin.on?.("keypress", keypressListener)
 
   const state: State = currentState as State;
   const monitoringCleanup = updateMonitoring({
