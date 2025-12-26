@@ -2512,6 +2512,8 @@ const filePage = (
                     ? "image/svg+xml"
                     : file.endsWith(".js") || file.endsWith(".jsx")
                     ? "application/javascript"
+                    : file.endsWith(".json")
+                    ? "application/json"
                     : file.endsWith(".css")
                     ? "text/css"
                     : "text/plain"]
