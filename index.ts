@@ -114,13 +114,28 @@ interface LocalConfiguration {
   disableWebSecurity?: boolean;
   connectTimeout?: number;
   socketTimeout?: number;
-  monitoringDisplay?: boolean;
+  monitoringDisplay?: {
+    active?: boolean;
+  } & Partial<ActivatedMonitoringFeatures>;
   crossOrigin?: {
     urlPattern?: string;
     whitelist?: string[];
     credentials?: string[];
     serverSide?: boolean;
   }
+}
+
+type ActivatedMonitoringFeatures = {
+    counter: boolean;
+    networkInterfaces: boolean;
+    requestRateHistogram: boolean;
+    topDomains: boolean;
+    topMappings: boolean;
+    statusCodes: boolean;
+    protocols: boolean;
+    httpMethods: boolean;
+    topRoutes: boolean;
+    responseTimes: boolean;
 }
 
 type Mapping = {
@@ -443,29 +458,30 @@ const extractCidrFromIp = (ip: string): string | null => {
   }
 };
 
-const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {  
-  const width = Math.min(process.stdout.columns || 80, 120);
-  const height = Math.min(process.stdout.rows || 24, 40);
-  
+const renderMonitoringDisplay = (metrics: MonitoringMetrics,
+  features: ActivatedMonitoringFeatures): string => {
+  const width = Math.min(stdout.columns || 80, 120);
+  const height = Math.min(stdout.rows || 24, 40);
+
   let output = "";
-  
+
   // Clear screen and move cursor to top
   output += "\x1b[2J\x1b[H";
-  
+
   // Decorative top border
   const dashboardWidth = Math.min(width - 4, 76);
   output += `\x1b[36m╔${'═'.repeat(dashboardWidth)}╗\x1b[0m\n`;
-  
+
   // Header with border
   const headerText = `${EMOJIS.MONITORING} local-traffic monitoring`;
   const timeText = `Time: ${new Date().toLocaleTimeString()}`;
   const headerPadding = Math.max(0, dashboardWidth - headerText.length);
   const timePadding = Math.max(0, dashboardWidth - timeText.length);
-  
+
   output += `\x1b[36m║\x1b[0m\x1b[1m${headerText}${' '.repeat(headerPadding)}\x1b[0m\x1b[36m║\x1b[0m\n`;
   output += `\x1b[36m║\x1b[0m\x1b[36m${timeText}${' '.repeat(timePadding)}\x1b[0m\x1b[36m║\x1b[0m\n`;
   output += `\x1b[36m╠${'═'.repeat(dashboardWidth)}╣\x1b[0m\n`;
-  
+
   // Helper function to format content with borders (cache regex for performance)
   const ansiRegex = /\x1b\[[0-9;]*m/g;
   const formatLine = (content: string): string => {
@@ -473,229 +489,251 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics): string => {
     const padding = Math.max(0, dashboardWidth - contentLength);
     return `\x1b[36m║\x1b[0m${content}${' '.repeat(padding)}\x1b[36m║\x1b[0m\n`;
   };
-  
+
   // Statistics
   const totalReqs = metrics.totalRequests;
   const currentRPS = metrics.requestCounts[metrics.requestCounts.length - 1];
   const avgRPS = metrics.requestCounts.reduce((a, b) => a + b, 0) / 60;
   const errorRate = metrics.errorCounts.reduce((a, b) => a + b, 0) / Math.max(totalReqs, 1) * 100;
-  
-  output += formatLine(`\x1b[32mTotal Requests:\x1b[0m ${totalReqs.toLocaleString()}`);
-  output += formatLine(`\x1b[33mCurrent requests/second:\x1b[0m ${currentRPS}`);
-  output += formatLine(`\x1b[34mAverage requests/second:\x1b[0m ${avgRPS.toFixed(2)}`);
-  output += formatLine(`\x1b[31mError Rate:\x1b[0m ${errorRate.toFixed(2)}%`);
-  output += formatLine("");
 
-  // Network Interface Information
-  output += formatLine(`\x1b[1mNetwork Interfaces:\x1b[0m`);
-  const activeInterfaces = metrics.networkInterfaces.filter(iface => iface.isActive);
-  for (const iface of activeInterfaces.slice(0, 3)) {
-    const typeColor = iface.type === 'ethernet' ? '\x1b[32m' : 
-                     iface.type === 'wifi' ? '\x1b[34m' : '\x1b[36m';
-    const mainAddress = iface.addresses.find(addr => addr.family === 'IPv4' && !addr.internal) || 
-                       iface.addresses[0];
-    if (mainAddress) {
-      output += formatLine(`${typeColor}${iface.type.toUpperCase()}\x1b[0m ${iface.name}: ${mainAddress.address} (${mainAddress.cidr})`);
-    }
+  if (features.counter) {
+    output += formatLine(`\x1b[32mTotal Requests:\x1b[0m ${totalReqs.toLocaleString()}`);
+    output += formatLine(`\x1b[33mCurrent requests/second:\x1b[0m ${currentRPS}`);
+    output += formatLine(`\x1b[34mAverage requests/second:\x1b[0m ${avgRPS.toFixed(2)}`);
+    output += formatLine(`\x1b[31mError Rate:\x1b[0m ${errorRate.toFixed(2)}%`);
+    output += formatLine("");
   }
-  
-  // Network Load
-  const currentBytesIn = metrics.networkLoad.bytesIn[metrics.networkLoad.bytesIn.length - 1];
-  const currentBytesOut = metrics.networkLoad.bytesOut[metrics.networkLoad.bytesOut.length - 1];
-  const totalBytesIn = metrics.networkLoad.bytesIn.reduce((a, b) => a + b, 0);
-  const totalBytesOut = metrics.networkLoad.bytesOut.reduce((a, b) => a + b, 0);
-  
-  output += formatLine(`\x1b[35mNetwork Load (current/total):\x1b[0m ↓${formatBytes(currentBytesIn)}/${formatBytes(totalBytesIn)} ↑${formatBytes(currentBytesOut)}/${formatBytes(totalBytesOut)}`);
-  output += formatLine("");
-  
-  // Request Rate Histogram (last 60 seconds)
-  output += formatLine(`\x1b[1mRequest Rate - Last 60 seconds:\x1b[0m`);
-  
-  // Ensure we have the most recent data (reverse to show latest on right)
-  const recentCounts = [...metrics.requestCounts].reverse();
-  const maxRequests = Math.max(...recentCounts, 1);
-  const histogramHeight = Math.min(6, height - 25);
+
+  if (features.networkInterfaces) {
+    // Network Interface Information
+    output += formatLine(`\x1b[1mNetwork Interfaces:\x1b[0m`);
+    const activeInterfaces = metrics.networkInterfaces.filter(iface => iface.isActive);
+    for (const iface of activeInterfaces.slice(0, 3)) {
+      const typeColor = iface.type === 'ethernet' ? '\x1b[32m' :
+        iface.type === 'wifi' ? '\x1b[34m' : '\x1b[36m';
+      const mainAddress = iface.addresses.find(addr => addr.family === 'IPv4' && !addr.internal) ||
+        iface.addresses[0];
+      if (mainAddress) {
+        output += formatLine(`${typeColor}${iface.type.toUpperCase()}\x1b[0m ${iface.name}: ${mainAddress.address} (${mainAddress.cidr})`);
+      }
+    }
+
+    // Network Load
+    const currentBytesIn = metrics.networkLoad.bytesIn[metrics.networkLoad.bytesIn.length - 1];
+    const currentBytesOut = metrics.networkLoad.bytesOut[metrics.networkLoad.bytesOut.length - 1];
+    const totalBytesIn = metrics.networkLoad.bytesIn.reduce((a, b) => a + b, 0);
+    const totalBytesOut = metrics.networkLoad.bytesOut.reduce((a, b) => a + b, 0);
+
+    output += formatLine(`\x1b[35mNetwork Load (current/total):\x1b[0m ↓${formatBytes(currentBytesIn)}/${formatBytes(totalBytesIn)} ↑${formatBytes(currentBytesOut)}/${formatBytes(totalBytesOut)}`);
+    output += formatLine("");
+  }
+
   const chartWidth = Math.min(60, dashboardWidth - 10);
-  
-  // Better thresholds for color coding
-  const highThreshold = Math.max(avgRPS * 1.5, maxRequests * 0.7);
-  
-  for (let row = histogramHeight; row > 0; row--) {
-    const threshold = (maxRequests * row) / histogramHeight;
-    let histLine = `${threshold.toFixed(0).padStart(3)} │`;
-    
-    for (let i = 0; i < chartWidth && i < recentCounts.length; i++) {
-      const value = recentCounts[i] || 0;
-      if (value >= threshold) {
-        // Better color logic with more nuanced thresholds
-        if (value >= highThreshold) {
-          histLine += "\x1b[31m█\x1b[0m"; // Red for high values  
-        } else if (value >= avgRPS) {
-          histLine += "\x1b[33m█\x1b[0m"; // Yellow for medium values
+  if (features.requestRateHistogram) {
+
+    // Request Rate Histogram (last 60 seconds)
+    output += formatLine(`\x1b[1mRequest Rate - Last 60 seconds:\x1b[0m`);
+
+    // Ensure we have the most recent data (reverse to show latest on right)
+    const recentCounts = [...metrics.requestCounts].reverse();
+    const maxRequests = Math.max(...recentCounts, 1);
+    const histogramHeight = Math.min(6, height - 25);
+
+    // Better thresholds for color coding
+    const highThreshold = Math.max(avgRPS * 1.5, maxRequests * 0.7);
+
+    for (let row = histogramHeight; row > 0; row--) {
+      const threshold = (maxRequests * row) / histogramHeight;
+      let histLine = `${threshold.toFixed(0).padStart(3)} │`;
+
+      for (let i = 0; i < chartWidth && i < recentCounts.length; i++) {
+        const value = recentCounts[i] || 0;
+        if (value >= threshold) {
+          // Better color logic with more nuanced thresholds
+          if (value >= highThreshold) {
+            histLine += "\x1b[31m█\x1b[0m"; // Red for high values  
+          } else if (value >= avgRPS) {
+            histLine += "\x1b[33m█\x1b[0m"; // Yellow for medium values
+          } else {
+            histLine += "\x1b[32m█\x1b[0m"; // Green for low values
+          }
         } else {
-          histLine += "\x1b[32m█\x1b[0m"; // Green for low values
+          histLine += " ";
         }
-      } else {
-        histLine += " ";
+      }
+
+      output += formatLine(histLine);
+    }
+
+    let bottomLine = "    └" + "─".repeat(Math.min(chartWidth, recentCounts.length));
+    output += formatLine(bottomLine);
+  }
+
+  if (features.topDomains) {
+    // Domain Distribution Histogram
+    const sortedDomainsForHist = Array.from(metrics.domainStats.values())
+      .sort((a, b) => b.requestCount - a.requestCount)
+      .slice(0, 8);
+
+    if (sortedDomainsForHist.length > 1) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mDomain Distribution:\x1b[0m`);
+
+      const maxDomainRequests = Math.max(...sortedDomainsForHist.map(d => d.requestCount), 1);
+      const domainHistHeight = Math.min(4, sortedDomainsForHist.length);
+
+      for (const domain of sortedDomainsForHist.slice(0, domainHistHeight)) {
+        const domainName = domain.domain.length > 20 ? domain.domain.substring(0, 17) + '...' : domain.domain;
+        const barLength = Math.floor((domain.requestCount / maxDomainRequests) * (chartWidth - 25));
+        const percentage = (domain.requestCount / totalReqs * 100).toFixed(1);
+
+        let domainLine = `${domainName.padEnd(20)} │`;
+        for (let i = 0; i < barLength; i++) {
+          domainLine += "\x1b[36m█\x1b[0m";
+        }
+        domainLine += ` ${domain.requestCount} (${percentage}%)`;
+
+        output += formatLine(domainLine);
       }
     }
-    
-    output += formatLine(histLine);
-  }
-  
-  let bottomLine = "    └" + "─".repeat(Math.min(chartWidth, recentCounts.length));
-  output += formatLine(bottomLine);
-  
-  // Domain Distribution Histogram
-  const sortedDomainsForHist = Array.from(metrics.domainStats.values())
-    .sort((a, b) => b.requestCount - a.requestCount)
-    .slice(0, 8);
-    
-  if (sortedDomainsForHist.length > 1) {
-    output += formatLine("");
-    output += formatLine(`\x1b[1mDomain Distribution:\x1b[0m`);
-    
-    const maxDomainRequests = Math.max(...sortedDomainsForHist.map(d => d.requestCount), 1);
-    const domainHistHeight = Math.min(4, sortedDomainsForHist.length);
-    
-    for (const domain of sortedDomainsForHist.slice(0, domainHistHeight)) {
-      const domainName = domain.domain.length > 20 ? domain.domain.substring(0, 17) + '...' : domain.domain;
-      const barLength = Math.floor((domain.requestCount / maxDomainRequests) * (chartWidth - 25));
-      const percentage = (domain.requestCount / totalReqs * 100).toFixed(1);
-      
-      let domainLine = `${domainName.padEnd(20)} │`;
-      for (let i = 0; i < barLength; i++) {
-        domainLine += "\x1b[36m█\x1b[0m";
+
+    // Top Domains
+    const sortedDomains = Array.from(metrics.domainStats.values())
+      .sort((a, b) => b.requestCount - a.requestCount)
+      .slice(0, 5);
+
+    if (sortedDomains.length > 0) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mTop Domains:\x1b[0m`);
+      for (const domain of sortedDomains) {
+        const avgResponseTime = domain.responseTimeSum / domain.requestCount;
+        const percentage = (domain.requestCount / totalReqs * 100).toFixed(1);
+        output += formatLine(`\x1b[36m${domain.domain.padEnd(25)}\x1b[0m ${domain.requestCount.toString().padStart(4)} reqs (${percentage}%) ${avgResponseTime.toFixed(0)}ms avg`);
       }
-      domainLine += ` ${domain.requestCount} (${percentage}%)`;
-      
-      output += formatLine(domainLine);
-    }
-  }
-  
-  // Top Domains
-  const sortedDomains = Array.from(metrics.domainStats.values())
-    .sort((a, b) => b.requestCount - a.requestCount)
-    .slice(0, 5);
-  
-  if (sortedDomains.length > 0) {
-    output += formatLine("");
-    output += formatLine(`\x1b[1mTop Domains:\x1b[0m`);
-    for (const domain of sortedDomains) {
-      const avgResponseTime = domain.responseTimeSum / domain.requestCount;
-      const percentage = (domain.requestCount / totalReqs * 100).toFixed(1);
-      output += formatLine(`\x1b[36m${domain.domain.padEnd(25)}\x1b[0m ${domain.requestCount.toString().padStart(4)} reqs (${percentage}%) ${avgResponseTime.toFixed(0)}ms avg`);
     }
   }
 
-  // Mapping Usage Analytics
-  const sortedMappings = Array.from(metrics.mappingUsage.entries())
-    .sort(([,a], [,b]) => b - a)
-    .slice(0, 5);
-  
-  if (sortedMappings.length > 0) {
+  if (features.topMappings) {
+    // Mapping Usage Analytics
+    const sortedMappings = Array.from(metrics.mappingUsage.entries())
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5);
+
+    if (sortedMappings.length > 0) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mTop Mapping Rules:\x1b[0m`);
+      for (const [mappingKey, count] of sortedMappings) {
+        const percentage = (count / totalReqs * 100).toFixed(1);
+        const truncatedKey = mappingKey.length > 30 ? mappingKey.substring(0, 27) + '...' : mappingKey;
+        output += formatLine(`\x1b[35m${truncatedKey.padEnd(30)}\x1b[0m ${count.toString().padStart(4)} reqs (${percentage}%)`);
+      }
+    }
+  }
+  if (features.statusCodes) {
+    // Status Code Distribution
     output += formatLine("");
-    output += formatLine(`\x1b[1mTop Mapping Rules:\x1b[0m`);
-    for (const [mappingKey, count] of sortedMappings) {
+    output += formatLine(`\x1b[1mStatus Code Distribution:\x1b[0m`);
+    const sortedStatusCodes = Array.from(metrics.statusCodes.entries())
+      .sort(([a], [b]) => a - b);
+
+    let statusLine = "";
+    for (const [statusCode, count] of sortedStatusCodes.slice(0, 6)) {
       const percentage = (count / totalReqs * 100).toFixed(1);
-      const truncatedKey = mappingKey.length > 30 ? mappingKey.substring(0, 27) + '...' : mappingKey;
-      output += formatLine(`\x1b[35m${truncatedKey.padEnd(30)}\x1b[0m ${count.toString().padStart(4)} reqs (${percentage}%)`);
+      const color = statusCode < 300 ? "\x1b[32m" : statusCode < 400 ? "\x1b[33m" : "\x1b[31m";
+      statusLine += `${color}${statusCode}\x1b[0m: ${count.toLocaleString()} (${percentage}%) `;
+    }
+    output += formatLine(statusLine);
+  }
+
+  if (features.protocols) {
+    // Protocol Distribution
+    if (metrics.protocolStats.size > 0) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mProtocol Distribution:\x1b[0m`);
+      const sortedProtocols = Array.from(metrics.protocolStats.entries())
+        .sort(([, a], [, b]) => b - a);
+      let protocolLine = "";
+      for (const [protocol, count] of sortedProtocols.slice(0, 4)) {
+        const percentage = (count / totalReqs * 100).toFixed(1);
+        const color = protocol === 'HTTPS' ? '\x1b[32m' : protocol === 'HTTP' ? '\x1b[33m' : '\x1b[36m';
+        protocolLine += `${color}${protocol}\x1b[0m: ${count} (${percentage}%) `;
+      }
+      output += formatLine(protocolLine);
     }
   }
-  
-  // Status Code Distribution
-  output += formatLine("");
-  output += formatLine(`\x1b[1mStatus Code Distribution:\x1b[0m`);
-  const sortedStatusCodes = Array.from(metrics.statusCodes.entries())
-    .sort(([a], [b]) => a - b);
-  
-  let statusLine = "";
-  for (const [statusCode, count] of sortedStatusCodes.slice(0, 6)) {
-    const percentage = (count / totalReqs * 100).toFixed(1);
-    const color = statusCode < 300 ? "\x1b[32m" : statusCode < 400 ? "\x1b[33m" : "\x1b[31m";
-    statusLine += `${color}${statusCode}\x1b[0m: ${count.toLocaleString()} (${percentage}%) `;
-  }
-  output += formatLine(statusLine);
-  
-  // Protocol Distribution
-  if (metrics.protocolStats.size > 0) {
-    output += formatLine("");
-    output += formatLine(`\x1b[1mProtocol Distribution:\x1b[0m`);
-    const sortedProtocols = Array.from(metrics.protocolStats.entries())
-      .sort(([,a], [,b]) => b - a);
-    let protocolLine = "";
-    for (const [protocol, count] of sortedProtocols.slice(0, 4)) {
-      const percentage = (count / totalReqs * 100).toFixed(1);
-      const color = protocol === 'HTTPS' ? '\x1b[32m' : protocol === 'HTTP' ? '\x1b[33m' : '\x1b[36m';
-      protocolLine += `${color}${protocol}\x1b[0m: ${count} (${percentage}%) `;
-    }
-    output += formatLine(protocolLine);
-  }
-  
-  // HTTP Methods Distribution  
-  if (metrics.methodStats.size > 0) {
-    output += formatLine("");
-    output += formatLine(`\x1b[1mHTTP Methods:\x1b[0m`);
-    const sortedMethods = Array.from(metrics.methodStats.entries())
-      .sort(([,a], [,b]) => b - a);
-    let methodLine = "";
-    for (const [method, count] of sortedMethods.slice(0, 6)) {
-      const percentage = (count / totalReqs * 100).toFixed(1);
-      const color = method === 'GET' ? '\x1b[32m' : method === 'POST' ? '\x1b[33m' : '\x1b[36m';
-      methodLine += `${color}${method}\x1b[0m: ${count} (${percentage}%) `;
-    }
-    output += formatLine(methodLine);
-  }
-  
-  // Top Routes (Source -> Destination)
-  const sortedRoutes = Array.from(metrics.routeStats.values())
-    .sort((a, b) => b.requestCount - a.requestCount)
-    .slice(0, 5);
-    
-  if (sortedRoutes.length > 0) {
-    output += formatLine("");
-    output += formatLine(`\x1b[1mTop Routes (Source -> Destination):\x1b[0m`);
-    for (const route of sortedRoutes) {
-      const avgResponseTime = route.totalResponseTime / route.requestCount;
-      const percentage = (route.requestCount / totalReqs * 100).toFixed(1);
-      const truncatedSource = route.sourceIp.length > 15 ? route.sourceIp.substring(0, 12) + '...' : route.sourceIp;
-      const truncatedDest = route.destinationHost.length > 25 ? route.destinationHost.substring(0, 22) + '...' : route.destinationHost;
-      output += formatLine(`\x1b[90m${truncatedSource.padEnd(15)}\x1b[0m → \x1b[36m${truncatedDest.padEnd(25)}\x1b[0m ${route.requestCount.toString().padStart(4)} reqs (${percentage}%) ${avgResponseTime.toFixed(0)}ms avg`);
+
+  if (features.httpMethods) {
+    // HTTP Methods Distribution  
+    if (metrics.methodStats.size > 0) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mHTTP Methods:\x1b[0m`);
+      const sortedMethods = Array.from(metrics.methodStats.entries())
+        .sort(([, a], [, b]) => b - a);
+      let methodLine = "";
+      for (const [method, count] of sortedMethods.slice(0, 6)) {
+        const percentage = (count / totalReqs * 100).toFixed(1);
+        const color = method === 'GET' ? '\x1b[32m' : method === 'POST' ? '\x1b[33m' : '\x1b[36m';
+        methodLine += `${color}${method}\x1b[0m: ${count} (${percentage}%) `;
+      }
+      output += formatLine(methodLine);
     }
   }
-  
-  // CIDR Ranges Distribution
-  const sortedCidrs = Array.from(metrics.cidrStats.entries())
-    .sort(([,a], [,b]) => b - a)
-    .slice(0, 5);
-    
-  if (sortedCidrs.length > 0) {
-    output += formatLine("");
-    output += formatLine(`\x1b[1mTop CIDR Ranges:\x1b[0m`);
-    for (const [cidr, count] of sortedCidrs) {
-      const percentage = (count / totalReqs * 100).toFixed(1);
-      output += formatLine(`\x1b[34m${cidr.padEnd(18)}\x1b[0m ${count.toString().padStart(4)} reqs (${percentage}%)`);
+
+  if (features.topRoutes) {
+    // Top Routes (Source -> Destination)
+    const sortedRoutes = Array.from(metrics.routeStats.values())
+      .sort((a, b) => b.requestCount - a.requestCount)
+      .slice(0, 5);
+
+    if (sortedRoutes.length > 0) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mTop Routes (Source -> Destination):\x1b[0m`);
+      for (const route of sortedRoutes) {
+        const avgResponseTime = route.totalResponseTime / route.requestCount;
+        const percentage = (route.requestCount / totalReqs * 100).toFixed(1);
+        const truncatedSource = route.sourceIp.length > 15 ? route.sourceIp.substring(0, 12) + '...' : route.sourceIp;
+        const truncatedDest = route.destinationHost.length > 25 ? route.destinationHost.substring(0, 22) + '...' : route.destinationHost;
+        output += formatLine(`\x1b[90m${truncatedSource.padEnd(15)}\x1b[0m → \x1b[36m${truncatedDest.padEnd(25)}\x1b[0m ${route.requestCount.toString().padStart(4)} reqs (${percentage}%) ${avgResponseTime.toFixed(0)}ms avg`);
+      }
+    }
+
+    // CIDR Ranges Distribution
+    const sortedCidrs = Array.from(metrics.cidrStats.entries())
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5);
+
+    if (sortedCidrs.length > 0) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mTop CIDR Ranges:\x1b[0m`);
+      for (const [cidr, count] of sortedCidrs) {
+        const percentage = (count / totalReqs * 100).toFixed(1);
+        output += formatLine(`\x1b[34m${cidr.padEnd(18)}\x1b[0m ${count.toString().padStart(4)} reqs (${percentage}%)`);
+      }
     }
   }
-  
-  // Response Time Stats
-  if (metrics.responseTimes.length > 0) {
-    const sorted = [...metrics.responseTimes].sort((a, b) => a - b);
-    const p50 = sorted[Math.floor(sorted.length * 0.5)];
-    const p95 = sorted[Math.floor(sorted.length * 0.95)];
-    const p99 = sorted[Math.floor(sorted.length * 0.99)];
-    const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length;
-    
-    output += formatLine("");
-    output += formatLine(`\x1b[1mResponse Times (ms):\x1b[0m`);
-    output += formatLine(`Average: ${avg.toFixed(1)}ms  P50: ${p50}ms  P95: ${p95}ms  P99: ${p99}ms`);
+
+  if (features.responseTimes) {
+    // Response Time Stats
+    if (metrics.responseTimes.length > 0) {
+      const sorted = [...metrics.responseTimes].sort((a, b) => a - b);
+      const p50 = sorted[Math.floor(sorted.length * 0.5)];
+      const p95 = sorted[Math.floor(sorted.length * 0.95)];
+      const p99 = sorted[Math.floor(sorted.length * 0.99)];
+      const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length;
+
+      output += formatLine("");
+      output += formatLine(`\x1b[1mResponse Times (ms):\x1b[0m`);
+      output += formatLine(`Average: ${avg.toFixed(1)}ms  P50: ${p50}ms  P95: ${p95}ms  P99: ${p99}ms`);
+    }
   }
-  
+
   // Footer and closing border
   output += formatLine("");
-  output += formatLine(`\x1b[36mPress <Tab> to switch to event logs\x1b[0m`);
+  output += formatLine(runAsMainProgram 
+    ? `\x1b[36mPress <Tab> to switch to event logs\x1b[0m`
+    : `\x1b[90mMonitoring active (keyboard disabled in library mode)\x1b[0m`);
   output += `\x1b[36m╚${'═'.repeat(dashboardWidth)}╝\x1b[0m\n`;
-  
+
   return output;
 };
 
@@ -708,60 +746,79 @@ const formatBytes = (bytes: number): string => {
 };
 
 const updateMonitoring = ({ 
-  monitoringDisplay,
+  active,
   toggledOff,
   cleanup, 
-  metricsAccessor }:
+  monitoringDataAccessor }:
   {
-    monitoringDisplay?: boolean,
+    active?: boolean,
     toggledOff: boolean,
     cleanup?: () => void,
-    metricsAccessor: () => {metrics: MonitoringMetrics}
+    monitoringDataAccessor: () => {metrics: MonitoringMetrics, features: Partial<ActivatedMonitoringFeatures>}
   }): (() => void) | null => {
-  if(toggledOff) {
-    process.stdout.write("\x1b[?25h");
-    process.stdout.write("\x1b[?1049l");
-  }
+  // Clean up previous monitoring instance
+  if (runAsMainProgram && typeof cleanup === "function") {
+      process.off('SIGTERM', cleanup);
+      process.off('SIGINT', cleanup);  
+      process.off('exit', cleanup);
+    }
   if (typeof cleanup === "function") {
-    process.off('SIGTERM', cleanup);
-    process.off('SIGINT', cleanup);  
-    process.off('exit', cleanup);
     cleanup();
   }
-  if (!monitoringDisplay) {
-    return null
+  
+  // If monitoring is being turned off, push display up and return
+  if (!active && toggledOff && runAsMainProgram) {
+    stdout.write("\x1b[?1049h"); // Enter alternate screen
+    stdout.write("\x1b[?25h"); // Show cursor
+    }
+  if (!active) {
+    return null;
   }
   
-  if (monitoringDisplay) {
-  // Clear screen entirely on startup
-    process.stdout.write("\x1b[2J\x1b[H"); // Clear screen and move cursor to top
+  // Start monitoring display
+  if (runAsMainProgram) {
+    stdout.write("\x1b[?1049h"); // Enter alternate screen
+    stdout.write("\x1b[?25l"); // Hide cursor
   }
   
   const refreshDisplay = () => {
-    if (!monitoringDisplay) return;
-    const metrics = metricsAccessor().metrics;
-    process.stdout.write(renderMonitoringDisplay(metrics));
+    if (!active) return;
+    const {metrics, features} = monitoringDataAccessor();
+    stdout.write(renderMonitoringDisplay(metrics, {
+      counter: features.counter ?? false,
+      networkInterfaces: features.networkInterfaces ?? false,
+      requestRateHistogram: features.requestRateHistogram ?? true,
+      topDomains: features.topDomains ?? false,
+      topMappings: features.topMappings ?? false,
+      statusCodes: features.statusCodes ?? false,
+      protocols: features.protocols ?? false,
+      httpMethods: features.httpMethods ?? false,
+      topRoutes: features.topRoutes ?? false,
+      responseTimes: features.responseTimes ?? false,
+    }));
   };
   refreshDisplay();
   const intervalId = setInterval(refreshDisplay, 1000);
   const newCleanup = () => {
     clearInterval(intervalId);
     // Restore terminal state
-    process.stdout.write("\x1b[?25h"); // Show cursor
-    process.stdout.write("\x1b[?1049l"); // Exit alternate screen
+    if (runAsMainProgram) {
+      stdout.write("\x1b[?25h"); // Show cursor
+      stdout.write("\x1b[?1049l"); // Exit alternate screen
+    }
   };
   
-  const signalHandler = () => {
-    newCleanup();
-    process.exit(0);
-  };
-  
-  process.stdout.write("\x1b[?1049h"); // Enter alternate screen
-  process.stdout.write("\x1b[?25l"); // Hide cursor
-  
-  process.on('SIGTERM', signalHandler);
-  process.on('SIGINT', signalHandler); // Handle Ctrl+C
-  process.on('exit', newCleanup);
+  // Setup signal handlers
+  if (runAsMainProgram) {
+    const signalHandler = () => {
+      newCleanup();
+      process.exit(0);
+    };
+    
+    process.on('SIGTERM', signalHandler);
+    process.on('SIGINT', signalHandler); // Handle Ctrl+C
+    process.on('exit', newCleanup);
+  }
   return newCleanup;
 };
 
@@ -843,12 +900,18 @@ const log = async function (
           .replace(new RegExp(EMOJIS.AUTO_RECORD, "g"), "auto record")
           .replace(new RegExp(EMOJIS.LOGS, "g"), "logs")
           .replace(new RegExp(EMOJIS.RESTART, "g"), "restart")
-          .replace(new RegExp(EMOJIS.COLORED, "g"), "colored")
+          .replace(new RegExp(EMOJIS.COLORED, "g"), "tada !")
+          .replace(new RegExp(EMOJIS.ERROR_1, "g"), "(error)")
+          .replace(new RegExp(EMOJIS.ERROR_2, "g"), "(error)")
+          .replace(new RegExp(EMOJIS.ERROR_3, "g"), "(error)")
+          .replace(new RegExp(EMOJIS.ERROR_4, "g"), "(error)")
+          .replace(new RegExp(EMOJIS.ERROR_5, "g"), "(error)")
+          .replace(new RegExp(EMOJIS.ERROR_6, "g"), "(error)")
           .replace(/\|+/g, "|"),
       )
       .join(" | "),
   );
-  if (state?.config?.simpleLogs)
+  if (state?.config?.simpleLogs || nodeMajorVersion < 10)
     for (let simpleText of simpleTexts)
       stdout.write(
         `${getCurrentTime(state?.config?.simpleLogs)} | ${simpleText}\n`,
@@ -1095,6 +1158,7 @@ const quickStatus = async function (
   this: State,
   otherLogElements?: LogElement[][],
 ) {
+  if (this.config?.monitoringDisplay?.active) return;
   this.log([...(otherLogElements ?? []), this.buildQuickStatus()]).then(() =>
     this.notifyConfigListeners(this.config as Record<string, unknown>),
   );
@@ -1729,7 +1793,11 @@ const configPage = (
                   : property === "logAccessInTerminal"
                     ? '{"oneOf":[{type:"boolean"},{enum:["with-mapping"]}]}'
                     : property === "monitoringDisplay"
-                      ? '{type:"boolean"}'
+                      ? '{type:"object",properties:{' +
+                      Object.keys(defaultConfig.monitoringDisplay)
+                      .map(key => `${key}: {type: "boolean"}`)
+                      .join(',') +
+                      '}}'
                     : typeof exampleValue === "number"
                       ? '{type:"integer"}'
                       : typeof exampleValue === "string"
@@ -2783,9 +2851,10 @@ const specialPageMapping: Record<
   data: dataPage,
   worker: workerPage,
 };
-
 const specialPages = Object.keys(specialPageMapping);
 const specialProtocols = specialPages.map(page => `${page}:`);
+const nodeMajorVersion =
+  parseInt(process.versions.node.split(".")[0], 10);
 const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   Pick<LocalConfiguration, "ssl"> = {
   mapping: Object.assign(
@@ -2810,7 +2879,18 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   connectTimeout: 3000,
   socketTimeout: 3000,
   unwantedHeaderNamesInMocks: [],
-  monitoringDisplay: false,
+  monitoringDisplay: {
+    active: false,
+    networkInterfaces: false,
+    requestRateHistogram:  true,
+    topDomains: false,
+    topMappings: false,
+    statusCodes: false,
+    protocols: false,
+    httpMethods: false,
+    topRoutes: false,
+    responseTimes: false,
+  },
   crossOrigin: {
     urlPattern: "${href}",
     whitelist: [],
@@ -2999,12 +3079,19 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
       color: LogLevel.INFO,
     });
   }
-  if (config.monitoringDisplay !== previousConfig.monitoringDisplay) {
+  if (config.monitoringDisplay?.active !== previousConfig.monitoringDisplay?.active ) {
     logElements.push({
-      text: `${EMOJIS.MONITORING} ${config.monitoringDisplay ? 'showing' : 'hidding'} monitoring`,
+      text: `${EMOJIS.MONITORING} ${config.monitoringDisplay?.active ? 'showing' : 'hidding'} monitoring`,
       color: LogLevel.INFO,
     });
-  } 
+  }
+  if (config.monitoringDisplay?.active === false && 
+    previousConfig.monitoringDisplay?.active === true) {
+    logElements.push({
+      text: `${EMOJIS.RESTART} Use <tab> key to show monitoring again`,
+      color: LogLevel.INFO,
+    });
+  }
   if (config.dontUseHttp2Downstream !== previousConfig.dontUseHttp2Downstream) {
     logElements.push({
       text: `${EMOJIS.OUTBOUND} http/2 ${config.dontUseHttp2Downstream ? "de" : ""}activated downstream`,
@@ -4024,7 +4111,7 @@ const serve = async function (
 
   if (
     state.config.logAccessInTerminal &&
-    !state.config.monitoringDisplay &&
+    state.config.monitoringDisplay?.active !== true &&
     !targetUrl.pathname.startsWith("/:/")
   ) {
     const requestMethodLength = (inboundRequest.method?.length ?? 3) + 2;
@@ -4568,8 +4655,8 @@ const serve = async function (
     mappingKey: key,
   });
 
-  // Update monitoring metrics if enabled
-  if (state.config.monitoringDisplay && state.monitoring.metrics) {
+  // Update monitoring metrics if enabled (continue collecting even when display is off)
+  if (state.monitoring?.metrics) {
     const domain = target?.hostname || inboundRequest.headers.host?.split(':')[0] || 'unknown';
     const requestSize = typeof requestBody === 'string' ? Buffer.byteLength(requestBody) : 
                        requestBody ? requestBody.length : 0;
@@ -4646,6 +4733,26 @@ const update = async (
   currentState: Partial<State>,
   newState: Partial<State & { pendingConfigSave: LocalConfiguration }>,
 ): Promise<State> => {
+  const firstRun = currentState.server === undefined &&
+    newState.server === null;
+  if (runAsMainProgram && nodeMajorVersion < 10 && firstRun) {
+    await log.apply(currentState, [currentState, [
+      [
+        {
+          text: `${EMOJIS.NO} can't use fully colored logs before node 10.x`,
+          color: LogLevel.WARNING,
+        },
+      ],
+    ]]);
+  }
+  if (runAsMainProgram && firstRun) {
+    process.removeAllListeners('warning');
+    process.on('warning', (warning) => {
+      if (!warning.message.includes('NODE_TLS_REJECT_UNAUTHORIZED')) {
+        console.warn(warning.message);
+      }
+    });
+  }
   if (Object.keys(newState ?? {}).length === 0 && currentState.server)
     return newState as State;
   if (newState?.pendingConfigSave) {
@@ -4693,13 +4800,15 @@ const update = async (
 
   if (!newState.keypressListener && 
     !currentState.keypressListener &&
+    runAsMainProgram &&
     stdin.isTTY
   ) {
     stdin.setRawMode(true);
   }
   if (!newState.keypressListener && 
-    !currentState.keypressListener) {
-    emitKeypressEvents(process.stdin);
+    !currentState.keypressListener &&
+  runAsMainProgram) {
+    emitKeypressEvents(stdin);
   }
 
   if (newState?.server === null && currentState.server) {
@@ -4753,27 +4862,43 @@ const update = async (
   const previousKeypressListener =
   newState.keypressListener ?? currentState.keypressListener
   // off and on are not defined on node@8
-  if (previousKeypressListener) stdin.off?.("keypress", previousKeypressListener);
+  if (runAsMainProgram && previousKeypressListener) stdin.off?.("keypress", previousKeypressListener);
   const keypressListener =
     function(this: State, str: any, key: any) {
       if (key.name === 'tab') 
         update(this, 
           { config: { ...this.config, 
-            monitoringDisplay: !this.config.monitoringDisplay }})
-      else if (key.ctrl && key.name === 'c') {
+            monitoringDisplay: {...(this.config.monitoringDisplay) ?? 
+              defaultConfig.monitoringDisplay, 
+              active: !(this.config.monitoringDisplay?.active ?? false) } } })
+      else if (key.ctrl && key.name === 'c' && runAsMainProgram) {
         stdin.off?.("keypress", keypressListener)
         process.exit();
       }
+      else if (key.ctrl && key.name === 'c') {
+        stdin.off?.("keypress", keypressListener)
+        this.log([
+          [
+            {
+              text: `${EMOJIS.COLORED} Attempted exit in lib mode`,
+              color: LogLevel.INFO,
+            },
+          ],
+        ]);
+      }
     }.bind(currentState)
-  stdin.on?.("keypress", keypressListener)
+  if (runAsMainProgram) stdin.on?.("keypress", keypressListener)
 
   const state: State = currentState as State;
+  const monitoringToggledOff = config?.monitoringDisplay?.active === false &&
+      currentState?.config?.monitoringDisplay?.active === true
   const monitoringCleanup = updateMonitoring({
-    monitoringDisplay: config?.monitoringDisplay ?? false,
-    toggledOff: newState?.config?.monitoringDisplay === false &&
-      currentState?.config?.monitoringDisplay === true,
+    active: config?.monitoringDisplay?.active ?? false,
+    toggledOff: monitoringToggledOff,
     cleanup: currentState.monitoring?.cleanup ?? null,
-    metricsAccessor: () => ({metrics: monitoringMetrics})
+    monitoringDataAccessor: () => ({metrics: monitoringMetrics, features: config?.monitoringDisplay ?? 
+      defaultConfig.monitoringDisplay
+    }),
   })
 
   Object.assign(state, {
@@ -4829,6 +4954,10 @@ const update = async (
           ? null
           : state.server,
   });
+
+  if (monitoringToggledOff) {
+    await state.quickStatus();
+  }
   return state;
 };
 
