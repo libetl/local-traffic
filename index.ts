@@ -640,7 +640,9 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics,
     for (const [statusCode, count] of sortedStatusCodes.slice(0, 6)) {
       const percentage = (count / totalReqs * 100).toFixed(1);
       const color = statusCode < 300 ? "\x1b[32m" : statusCode < 400 ? "\x1b[33m" : "\x1b[31m";
-      statusLine += `${color}${statusCode}\x1b[0m: ${count.toLocaleString()} (${percentage}%) `;
+      const statusText = `${color}${statusCode}\x1b[0m: ${count.toLocaleString()} (${percentage}%) `;
+      if (statusLine.length + statusText.length > screenWidth - 5) break;
+      statusLine += statusText;
     }
     output += formatLine(statusLine);
   }
@@ -4891,13 +4893,13 @@ const update = async (
 
   const state: State = currentState as State;
   const monitoringToggledOff = config?.monitoringDisplay?.active === false &&
-      currentState?.config?.monitoringDisplay?.active === true
+      currentState?.config?.monitoringDisplay?.active === true;
   const monitoringCleanup = updateMonitoring({
     active: config?.monitoringDisplay?.active ?? false,
     toggledOff: monitoringToggledOff,
     cleanup: currentState.monitoring?.cleanup ?? null,
-    monitoringDataAccessor: () => ({metrics: monitoringMetrics, features: config?.monitoringDisplay ?? 
-      defaultConfig.monitoringDisplay
+    monitoringDataAccessor: () => ({metrics: monitoringMetrics, 
+      features: config?.monitoringDisplay ?? defaultConfig.monitoringDisplay
     }),
   })
 
