@@ -4024,6 +4024,7 @@ const serve = async function (
 
   if (
     state.config.logAccessInTerminal &&
+    !state.config.monitoringDisplay &&
     !targetUrl.pathname.startsWith("/:/")
   ) {
     const requestMethodLength = (inboundRequest.method?.length ?? 3) + 2;
