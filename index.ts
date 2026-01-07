@@ -210,9 +210,11 @@ interface DomainStats {
 }
 
 interface MonitoringMetrics {
+  resetTime: number;
   reloadingConfig?: boolean;
   requestCounts: number[];
   statusCodes: Map<number, number>;
+  statusCodesBySecond: Array<{s1xx: number; s2xx: number; s3xx: number; s4xx: number; s5xx: number}>; // Track status codes per second
   responseTimes: number[];
   errorCounts: number[];
   lastUpdateTime: number;
@@ -273,9 +275,11 @@ const getNetworkInterfaceInfo = (): NetworkInterfaceInfo[] => {
 };
 
 const createMonitoringMetrics = (): MonitoringMetrics => ({
+  resetTime: Date.now(),
   reloadingConfig: false,
   requestCounts: Array(60).fill(0), // Last 60 seconds
   statusCodes: new Map(),
+  statusCodesBySecond: Array(60).fill(0).map(() => ({s1xx: 0, s2xx: 0, s3xx: 0, s4xx: 0, s5xx: 0})),
   responseTimes: [],
   errorCounts: Array(60).fill(0),
   lastUpdateTime: Date.now(),
@@ -297,8 +301,8 @@ const createMonitoringMetrics = (): MonitoringMetrics => ({
 });
 
 const updateMonitoringMetrics = (
-  metrics: MonitoringMetrics, 
-  statusCode: number, 
+  metrics: MonitoringMetrics | undefined,
+  statusCode: number,
   responseTime: number,
   options: {
     domain?: string;
@@ -311,14 +315,17 @@ const updateMonitoringMetrics = (
     targetUrl?: string;
   } = {}
 ) => {
+  if (!metrics) return; // Safety guard for edge cases
   const now = Date.now();
   const secondsElapsed = Math.floor((now - metrics.lastUpdateTime) / 1000);
-  
+
   // Shift arrays if time has passed
   if (secondsElapsed > 0) {
     for (let i = 0; i < Math.min(secondsElapsed, 60); i++) {
       metrics.requestCounts.shift();
       metrics.requestCounts.push(0);
+      metrics.statusCodesBySecond.shift();
+      metrics.statusCodesBySecond.push({s1xx: 0, s2xx: 0, s3xx: 0, s4xx: 0, s5xx: 0});
       metrics.errorCounts.shift();
       metrics.errorCounts.push(0);
       metrics.networkLoad.bytesIn.shift();
@@ -328,20 +335,28 @@ const updateMonitoringMetrics = (
     }
     metrics.lastUpdateTime = now;
   }
-  
+
   // Update current second
   metrics.requestCounts[metrics.requestCounts.length - 1]++;
   metrics.totalRequests++;
-  
+
   // Track status codes
   metrics.statusCodes.set(statusCode, (metrics.statusCodes.get(statusCode) || 0) + 1);
-  
+
+  // Track status codes by second for histogram
+  const currentSecond = metrics.statusCodesBySecond[metrics.statusCodesBySecond.length - 1];
+  if (statusCode >= 100 && statusCode < 200) currentSecond.s1xx++;
+  else if (statusCode >= 200 && statusCode < 300) currentSecond.s2xx++;
+  else if (statusCode >= 300 && statusCode < 400) currentSecond.s3xx++;
+  else if (statusCode >= 400 && statusCode < 500) currentSecond.s4xx++;
+  else if (statusCode >= 500) currentSecond.s5xx++;
+
   // Track response times (keep last 1000)
   metrics.responseTimes.push(responseTime);
   if (metrics.responseTimes.length > 1000) {
     metrics.responseTimes.shift();
   }
-  
+
   // Track errors (4xx, 5xx)
   if (statusCode >= 400) {
     metrics.errorCounts[metrics.errorCounts.length - 1]++;
@@ -384,19 +399,19 @@ const updateMonitoringMetrics = (
   }
 
   // Track new comprehensive metrics
-  
-  // Track protocol statistics  
+
+  // Track protocol statistics
   if (options.protocol) {
     const protocolKey = options.protocol.toUpperCase();
     metrics.protocolStats.set(protocolKey, (metrics.protocolStats.get(protocolKey) || 0) + 1);
   }
-  
+
   // Track HTTP method statistics
   if (options.method) {
     const methodKey = options.method.toUpperCase();
     metrics.methodStats.set(methodKey, (metrics.methodStats.get(methodKey) || 0) + 1);
   }
-  
+
   // Track route statistics (source -> destination routing)
   if (options.sourceIp && options.domain) {
     const routeKey = `${options.sourceIp} -> ${options.domain}`;
@@ -416,7 +431,7 @@ const updateMonitoringMetrics = (
       });
     }
   }
-  
+
   // Track CIDR ranges (extract network from source IP)
   if (options.sourceIp) {
     const cidr = extractCidrFromIp(options.sourceIp);
@@ -460,15 +475,17 @@ const extractCidrFromIp = (ip: string): string | null => {
   }
 };
 
-const renderMonitoringDisplay = (metrics: MonitoringMetrics,
-  features: ActivatedMonitoringFeatures): string => {
+const renderMonitoringDisplay = (
+  metrics: MonitoringMetrics,
+  features: ActivatedMonitoringFeatures,
+  serverMode: ServerMode): string => {
   const width = Math.min(stdout.columns || 80, 120);
   const height = Math.min(stdout.rows || 24, 40);
 
   let output = "";
 
-  // Clear screen and move cursor to top
-  output += "\x1b[2J\x1b[H";
+  // Move cursor to top without clearing (prevents flash)
+  output += "\x1b[H";
 
   // Decorative top border
   const dashboardWidth = Math.min(width - 4, 76);
@@ -476,8 +493,10 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics,
 
   // Header with border
   const headerText = `${EMOJIS.MONITORING} local-traffic monitoring ${
+    serverMode === 'mock' ? EMOJIS.MOCKS : ''}${
     metrics.reloadingConfig ? EMOJIS.RESTART : ''}`;
-  const timeText = `Time: ${new Date().toLocaleTimeString()}`;
+  const timeText = `Time: ${new Date().toLocaleTimeString()}, Last Reset: ${
+    new Date(metrics.resetTime).toLocaleTimeString()} `;
   const headerPadding = Math.max(0, dashboardWidth - headerText.length);
   const timePadding = Math.max(0, dashboardWidth - timeText.length);
 
@@ -534,31 +553,40 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics,
   const chartWidth = Math.min(60, dashboardWidth - 10);
   if (features.requestRateHistogram) {
 
-    // Request Rate Histogram (last 60 seconds)
+    // Request Rate Histogram (last 60 seconds) - Stacked by status code
     output += formatLine(`\x1b[1mRequest Rate - Last 60 seconds:\x1b[0m`);
+    output += formatLine(`\x1b[36m■\x1b[0m 1xx  \x1b[32m■\x1b[0m 2xx  \x1b[90m■\x1b[0m 3xx  \x1b[35m■\x1b[0m 4xx  \x1b[31m■\x1b[0m 5xx`);
 
     // Ensure we have the most recent data (reverse to show latest on right)
-    const recentCounts = [...metrics.requestCounts].reverse();
-    const maxRequests = Math.max(...recentCounts, 1);
+    const recentStatusCodes = [...metrics.statusCodesBySecond].reverse();
+    const maxRequests = Math.max(...recentStatusCodes.map(s => s.s1xx + s.s2xx + s.s3xx + s.s4xx + s.s5xx), 1);
     const histogramHeight = Math.min(6, height - 25);
-
-    // Better thresholds for color coding
-    const highThreshold = Math.max(avgRPS * 1.5, maxRequests * 0.7);
 
     for (let row = histogramHeight; row > 0; row--) {
       const threshold = (maxRequests * row) / histogramHeight;
       let histLine = `${threshold.toFixed(0).padStart(3)} │`;
 
-      for (let i = 0; i < chartWidth && i < recentCounts.length; i++) {
-        const value = recentCounts[i] || 0;
-        if (value >= threshold) {
-          // Better color logic with more nuanced thresholds
-          if (value >= highThreshold) {
-            histLine += "\x1b[31m█\x1b[0m"; // Red for high values  
-          } else if (value >= avgRPS) {
-            histLine += "\x1b[33m█\x1b[0m"; // Yellow for medium values
+      for (let i = 0; i < chartWidth && i < recentStatusCodes.length; i++) {
+        const status = recentStatusCodes[i];
+        const total = status.s1xx + status.s2xx + status.s3xx + status.s4xx + status.s5xx;
+
+        if (total >= threshold) {
+          // Stacked bar: show the highest priority status at this height
+          const s5xxThreshold = total - status.s5xx;
+          const s4xxThreshold = s5xxThreshold - status.s4xx;
+          const s3xxThreshold = s4xxThreshold - status.s3xx;
+          const s2xxThreshold = s3xxThreshold - status.s2xx;
+
+          if (threshold > s5xxThreshold) {
+            histLine += "\x1b[31m█\x1b[0m"; // Red for 5xx
+          } else if (threshold > s4xxThreshold) {
+            histLine += "\x1b[35m█\x1b[0m"; // Magenta for 4xx (Firefox style)
+          } else if (threshold > s3xxThreshold) {
+            histLine += "\x1b[90m█\x1b[0m"; // Gray for 3xx
+          } else if (threshold > s2xxThreshold) {
+            histLine += "\x1b[32m█\x1b[0m"; // Green for 2xx
           } else {
-            histLine += "\x1b[32m█\x1b[0m"; // Green for low values
+            histLine += "\x1b[36m█\x1b[0m"; // Cyan for 1xx (WebSocket 101)
           }
         } else {
           histLine += " ";
@@ -568,7 +596,7 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics,
       output += formatLine(histLine);
     }
 
-    let bottomLine = "    └" + "─".repeat(Math.min(chartWidth, recentCounts.length));
+    let bottomLine = "    └" + "─".repeat(Math.min(chartWidth, recentStatusCodes.length));
     output += formatLine(bottomLine);
   }
 
@@ -634,8 +662,6 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics,
   }
   if (features.statusCodes) {
     // Status Code Distribution
-    output += formatLine("");
-    output += formatLine(`\x1b[1mStatus Code Distribution:\x1b[0m`);
     const sortedStatusCodes = Array.from(metrics.statusCodes.entries())
       .sort(([a], [b]) => a - b);
 
@@ -646,6 +672,10 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics,
       const statusText = `${color}${statusCode}\x1b[0m: ${count.toLocaleString()} (${percentage}%) `;
       if (statusLine.length + statusText.length > screenWidth - 5) break;
       statusLine += statusText;
+    }
+    if (statusLine.length > 0) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mStatus Code Distribution:\x1b[0m`);
     }
     output += formatLine(statusLine);
   }
@@ -668,7 +698,7 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics,
   }
 
   if (features.httpMethods) {
-    // HTTP Methods Distribution  
+    // HTTP Methods Distribution
     if (metrics.methodStats.size > 0) {
       output += formatLine("");
       output += formatLine(`\x1b[1mHTTP Methods:\x1b[0m`);
@@ -734,7 +764,10 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics,
 
   // Footer and closing border
   output += formatLine("");
-  output += formatLine(runAsMainProgram 
+  output += formatLine(runAsMainProgram
+    ? `\x1b[36mPress <R> to reset all metrics\x1b[0m`
+    : `\x1b[90m[0m`);
+  output += formatLine(runAsMainProgram
     ? `\x1b[36mPress <Tab> to switch to event logs\x1b[0m`
     : `\x1b[90mMonitoring active (keyboard disabled in library mode)\x1b[0m`);
   output += `\x1b[36m╚${'═'.repeat(dashboardWidth)}╝\x1b[0m\n`;
@@ -750,45 +783,49 @@ const formatBytes = (bytes: number): string => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 };
 
-const updateMonitoring = ({ 
+const updateMonitoring = ({
   active,
   toggledOff,
-  cleanup, 
+  cleanup,
   monitoringDataAccessor }:
   {
     active?: boolean,
     toggledOff: boolean,
     cleanup?: () => void,
-    monitoringDataAccessor: () => {metrics: MonitoringMetrics, features: Partial<ActivatedMonitoringFeatures>}
+    monitoringDataAccessor: () => {
+      metrics: MonitoringMetrics,
+      features: Partial<ActivatedMonitoringFeatures>,
+      serverMode: ServerMode}
   }): (() => void) | null => {
   // Clean up previous monitoring instance
   if (runAsMainProgram && typeof cleanup === "function") {
       process.off('SIGTERM', cleanup);
-      process.off('SIGINT', cleanup);  
+      process.off('SIGINT', cleanup);
       process.off('exit', cleanup);
     }
   if (typeof cleanup === "function") {
     cleanup();
   }
-  
-  // If monitoring is being turned off, push display up and return
+
+  // If monitoring is being turned off, restore terminal
   if (!active && toggledOff && runAsMainProgram) {
-    stdout.write("\x1b[?1049h"); // Enter alternate screen
     stdout.write("\x1b[?25h"); // Show cursor
+    stdout.write("\x1b[?1049l"); // Exit alternate screen
     }
   if (!active) {
     return null;
   }
-  
+
   // Start monitoring display
   if (runAsMainProgram) {
-    stdout.write("\x1b[?1049h"); // Enter alternate screen
+    stdout.write("\x1b[?1049h"); // Enter alternate screen (prevents flash)
+    stdout.write("\x1b[2J"); // Clear alternate screen once
     stdout.write("\x1b[?25l"); // Hide cursor
   }
-  
+
   const refreshDisplay = () => {
     if (!active) return;
-    const {metrics, features} = monitoringDataAccessor();
+    const {metrics, features, serverMode} = monitoringDataAccessor();
     stdout.write(renderMonitoringDisplay(metrics, {
       counter: features.counter ?? false,
       networkInterfaces: features.networkInterfaces ?? false,
@@ -800,7 +837,7 @@ const updateMonitoring = ({
       httpMethods: features.httpMethods ?? false,
       topRoutes: features.topRoutes ?? false,
       responseTimes: features.responseTimes ?? false,
-    }));
+    }, serverMode));
   };
   refreshDisplay();
   const intervalId = setInterval(refreshDisplay, 1000);
@@ -812,14 +849,14 @@ const updateMonitoring = ({
       stdout.write("\x1b[?1049l"); // Exit alternate screen
     }
   };
-  
+
   // Setup signal handlers
   if (runAsMainProgram) {
     const signalHandler = () => {
       newCleanup();
       process.exit(0);
     };
-    
+
     process.on('SIGTERM', signalHandler);
     process.on('SIGINT', signalHandler); // Handle Ctrl+C
     process.on('exit', newCleanup);
@@ -885,6 +922,7 @@ const log = async function (
   state: Partial<State> | null,
   logs: LogElement[][],
 ) {
+  if (!runAsMainProgram) return; // Skip logs in library mode
   const simpleTexts = logs.map(logLine =>
     logLine
       .map(e =>
@@ -1228,6 +1266,7 @@ const logsView = (
       <th scope="col">Status</th>
       <th scope="col">Duration</th>
       <th scope="col">Upstream Path</th>
+      <th scope="col">Mapping key</th>
       <th scope="col">Downstream Path</th>
     </tr>
   </thead>
@@ -1278,7 +1317,7 @@ id="websocket-disconnected">
           uniqueHash = uniqueHash1;
         } catch(e) { }
         if (document.getElementById('mock-mode')?.checked) return;
-        if (${options.captureResponseBody === true} && 
+        if (${options.captureResponseBody === true} &&
           data?.downstreamPath?.startsWith('recorder://') &&
           !data?.upstreamPath?.endsWith('?forceLogInRecorderPage=true'))
           return;
@@ -1306,29 +1345,29 @@ id="websocket-disconnected">
           if (replayColumn) {
             replayColumn.innerHTML = actions;
           }
-          
+
           // Update analytics data
-          if (data.upstreamPath) {
+          if (data.downstreamPath) {
             try {
-              const url = new URL(data.upstreamPath.startsWith('http') ? data.upstreamPath : 'http://localhost' + data.upstreamPath);
+              const url = new URL(data.downstreamPath.startsWith('http') ? data.downstreamPath : 'http://localhost/' + data.downstreamPath);
               updateDomainStats(url.hostname);
             } catch(e) {
               // Extract domain from path if possible
-              const match = data.upstreamPath.match(/^(?:https?:\\/\\/)?([^\\/]+)/);
+              const match = data.downstreamPath.match(/^(?:https?:\\/\\/)?([^\\/]+)/);
               if (match) updateDomainStats(match[1]);
             }
           }
-          if (data.mappingKey) {
+          if (typeof data.mappingKey === "string") {
             updateMappingStats(data.mappingKey);
           }
         } else if (uniqueHash) {
-          addNewRequest(data.randomId, actions, time, data.level, data.protocol, data.method, 
+          addNewRequest(data.randomId, actions, time, data.level, data.protocol, data.method,
             '<span class="badge bg-secondary">...</span>', '&#x23F1;',
-            data.upstreamPath, data.downstreamPath);
+            data.upstreamPath, data.mappingKey, data.downstreamPath);
         } else if(data.event) {
           document.getElementById("proxy")
             .insertAdjacentHTML('afterbegin', '<tr><td scope="col">' + time + '</td>' +
-                '<td scope="col">' + (data.level || 'info')+ '</td>' + 
+                '<td scope="col">' + (data.level || 'info')+ '</td>' +
                 '<td scope="col">' + data.event + '</td></tr>');
         }
         cleanup();
@@ -1352,7 +1391,7 @@ id="websocket-disconnected">
     };
     let domainStats = new Map();
     let mappingStats = new Map();
-    
+
     function show(id) {
       [...document.querySelectorAll('table')].forEach((table, index) => {
         table.style.display = index === id ? 'block': 'none'
@@ -1363,56 +1402,67 @@ id="websocket-disconnected">
       [...document.querySelectorAll('.navbar-nav .nav-item .nav-link')].forEach((link, index) => {
         if (index === id) { link.classList.add('active') } else link.classList.remove('active');
       });
-      
+
       if (id === 2) { // Analytics tab
         updateAnalytics();
+        [...document.querySelectorAll('#analytics-view table')]
+        .forEach((table, index) => {table.style.display = 'block'});
       } else if (id === 3) { // Network tab
         updateNetworkCharts();
       }
     }
-    
+
     function updateDomainStats(domain) {
       if (!domain || domain === 'unknown') return;
       const existing = domainStats.get(domain) || { count: 0, responseTimeSum: 0, responseCount: 0, errors: 0 };
       existing.count++;
       domainStats.set(domain, existing);
+      // Update charts if analytics tab is active
+      if (document.querySelector('.navbar-nav .nav-item:nth-child(3) .nav-link')?.classList.contains('active')) {
+        updateDomainsChart();
+        updateDomainTable();
+      }
     }
-    
+
     function updateMappingStats(mappingKey) {
-      if (!mappingKey) return;
+      if (typeof mappingKey !== "string") return;
       mappingStats.set(mappingKey, (mappingStats.get(mappingKey) || 0) + 1);
+      // Update chart if analytics tab is active
+      if (document.querySelector('.navbar-nav .nav-item:nth-child(3) .nav-link')?.classList.contains('active')) {
+        updateMappingChart();
+      }
     }
-    
+
     function updateAnalytics() {
       updateDomainsChart();
       updateMappingChart();
       updateDomainTable();
     }
-    
+
     function updateDomainsChart() {
       const canvas = document.getElementById('domainsChart');
       if (!canvas) return;
       const ctx = canvas.getContext('2d');
-      
+
       const sortedDomains = Array.from(domainStats.entries())
         .sort(([,a], [,b]) => b.count - a.count)
         .slice(0, 10);
-      
+
       // Simple bar chart
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const maxCount = Math.max(...sortedDomains.map(([,stats]) => stats.count), 1);
       const barWidth = canvas.width / Math.max(sortedDomains.length, 1);
       const barMaxHeight = canvas.height - 40;
-      
+
       sortedDomains.forEach(([domain, stats], index) => {
         const barHeight = (stats.count / maxCount) * barMaxHeight;
         const x = index * barWidth;
         const y = canvas.height - barHeight - 20;
-        
+
         // Draw bar
         ctx.fillStyle = \`hsl(\${index * 30}, 70%, 50%)\`;
         ctx.fillRect(x + 5, y, barWidth - 10, barHeight);
-        
+
         // Draw label
         ctx.fillStyle = '#333';
         ctx.font = '10px Arial';
@@ -1422,69 +1472,57 @@ id="websocket-disconnected">
         ctx.textAlign = 'right';
         ctx.fillText(domain.substring(0, 15), 0, 0);
         ctx.restore();
-        
+
         // Draw count
         ctx.fillStyle = '#666';
         ctx.textAlign = 'center';
         ctx.fillText(stats.count.toString(), x + barWidth/2, y - 5);
       });
     }
-    
+
     function updateMappingChart() {
-      const canvas = document.getElementById('mappingChart');
-      if (!canvas) return;
-      const ctx = canvas.getContext('2d');
-      
+      const tbody = document.getElementById('mappingStatsTable');
+      if (!tbody) return;
+
       const sortedMappings = Array.from(mappingStats.entries())
         .sort(([,a], [,b]) => b - a)
-        .slice(0, 8);
-      
-      // Simple bar chart
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const maxCount = Math.max(...sortedMappings.map(([,count]) => count), 1);
-      const barWidth = canvas.width / Math.max(sortedMappings.length, 1);
-      const barMaxHeight = canvas.height - 40;
-      
-      sortedMappings.forEach(([mapping, count], index) => {
-        const barHeight = (count / maxCount) * barMaxHeight;
-        const x = index * barWidth;
-        const y = canvas.height - barHeight - 20;
-        
-        // Draw bar
-        ctx.fillStyle = \`hsl(\${index * 45}, 60%, 45%)\`;
-        ctx.fillRect(x + 5, y, barWidth - 10, barHeight);
-        
-        // Draw label
-        ctx.fillStyle = '#333';
-        ctx.font = '10px Arial';
-        ctx.save();
-        ctx.translate(x + barWidth/2, canvas.height - 5);
-        ctx.rotate(-Math.PI/4);
-        ctx.textAlign = 'right';
-        ctx.fillText(mapping.substring(0, 20), 0, 0);
-        ctx.restore();
-        
-        // Draw count
-        ctx.fillStyle = '#666';
-        ctx.textAlign = 'center';
-        ctx.fillText(count.toString(), x + barWidth/2, y - 5);
-      });
+        .slice(0, 15);
+
+      const maxCount = sortedMappings.reduce((acc, [,count]) => acc + count, 0) || 1;
+
+      tbody.innerHTML = sortedMappings.map(([mapping, count]) => {
+        const percentage = Math.round((count / maxCount) * 100);
+
+        return \`<tr>
+          <td><code style="font-size: 12px;">\${mapping || '<i>&lt;default&gt;</i>'}</code></td>
+          <td><strong>\${count}</strong></td>
+          <td>
+            <div class="progress" style="height: 20px;">
+              <div class="progress-bar" role="progressbar"
+                   style="width: \${percentage}%;"
+                   aria-valuenow="\${percentage}" aria-valuemin="0" aria-valuemax="100">
+                \${percentage}%
+              </div>
+            </div>
+          </td>
+        </tr>\`;
+      }).join('');
     }
-    
+
     function updateDomainTable() {
       const tbody = document.getElementById('domainStatsTable');
       if (!tbody) return;
-      
+
       const sortedDomains = Array.from(domainStats.entries())
         .sort(([,a], [,b]) => b.count - a.count)
         .slice(0, 20);
-      
+
       tbody.innerHTML = sortedDomains.map(([domain, stats]) => {
-        const avgResponseTime = stats.responseCount > 0 ? 
+        const avgResponseTime = stats.responseCount > 0 ?
           Math.round(stats.responseTimeSum / stats.responseCount) : 0;
-        const errorRate = stats.count > 0 ? 
+        const errorRate = stats.count > 0 ?
           Math.round((stats.errors / stats.count) * 100) : 0;
-        
+
         return \`<tr>
           <td>\${domain}</td>
           <td>\${stats.count}</td>
@@ -1494,13 +1532,13 @@ id="websocket-disconnected">
         </tr>\`;
       }).join('');
     }
-    
+
     function updateNetworkCharts() {
       // Simple network load visualization
       const canvas = document.getElementById('networkLoadChart');
       if (!canvas) return;
       const ctx = canvas.getContext('2d');
-      
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = '#007bff';
       ctx.fillRect(10, 10, 100, 20);
@@ -1515,7 +1553,7 @@ id="websocket-disconnected">
     function cleanup() {
       const currentLimit = parseInt(document.getElementById('limit').value)
       for (let table of ['access', 'proxy']) {
-        while (currentLimit && document.getElementById(table).childNodes.length && 
+        while (currentLimit && document.getElementById(table).childNodes.length &&
         document.getElementById(table).childNodes.length > currentLimit) {
           [...document.getElementById(table).childNodes].slice(-1)[0].remove();
         }
@@ -1533,7 +1571,7 @@ id="websocket-disconnected">
     function getActionsHtmlText(uniqueHash, response) {
       const edit = ${options.captureResponseBody === true} && uniqueHash
       ? '<button data-response="' + (response ?? "") +
-      '" data-uniquehash="' + uniqueHash + 
+      '" data-uniquehash="' + uniqueHash +
       '" data-bs-toggle="modal" data-bs-target="#edit-request" type="button" ' +
         'class="btn btn-primary">&#x1F4DD;</button>'
       : ''
@@ -1543,36 +1581,37 @@ id="websocket-disconnected">
       : ''
       const replay = ${
         options.captureResponseBody === false
-      } && uniqueHash ? '<button data-response="' + 
+      } && uniqueHash ? '<button data-response="' +
         btoa(JSON.stringify(response ?? {})) +
         '" data-uniquehash="' + uniqueHash + '" onclick="javascript:replay(event)" ' +
         'type="button" class="btn btn-primary">&#x1F501;</button>' : '';
       return edit + replay + remove
     }
     function addNewRequest(
-      randomId, actions, time, level, protocol, method, 
-      statusCode, duration, upstreamPath, downstreamPath
+      randomId, actions, time, level, protocol, method,
+      statusCode, duration, upstreamPath, mappingKey, downstreamPath
     ) {
       document.getElementById("access")
       .insertAdjacentHTML('afterbegin', '<tr id="event-' + randomId + '">' +
       '<td scope="col" class="replay">' + actions + '</td>' +
       '<td scope="col">' + time + '</td>' +
-      '<td scope="col">' + (level || 'info')+ '</td>' + 
-      '<td scope="col" class="protocol">' + protocol + '</td>' + 
-      '<td scope="col" class="method">' + method + '</td>' + 
+      '<td scope="col">' + (level || 'info')+ '</td>' +
+      '<td scope="col" class="protocol">' + protocol + '</td>' +
+      '<td scope="col" class="method">' + method + '</td>' +
       '<td scope="col" class="statusCode">' + statusCode + '</td>' +
       '<td scope="col" class="duration text-end">' + duration + '</td>' +
-      '<td scope="col" class="upstream-path">' + upstreamPath + '</td>' + 
-      '<td scope="col">' + 
-      ((downstreamPath??'').startsWith('data:') ? 'data:...' : downstreamPath) + 
-      '</td>' + 
+      '<td scope="col" class="upstream-path">' + upstreamPath + '</td>' +
+      '<td scope="col" class="mapping-key">' + (mappingKey || '<i>&lt;default&gt;</i>') + '</td>' +
+      '<td scope="col">' +
+      ((downstreamPath??'').startsWith('data:') ? 'data:...' : downstreamPath) +
+      '</td>' +
       '</tr>');
     }
     function getColorFromStatusCode(statusCode) {
       return Math.floor(statusCode / 100) === 1 ? "info" :
         Math.floor(statusCode / 100) === 2 ? "success" :
         Math.floor(statusCode / 100) === 3 ? "dark" :
-        Math.floor(statusCode / 100) === 4 ? "warning" :
+        Math.floor(statusCode / 100) === 4 ? "warning\\\" style=\\\"background-color: var(--bs-purple) !important\\\"" :
         Math.floor(statusCode / 100) === 5 ? "danger" :
         "secondary";
     }
@@ -1585,27 +1624,29 @@ const analyticsView = () =>
     <div class="row">
       <div class="col-md-6">
         <h5>Top Domains</h5>
-        <canvas id="domainsChart" width="400" height="200"></canvas>
-      </div>
-      <div class="col-md-6">
-        <h5>Mapping Usage</h5>
-        <canvas id="mappingChart" width="400" height="200"></canvas>
-      </div>
-    </div>
-    <div class="row mt-4">
-      <div class="col-12">
-        <h5>Domain Statistics</h5>
-        <table class="table table-striped">
+        <table class="table table-sm table-striped">
           <thead>
             <tr>
               <th>Domain</th>
               <th>Requests</th>
-              <th>Avg Response Time</th>
-              <th>Error Rate</th>
-              <th>Last Seen</th>
+              <th style="width: 200px;">Distribution</th>
             </tr>
           </thead>
           <tbody id="domainStatsTable">
+          </tbody>
+        </table>
+      </div>
+      <div class="col-md-6">
+        <h5>Mapping Usage</h5>
+        <table class="table table-sm table-striped">
+          <thead>
+            <tr>
+              <th>Mapping Key</th>
+              <th>Requests</th>
+              <th style="width: 200px;">Distribution</th>
+            </tr>
+          </thead>
+          <tbody id="mappingStatsTable">
           </tbody>
         </table>
       </div>
@@ -1621,19 +1662,19 @@ const networkView = (state: State) => {
         <h5>Network Interfaces</h5>
         <div class="list-group">
           ${networkInfo.map(iface => {
-            const typeIcon = iface.type === 'ethernet' ? '&#x1f50c;' : 
-                           iface.type === 'wifi' ? '&#x1f4e1;' : 
+            const typeIcon = iface.type === 'ethernet' ? '&#x1f50c;' :
+                           iface.type === 'wifi' ? '&#x1f4e1;' :
                            iface.type === 'loopback' ? '&#x1f504;' : '&#x1f310;';
-            const statusBadge = iface.isActive ? 
-              '<span class="badge bg-success">Active</span>' : 
+            const statusBadge = iface.isActive ?
+              '<span class="badge bg-success">Active</span>' :
               '<span class="badge bg-secondary">Inactive</span>';
-            
+
             return `<div class="list-group-item">
               <div class="d-flex w-100 justify-content-between">
                 <h6 class="mb-1">${typeIcon} ${iface.name} ${statusBadge}</h6>
                 <small class="text-muted">${iface.type}</small>
               </div>
-              ${iface.addresses.map(addr => 
+              ${iface.addresses.map(addr =>
                 `<p class="mb-1"><strong>${addr.family}:</strong> ${addr.address} (${addr.cidr})</p>`
               ).join('')}
               <small class="text-muted">MAC: ${iface.mac}</small>
@@ -1648,8 +1689,8 @@ const networkView = (state: State) => {
           <div class="card">
             <div class="card-body">
               <h6 class="card-title">CIDR Ranges</h6>
-              ${networkInfo.filter(iface => iface.isActive).map(iface => 
-                iface.addresses.filter(addr => !addr.internal).map(addr => 
+              ${networkInfo.filter(iface => iface.isActive).map(iface =>
+                iface.addresses.filter(addr => !addr.internal).map(addr =>
                   `<span class="badge bg-info me-1">${addr.cidr}</span>`
                 ).join('')
               ).join('')}
@@ -1786,7 +1827,7 @@ const configPage = (
           .map(
             ([property, exampleValue]) =>
               `${property}:${
-                property === "crossOrigin" 
+                property === "crossOrigin"
                 ? '{type:"object",properties:{' +
                 'whitelist:{type:"array","items":{"type":"string"}},'+
                 'credentials:{type:"array","items":{"type":"string"}},'+
@@ -2002,7 +2043,7 @@ const recorderHandler = (
       },
     });
 
-  setTimeout(
+  if(!state.config?.monitoringDisplay?.active) setTimeout(
     () =>
       state.log(
         [
@@ -2189,7 +2230,7 @@ const recorderPage = (
     <div class="col-lg">&nbsp;</div>
   </div>
   <input type="hidden" id="limit" value="0"/>
-  <div class="modal fade" id="edit-request" tabindex="-1" 
+  <div class="modal fade" id="edit-request" tabindex="-1"
    aria-labelledby="edit-request-label" aria-hidden="true">
     <div class="modal-dialog" style="max-width: 900px">
       <div class="modal-content">
@@ -2239,7 +2280,7 @@ function updateState () {
      headers: { 'Content-Type': 'application/json' },
      body: '{"strict":' + document.getElementById('strict-mock-mode').checked +
            ',"autoRecord":' + document.getElementById('auto-record-mode').checked +
-           ',"mode":"' + 
+           ',"mode":"' +
            (document.getElementById('mock-mode').checked ? "mock" : "proxy") + '"' +
           ',"mocks":' + getMocksData() + '}'
    })
@@ -2248,7 +2289,7 @@ function loadMocks(mocksHashes) {
   const time = new Date().toISOString().split('T')[1].replace('Z', '');
   let mocks = [];
   try {
-    mocks = mocksHashes.map(mock => ({...mock, 
+    mocks = mocksHashes.map(mock => ({...mock,
       request: JSON.parse(atob(mock.uniqueHash)),
       response: JSON.parse(atob(mock.response))
     }));
@@ -2256,12 +2297,12 @@ function loadMocks(mocksHashes) {
   mocks.forEach(mock => {
     const randomId = window.crypto.randomUUID();
     const actions = getActionsHtmlText(mock.uniqueHash, mock.response);
-    addNewRequest(randomId, actions, time, 'info', 'HTTP/2', mock.request.method, 
-    '<span class="badge bg-' + 
-        getColorFromStatusCode(mock.response.status) + '">' + 
-        mock.response.status + 
-        '</span>', 
-        '0ms', mock.request.url, 
+    addNewRequest(randomId, actions, time, 'info', 'HTTP/2', mock.request.method,
+    '<span class="badge bg-' +
+        getColorFromStatusCode(mock.response.status) + '">' +
+        mock.response.status +
+        '</span>',
+        '0ms', mock.request.url, mock.request.mappingKey,
         'N/A');
   });
 }
@@ -2320,24 +2361,24 @@ document.getElementById('record-mode').addEventListener('change', () => {
 document.getElementById('mock-mode').addEventListener('change', () => {
   updateState();
 })
-document.getElementById('auto-record-mode').addEventListener('change', (e) => { 
+document.getElementById('auto-record-mode').addEventListener('change', (e) => {
   updateState();
-  document.getElementById('table-access').style.filter = 
+  document.getElementById('table-access').style.filter =
     document.getElementById('auto-record-mode').checked ? 'blur(8px)' : 'blur(0px)';
-  document.getElementById('commands').style.filter = 
+  document.getElementById('commands').style.filter =
       document.getElementById('auto-record-mode').checked ? 'blur(8px)' : 'blur(0px)';
-  document.getElementById('alert-about-auto-record-mode').style.display = 
+  document.getElementById('alert-about-auto-record-mode').style.display =
     document.getElementById('auto-record-mode').checked ? 'block' : 'none';
-  document.getElementById('strict-mock-mode-form-control').style.filter = 
+  document.getElementById('strict-mock-mode-form-control').style.filter =
     document.getElementById('auto-record-mode').checked ? 'blur(8px)' : 'blur(0px)';
-    
+
 })
-document.getElementById('strict-mock-mode').addEventListener('change', (e) => { 
+document.getElementById('strict-mock-mode').addEventListener('change', (e) => {
   updateState();
 })
 function saveRequest () {
   $('#edit-request').modal("hide");
-  
+
   const requestBeingEdited = window.requestBeingEdited;
   let request = uniqueHashEditor.get();
   let response = responseEditor.get();
@@ -2356,14 +2397,14 @@ function saveRequest () {
   if (requestProlog === "H4sIAAAAAAAA" && !requestPrologHasChanged) {
     request.body =
       btoa([...pako.gzip(request.body)].map(e => String.fromCharCode(e)).join(""));
-  } else if ((requestProlog === null || !request.body.startsWith(requestProlog ?? "")) && 
+  } else if ((requestProlog === null || !request.body.startsWith(requestProlog ?? "")) &&
       request.body.substring(0, 10) !== oldRequest.body.substring(0, 10)) {
     request.body = btoa(request.body);
   }
   if (responseProlog === "H4sIAAAAAAAA" && !responsePrologHasChanged) {
     response.body =
       btoa([...pako.gzip(response.body)].map(e => String.fromCharCode(e)).join(""));
-  } else if ((responseProlog === null || !response.body.startsWith(responseProlog ?? "")) && 
+  } else if ((responseProlog === null || !response.body.startsWith(responseProlog ?? "")) &&
       response.body.substring(0, 10) !== oldResponse.body.substring(0, 10)) {
     response.body = btoa(response.body);
   }
@@ -2384,7 +2425,7 @@ document.getElementById('edit-request').addEventListener('show.bs.modal', event 
   const responseProlog = xmlOrJsonPrologsInBase64.find(prolog => response.body?.startsWith(prolog));
   if (requestProlog) {
     event.relatedTarget.setAttribute('data-requestProlog', requestProlog);
-    request.body = request.body.startsWith("H4sIAAAAAAAA") 
+    request.body = request.body.startsWith("H4sIAAAAAAAA")
     ? pako.ungzip(new Uint8Array(atob(request.body).split("").map(e => e.charCodeAt(0))), {to: "string"})
     : atob(request.body);
     request.body = request.body.startsWith("{\\"") || request.body.startsWith("[{\\"")
@@ -2392,7 +2433,7 @@ document.getElementById('edit-request').addEventListener('show.bs.modal', event 
   }
   if (responseProlog) {
     event.relatedTarget.setAttribute('data-responseProlog', responseProlog);
-    response.body = response.body.startsWith("H4sIAAAAAAAA") 
+    response.body = response.body.startsWith("H4sIAAAAAAAA")
     ? pako.ungzip(new Uint8Array(atob(response.body).split("").map(e => e.charCodeAt(0))), {to: "string"})
     : atob(response.body);
     response.body = response.body.startsWith("{\\"") || response.body.startsWith("[{\\"")
@@ -2805,11 +2846,11 @@ self.addEventListener("fetch", function (event) {
   if (!canonicalUrl || canonicalUrl.hostname === "${
     mappingAttributes.proxyHostnameAndPort
   }") return;
-  const resolvedUrl = mapping.reduce((url, [to, from]) => 
+  const resolvedUrl = mapping.reduce((url, [to, from]) =>
     url.replace(new RegExp(from, "ig"), to), event.request.url);
   if (resolvedUrl === event.request.url) return;
   event.respondWith(fetch(new URL(resolvedUrl, "${mappingAttributes.proxyOrigin}").href),{
-      method: event.request.method, 
+      method: event.request.method,
       headers: event.request.headers,
       body: event.request.body,
       mode: event.request.mode,
@@ -3090,7 +3131,7 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
       color: LogLevel.INFO,
     });
   }
-  if (config.monitoringDisplay?.active === false && 
+  if (config.monitoringDisplay?.active === false &&
     previousConfig.monitoringDisplay?.active === true) {
     logElements.push({
       text: `${EMOJIS.RESTART} Use <tab> key to show monitoring again`,
@@ -3756,6 +3797,31 @@ const websocketServe = function (
     url,
   } = determineMapping(request, state.config);
 
+  const target = new URL(
+    `${targetWithForcedPrefix?.protocol ?? "https:"}//${targetWithForcedPrefix?.host ?? "localhost"}${request.url
+      ?.replace(new RegExp(`^${key}`, "g"), targetWithForcedPrefix?.pathname ?? "")
+      ?.replace(/^\/*/, "/")}`,
+  );
+
+  if (path.startsWith("/local-traffic-logs") ||
+      path.startsWith("/local-traffic-config")) {
+    updateMonitoringMetrics(
+      state.monitoring?.metrics,
+      101,
+      0,
+      {
+        domain: target?.hostname || request.headers.host?.split(':')[0] || 'unknown',
+        mappingKey: key,
+        requestSize: 0,
+        responseSize: 0,
+        sourceIp: request.socket.remoteAddress ?? "127.0.0.1",
+        protocol: 'websocket',
+        method: request.method,
+        targetUrl: path,
+      }
+    );
+  }
+
   if (path.startsWith("/local-traffic-logs")) {
     acknowledgeWebsocket(
       upstreamSocket,
@@ -3818,11 +3884,6 @@ const websocketServe = function (
     };
   }
 
-  const target = new URL(
-    `${targetWithForcedPrefix?.protocol ?? "https"}//${targetWithForcedPrefix?.host ?? "localhost"}${request.url
-      ?.replace(new RegExp(`^${key}`, "g"), targetWithForcedPrefix?.pathname ?? "")
-      ?.replace(/^\/*/, "/")}`,
-  );
   const downstreamRequestOptions: RequestOptions = {
     hostname: target.hostname,
     path: target.pathname,
@@ -3858,6 +3919,21 @@ const websocketServe = function (
     ]);
   });
   downstreamRequest.on("upgrade", (response, downstreamSocket) => {
+    updateMonitoringMetrics(
+      state.monitoring?.metrics,
+      response.statusCode ?? 101,
+      0,
+      {
+        domain: target?.hostname || request.headers.host?.split(':')[0] || 'unknown',
+        mappingKey: key,
+        requestSize: 0,
+        responseSize: 0,
+        sourceIp: request.socket.remoteAddress ?? "127.0.0.1",
+        protocol: 'websocket',
+        method: request.method,
+        targetUrl: target.href,
+      }
+    );
     const upgradeResponse = `HTTP/${response.httpVersion} ${
       response.statusCode
     } ${response.statusMessage}\r\n${Object.entries(response.headers)
@@ -3913,6 +3989,18 @@ const serve = async function (
 ) {
   // phase: mapping
   if (!inboundRequest.headers.host && !inboundRequest.headers[":authority"]) {
+    updateMonitoringMetrics(
+      state.monitoring?.metrics,
+      400,
+      0,
+      {
+        domain: 'unknown',
+        sourceIp: (inboundRequest.socket as any)?.remoteAddress ?? "127.0.0.1",
+        protocol: state.config.ssl ? 'HTTP/2' : 'HTTP1.1',
+        method: inboundRequest.method,
+        targetUrl: inboundRequest.url ?? '/',
+      }
+    );
     send(
       400,
       inboundResponse,
@@ -3955,6 +4043,19 @@ const serve = async function (
     (state.mode === "mock" ? new URL(proxyOrigin) : null);
 
   if (!target) {
+    updateMonitoringMetrics(
+      state.monitoring?.metrics,
+      502,
+      0,
+      {
+        domain: url.hostname,
+        mappingKey: key,
+        sourceIp: (inboundRequest.socket as any)?.remoteAddress ?? "127.0.0.1",
+        protocol: state.config.ssl ? 'HTTP/2' : 'HTTP1.1',
+        method: inboundRequest.method,
+        targetUrl: url.href,
+      }
+    );
     send(
       502,
       inboundResponse,
@@ -4209,12 +4310,25 @@ const serve = async function (
         })[0]?.[1];
 
   if (shouldMock && !foundMock && state.mockConfig.strict) {
+    updateMonitoringMetrics(
+      state.monitoring?.metrics,
+      502,
+      0,
+      {
+        domain: url.hostname,
+        mappingKey: key,
+        sourceIp: (inboundRequest.socket as any)?.remoteAddress ?? "127.0.0.1",
+        protocol: state.config.ssl ? 'HTTP/2' : 'HTTP1.1',
+        method: inboundRequest.method,
+        targetUrl: url.href,
+      }
+    );
     send(
       502,
       inboundResponse,
       Buffer.from(
         errorPage(
-          new Error(`No corresponding mock found in the server. 
+          new Error(`No corresponding mock found in the server.
           Try switching back to the proxy mode`),
           state.mode,
           "mock",
@@ -4302,6 +4416,7 @@ const serve = async function (
     downstreamPath: targetUrl.href,
     randomId,
     uniqueHash,
+    mappingKey: key,
   });
   if (!((error as any) instanceof Buffer)) error = null;
 
@@ -4532,14 +4647,14 @@ const serve = async function (
           ["access-control-allow-credentials"]: "true",
           }
         : {}),
-      ...(state.config.disableWebSecurity 
+      ...(state.config.disableWebSecurity
         && (!originCanUseCredentials
         || !(isWebContainer || state.config.crossOrigin?.serverSide))
         ? {
           ["cross-origin-embedder-policy"]: "credentialless",
         }
         : {}),
-      ...(state.config.disableWebSecurity 
+      ...(state.config.disableWebSecurity
         && originCanUseCredentials
         && (isWebContainer || state.config.crossOrigin?.serverSide)
         ? {
@@ -4663,19 +4778,19 @@ const serve = async function (
   // Update monitoring metrics if enabled (continue collecting even when display is off)
   if (state.monitoring?.metrics) {
     const domain = target?.hostname || inboundRequest.headers.host?.split(':')[0] || 'unknown';
-    const requestSize = typeof requestBody === 'string' ? Buffer.byteLength(requestBody) : 
+    const requestSize = typeof requestBody === 'string' ? Buffer.byteLength(requestBody) :
                        requestBody ? requestBody.length : 0;
     const responseSize = payload ? payload.length : 0;
-    
+
     // Extract client IP from various possible sources
-    const sourceIp = (inboundRequest as any).socket?.remoteAddress || 
+    const sourceIp = (inboundRequest as any).socket?.remoteAddress ||
                      (inboundRequest as any).connection?.remoteAddress ||
                      inboundRequest.headers['x-forwarded-for']?.toString().split(',')[0]?.trim() ||
                      inboundRequest.headers['x-real-ip']?.toString() ||
                      '127.0.0.1';
-    
+
     updateMonitoringMetrics(
-      state.monitoring.metrics,
+      state.monitoring?.metrics,
       statusCode,
       Math.floor(Number(endTime - startTime) / 1000000),
       {
@@ -4810,14 +4925,14 @@ const update = async (
     );
   }
 
-  if (!newState.keypressListener && 
+  if (!newState.keypressListener &&
     !currentState.keypressListener &&
     runAsMainProgram &&
     stdin.isTTY
   ) {
     stdin.setRawMode(true);
   }
-  if (!newState.keypressListener && 
+  if (!newState.keypressListener &&
     !currentState.keypressListener &&
   runAsMainProgram) {
     emitKeypressEvents(stdin);
@@ -4877,12 +4992,15 @@ const update = async (
   if (runAsMainProgram && previousKeypressListener) stdin.off?.("keypress", previousKeypressListener);
   const keypressListener =
     function(this: State, str: any, key: any) {
-      if (key.name === 'tab') 
-        update(this, 
-          { config: { ...this.config, 
-            monitoringDisplay: {...(this.config.monitoringDisplay) ?? 
-              defaultConfig.monitoringDisplay, 
+      if (key.name === 'tab')
+        update(this,
+          { config: { ...this.config,
+            monitoringDisplay: {...(this.config.monitoringDisplay) ??
+              defaultConfig.monitoringDisplay,
               active: !(this.config.monitoringDisplay?.active ?? false) } } })
+      else if (key.name === 'r')
+        update(this, {monitoring: {metrics: createMonitoringMetrics(),
+            cleanup: this.monitoring?.cleanup ?? null}})
       else if (key.ctrl && key.name === 'c' && runAsMainProgram) {
         stdin.off?.("keypress", keypressListener)
         process.exit();
@@ -4908,8 +5026,9 @@ const update = async (
     active: config?.monitoringDisplay?.active ?? false,
     toggledOff: monitoringToggledOff,
     cleanup: currentState.monitoring?.cleanup ?? null,
-    monitoringDataAccessor: () => ({metrics: monitoringMetrics, 
-      features: config?.monitoringDisplay ?? defaultConfig.monitoringDisplay
+    monitoringDataAccessor: () => ({metrics: monitoringMetrics,
+      features: config?.monitoringDisplay ?? defaultConfig.monitoringDisplay,
+      serverMode: mode
     }),
   })
 
