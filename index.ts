@@ -210,6 +210,7 @@ interface DomainStats {
 }
 
 interface MonitoringMetrics {
+  reloadingConfig?: boolean;
   requestCounts: number[];
   statusCodes: Map<number, number>;
   responseTimes: number[];
@@ -272,6 +273,7 @@ const getNetworkInterfaceInfo = (): NetworkInterfaceInfo[] => {
 };
 
 const createMonitoringMetrics = (): MonitoringMetrics => ({
+  reloadingConfig: false,
   requestCounts: Array(60).fill(0), // Last 60 seconds
   statusCodes: new Map(),
   responseTimes: [],
@@ -473,7 +475,8 @@ const renderMonitoringDisplay = (metrics: MonitoringMetrics,
   output += `\x1b[36m╔${'═'.repeat(dashboardWidth)}╗\x1b[0m\n`;
 
   // Header with border
-  const headerText = `${EMOJIS.MONITORING} local-traffic monitoring`;
+  const headerText = `${EMOJIS.MONITORING} local-traffic monitoring ${
+    metrics.reloadingConfig ? EMOJIS.RESTART : ''}`;
   const timeText = `Time: ${new Date().toLocaleTimeString()}`;
   const headerPadding = Math.max(0, dashboardWidth - headerText.length);
   const timePadding = Math.max(0, dashboardWidth - timeText.length);
@@ -4762,6 +4765,13 @@ const update = async (
       filename,
       JSON.stringify(newState.pendingConfigSave, null, 2),
       fileWriteErr => {
+        if (currentState.config?.monitoringDisplay?.active &&
+          currentState.monitoring?.metrics?.reloadingConfig !== undefined) {
+          currentState.monitoring.metrics.reloadingConfig = true;
+        }
+        if (currentState.config?.monitoringDisplay?.active) {
+          return;
+        }
         if (fileWriteErr)
           currentState.log?.([
             [
@@ -4959,6 +4969,9 @@ const update = async (
 
   if (monitoringToggledOff) {
     await state.quickStatus();
+  }
+  if (state.monitoring?.metrics?.reloadingConfig !== undefined) {
+    state.monitoring.metrics.reloadingConfig = false;
   }
   return state;
 };
