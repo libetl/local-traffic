@@ -4927,15 +4927,17 @@ const update = async (
 
   if (!newState.keypressListener &&
     !currentState.keypressListener &&
-    runAsMainProgram &&
-    stdin.isTTY
+    runAsMainProgram
   ) {
-    stdin.setRawMode(true);
-  }
-  if (!newState.keypressListener &&
-    !currentState.keypressListener &&
-  runAsMainProgram) {
-    emitKeypressEvents(stdin);
+    // Try to enable raw mode even if isTTY detection fails (WSL compatibility)
+    try {
+      stdin.resume();
+      stdin.setEncoding('utf8');
+      emitKeypressEvents(stdin);
+      stdin.setRawMode(true);
+    } catch (e) {
+      // setRawMode might fail in some environments, continue anyway
+    }
   }
 
   if (newState?.server === null && currentState.server) {
