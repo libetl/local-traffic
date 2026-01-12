@@ -5,7 +5,7 @@ That is a secure http/2 (or insecure http1.1) reverse-proxy installed on your ma
 - with 0 transitive dependency
 - with 1 install step
 - with a startup time of a few milliseconds
-- with one 32kb index.js file
+- with one 40kb index.js file
 
 How simple is that ?
 
@@ -111,6 +111,7 @@ All boolean settings default to false when unspecified.
 - `dontUseHttp2Downstream`: (`boolean`) force calling downstream services in http1.1 only (to save some time)
 - `simpleLogs`: (`boolean`) disable colored logs for text terminals
 - `logAccessInTerminal`: (`boolean` | 'with-mapping') write an access log in the terminal on each call (>= 0.1.2 : 'with-mapping' will log the key used to find the target)
+- `monitoringDisplay.active`: (`boolean`) show a real-time terminal dashboard with request histograms, status codes, and response times (similar to btop/htop)
 - `websocket`: (`boolean`) true to activate websocket connections proxying via sockets. Required for logs UI.
 - `disableWebSecurity`: (`boolean`) true for easygoing values in cross origin requests or content security policy headers
 - `connectTimeout`: (`number`) max time before aborting the connection (defaults to 3000ms)
@@ -120,6 +121,20 @@ All boolean settings default to false when unspecified.
 - `crossOrigin.credentials`: (`string[]`) domain names or regexes that can use credentials (>= 0.1.29)
 - `crossOrigin.whitelist` (`string[]`) domain names or regexes that should not go through cors proxy (>= 0.1.29)
 - `crossOrigin.serverSide` (`boolean`) activates the CORS proxy even while running as a server, to walk around webapp firewalls. Otherwise it will only work from a webcontainer (>= 0.1.29)
+
+## monitoringDisplay features (>= 0.2.0) :
+
+`monitoringDisplay.` has the following feature toogles (booleans) :
+* `counter`: total requests since last reset
+* `networkInterfaces`: network interfaces involved in the requests
+* `requestRateHistogram`: barchart of requests with a colored breakdown of each status family (1xx,2xx,3xx,4xx,5xx)
+* `topDomains`: Top five downstream domains
+* `topMappings`: top five used mapping keys
+* `statusCodes`: status codes distribution
+* `protocols`: protocol distribution
+* `httpMethods`: http methods distributions
+* `topRoutes`: top 5 routes
+* `responseTime`: average response time + P50, P95 and P99
 
 ## config API
 

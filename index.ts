@@ -34,9 +34,11 @@ import {
 import * as zlib from "zlib";
 import { resolve, normalize, sep } from "path";
 import { createHash, randomBytes } from "crypto";
-import { argv, cwd, exit, hrtime, stdout, versions } from "process";
-import { homedir, tmpdir } from "os";
+import { argv, cwd, exit, hrtime, stdin, stdout, versions } from "process";
+import { homedir, tmpdir, networkInterfaces } from "os";
 import type { Duplex, Readable } from "stream";
+import { emitKeypressEvents } from 'readline';
+
 const {
   gzip,
   gunzip,
@@ -68,6 +70,7 @@ const EMOJIS = Object.assign(...[
   {"LOGS": "📝"},
   {"RESTART": "🔄"},
   {"WEBSOCKET": "☄️ "},
+  {"MONITORING": "📊"},
   {"COLORED": "✨"},
   {"SHIELD": "🛡️ "},
   {"NO": "⛔"},
@@ -111,12 +114,28 @@ interface LocalConfiguration {
   disableWebSecurity?: boolean;
   connectTimeout?: number;
   socketTimeout?: number;
+  monitoringDisplay?: {
+    active?: boolean;
+  } & Partial<ActivatedMonitoringFeatures>;
   crossOrigin?: {
     urlPattern?: string;
     whitelist?: string[];
     credentials?: string[];
     serverSide?: boolean;
   }
+}
+
+type ActivatedMonitoringFeatures = {
+    counter: boolean;
+    networkInterfaces: boolean;
+    requestRateHistogram: boolean;
+    topDomains: boolean;
+    topMappings: boolean;
+    statusCodes: boolean;
+    protocols: boolean;
+    httpMethods: boolean;
+    topRoutes: boolean;
+    responseTimes: boolean;
 }
 
 type Mapping = {
@@ -152,6 +171,7 @@ interface State {
   server: Server | null;
   logsListeners: WebsocketLogsListener[];
   configListeners: WebsocketLogsListener[];
+  keypressListener: (...args: any[]) => void;
   configFileWatcher: StatWatcher | null;
   mode: ServerMode;
   mockConfig: MockConfig;
@@ -160,7 +180,689 @@ interface State {
   notifyLogsListeners: (data: Record<string, unknown>) => void;
   buildQuickStatus: () => LogElement[];
   quickStatus: (otherLogElements?: LogElement[][]) => Promise<void>;
+  monitoring: MonitoringConfig;
 }
+
+interface MonitoringConfig {
+  metrics?: MonitoringMetrics;
+  cleanup: () => {}
+}
+
+interface NetworkInterfaceInfo {
+  name: string;
+  type: string; // 'ethernet', 'wifi', 'loopback', 'other'
+  addresses: Array<{
+    address: string;
+    family: string;
+    cidr: string;
+    internal: boolean;
+  }>;
+  mac: string;
+  isActive: boolean;
+}
+
+interface DomainStats {
+  domain: string;
+  requestCount: number;
+  responseTimeSum: number;
+  lastSeen: number;
+  statusCodes: Map<number, number>;
+}
+
+interface MonitoringMetrics {
+  resetTime: number;
+  reloadingConfig?: boolean;
+  requestCounts: number[];
+  statusCodes: Map<number, number>;
+  statusCodesBySecond: Array<{s1xx: number; s2xx: number; s3xx: number; s4xx: number; s5xx: number}>; // Track status codes per second
+  responseTimes: number[];
+  errorCounts: number[];
+  lastUpdateTime: number;
+  totalRequests: number;
+  activeConnections: number;
+  // Enhanced network metrics
+  networkInterfaces: NetworkInterfaceInfo[];
+  networkLoad: {
+    bytesIn: number[];
+    bytesOut: number[];
+    lastUpdate: number;
+  };
+  domainStats: Map<string, DomainStats>;
+  mappingUsage: Map<string, number>; // Track which mapping rules are used most
+  // New comprehensive routing and destination tracking
+  routeStats: Map<string, RouteStats>; // Track source -> destination routing
+  protocolStats: Map<string, number>; // Track HTTP vs HTTPS vs other protocols
+  methodStats: Map<string, number>; // Track HTTP methods (GET, POST, etc.)
+  cidrStats: Map<string, number>; // Track requests by CIDR ranges
+}
+
+interface RouteStats {
+  sourceIp: string;
+  destinationHost: string;
+  protocol: string;
+  requestCount: number;
+  totalResponseTime: number;
+  lastAccessed: number;
+}
+
+const detectNetworkInterfaceType = (name: string, addresses: any[]): string => {
+  if (name.startsWith('lo') || addresses.some(addr => addr.internal)) {
+    return 'loopback';
+  }
+  if (name.startsWith('eth') || name.startsWith('en')) {
+    return 'ethernet';
+  }
+  if (name.startsWith('wl') || name.startsWith('wi') || name.startsWith('wlan')) {
+    return 'wifi';
+  }
+  return 'other';
+};
+
+const getNetworkInterfaceInfo = (): NetworkInterfaceInfo[] => {
+  const interfaces = networkInterfaces();
+  return Object.entries(interfaces).map(([name, addresses]) => ({
+    name,
+    type: detectNetworkInterfaceType(name, addresses || []),
+    addresses: (addresses || []).map(addr => ({
+      address: addr.address,
+      family: addr.family,
+      cidr: addr.cidr || `${addr.address}/${addr.family === 'IPv4' ? '32' : '128'}`,
+      internal: addr.internal,
+    })),
+    mac: addresses?.[0]?.mac || '00:00:00:00:00:00',
+    isActive: !!(addresses?.some(addr => !addr.internal)),
+  }));
+};
+
+const createMonitoringMetrics = (): MonitoringMetrics => ({
+  resetTime: Date.now(),
+  reloadingConfig: false,
+  requestCounts: Array(60).fill(0), // Last 60 seconds
+  statusCodes: new Map(),
+  statusCodesBySecond: Array(60).fill(0).map(() => ({s1xx: 0, s2xx: 0, s3xx: 0, s4xx: 0, s5xx: 0})),
+  responseTimes: [],
+  errorCounts: Array(60).fill(0),
+  lastUpdateTime: Date.now(),
+  totalRequests: 0,
+  activeConnections: 0,
+  networkInterfaces: getNetworkInterfaceInfo(),
+  networkLoad: {
+    bytesIn: Array(60).fill(0),
+    bytesOut: Array(60).fill(0),
+    lastUpdate: Date.now(),
+  },
+  domainStats: new Map(),
+  mappingUsage: new Map(),
+  // Initialize new comprehensive metrics
+  routeStats: new Map(),
+  protocolStats: new Map(),
+  methodStats: new Map(),
+  cidrStats: new Map(),
+});
+
+const updateMonitoringMetrics = (
+  metrics: MonitoringMetrics | undefined,
+  statusCode: number,
+  responseTime: number,
+  options: {
+    domain?: string;
+    mappingKey?: string;
+    requestSize?: number;
+    responseSize?: number;
+    sourceIp?: string;
+    protocol?: string;
+    method?: string;
+    targetUrl?: string;
+  } = {}
+) => {
+  if (!metrics) return; // Safety guard for edge cases
+  const now = Date.now();
+  const secondsElapsed = Math.floor((now - metrics.lastUpdateTime) / 1000);
+
+  // Shift arrays if time has passed
+  if (secondsElapsed > 0) {
+    for (let i = 0; i < Math.min(secondsElapsed, 60); i++) {
+      metrics.requestCounts.shift();
+      metrics.requestCounts.push(0);
+      metrics.statusCodesBySecond.shift();
+      metrics.statusCodesBySecond.push({s1xx: 0, s2xx: 0, s3xx: 0, s4xx: 0, s5xx: 0});
+      metrics.errorCounts.shift();
+      metrics.errorCounts.push(0);
+      metrics.networkLoad.bytesIn.shift();
+      metrics.networkLoad.bytesIn.push(0);
+      metrics.networkLoad.bytesOut.shift();
+      metrics.networkLoad.bytesOut.push(0);
+    }
+    metrics.lastUpdateTime = now;
+  }
+
+  // Update current second
+  metrics.requestCounts[metrics.requestCounts.length - 1]++;
+  metrics.totalRequests++;
+
+  // Track status codes
+  metrics.statusCodes.set(statusCode, (metrics.statusCodes.get(statusCode) || 0) + 1);
+
+  // Track status codes by second for histogram
+  const currentSecond = metrics.statusCodesBySecond[metrics.statusCodesBySecond.length - 1];
+  if (statusCode >= 100 && statusCode < 200) currentSecond.s1xx++;
+  else if (statusCode >= 200 && statusCode < 300) currentSecond.s2xx++;
+  else if (statusCode >= 300 && statusCode < 400) currentSecond.s3xx++;
+  else if (statusCode >= 400 && statusCode < 500) currentSecond.s4xx++;
+  else if (statusCode >= 500) currentSecond.s5xx++;
+
+  // Track response times (keep last 1000)
+  metrics.responseTimes.push(responseTime);
+  if (metrics.responseTimes.length > 1000) {
+    metrics.responseTimes.shift();
+  }
+
+  // Track errors (4xx, 5xx)
+  if (statusCode >= 400) {
+    metrics.errorCounts[metrics.errorCounts.length - 1]++;
+  }
+
+  // Track network load
+  if (options.requestSize) {
+    metrics.networkLoad.bytesIn[metrics.networkLoad.bytesIn.length - 1] += options.requestSize;
+  }
+  if (options.responseSize) {
+    metrics.networkLoad.bytesOut[metrics.networkLoad.bytesOut.length - 1] += options.responseSize;
+  }
+
+  // Track domain statistics
+  if (options.domain) {
+    const domainKey = options.domain.toLowerCase();
+    const existing = metrics.domainStats.get(domainKey);
+    if (existing) {
+      existing.requestCount++;
+      existing.responseTimeSum += responseTime;
+      existing.lastSeen = now;
+      existing.statusCodes.set(statusCode, (existing.statusCodes.get(statusCode) || 0) + 1);
+    } else {
+      metrics.domainStats.set(domainKey, {
+        domain: domainKey,
+        requestCount: 1,
+        responseTimeSum: responseTime,
+        lastSeen: now,
+        statusCodes: new Map([[statusCode, 1]]),
+      });
+    }
+  }
+
+  // Track mapping usage
+  if (options.mappingKey) {
+    metrics.mappingUsage.set(
+      options.mappingKey,
+      (metrics.mappingUsage.get(options.mappingKey) || 0) + 1
+    );
+  }
+
+  // Track new comprehensive metrics
+
+  // Track protocol statistics
+  if (options.protocol) {
+    const protocolKey = options.protocol.toUpperCase();
+    metrics.protocolStats.set(protocolKey, (metrics.protocolStats.get(protocolKey) || 0) + 1);
+  }
+
+  // Track HTTP method statistics
+  if (options.method) {
+    const methodKey = options.method.toUpperCase();
+    metrics.methodStats.set(methodKey, (metrics.methodStats.get(methodKey) || 0) + 1);
+  }
+
+  // Track route statistics (source -> destination routing)
+  if (options.sourceIp && options.domain) {
+    const routeKey = `${options.sourceIp} -> ${options.domain}`;
+    const existing = metrics.routeStats.get(routeKey);
+    if (existing) {
+      existing.requestCount++;
+      existing.totalResponseTime += responseTime;
+      existing.lastAccessed = now;
+    } else {
+      metrics.routeStats.set(routeKey, {
+        sourceIp: options.sourceIp,
+        destinationHost: options.domain,
+        protocol: options.protocol || 'HTTP',
+        requestCount: 1,
+        totalResponseTime: responseTime,
+        lastAccessed: now,
+      });
+    }
+  }
+
+  // Track CIDR ranges (extract network from source IP)
+  if (options.sourceIp) {
+    const cidr = extractCidrFromIp(options.sourceIp);
+    if (cidr) {
+      metrics.cidrStats.set(cidr, (metrics.cidrStats.get(cidr) || 0) + 1);
+    }
+  }
+
+  // Refresh network interfaces periodically (every 30 seconds)
+  if (now - metrics.networkLoad.lastUpdate > 30000) {
+    metrics.networkInterfaces = getNetworkInterfaceInfo();
+    metrics.networkLoad.lastUpdate = now;
+  }
+};
+
+// Helper function to extract CIDR network from IP address
+const extractCidrFromIp = (ip: string): string | null => {
+  try {
+    const parts = ip.split('.');
+    if (parts.length === 4) {
+      // For IPv4, validate each octet is 0-255
+      const validOctets = parts.every(part => {
+        const num = parseInt(part, 10);
+        return !isNaN(num) && num >= 0 && num <= 255;
+      });
+      if (validOctets) {
+        return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+      }
+    }
+    // For IPv6, use simple check and create /64 network
+    if (ip.includes(':') && ip.match(/^[0-9a-fA-F:]+$/)) {
+      // Simple IPv6 validation - just check for valid hex characters and colons
+      const segments = ip.split(':').filter(s => s !== '');
+      if (segments.length >= 2) {
+        return `${segments.slice(0, 4).join(':')}::/64`;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const renderMonitoringDisplay = (
+  metrics: MonitoringMetrics,
+  features: ActivatedMonitoringFeatures,
+  serverMode: ServerMode): string => {
+  const width = Math.min(stdout.columns || 80, 120);
+  const height = Math.min(stdout.rows || 24, 40);
+
+  let output = "";
+
+  // Move cursor to top without clearing (prevents flash)
+  output += "\x1b[H";
+
+  // Decorative top border
+  const dashboardWidth = Math.min(width - 4, 76);
+  output += `\x1b[36m╔${'═'.repeat(dashboardWidth)}╗\x1b[0m\n`;
+
+  // Header with border
+  const headerText = `${EMOJIS.MONITORING} local-traffic monitoring ${
+    serverMode === 'mock' ? EMOJIS.MOCKS : ''}${
+    metrics.reloadingConfig ? EMOJIS.RESTART : ''}`;
+  const timeText = `Time: ${new Date().toLocaleTimeString()}, Last Reset: ${
+    new Date(metrics.resetTime).toLocaleTimeString()} `;
+  const headerPadding = Math.max(0, dashboardWidth - headerText.length);
+  const timePadding = Math.max(0, dashboardWidth - timeText.length);
+
+  output += `\x1b[36m║\x1b[0m\x1b[1m${headerText}${' '.repeat(headerPadding)}\x1b[0m\x1b[36m║\x1b[0m\n`;
+  output += `\x1b[36m║\x1b[0m\x1b[36m${timeText}${' '.repeat(timePadding)}\x1b[0m\x1b[36m║\x1b[0m\n`;
+  output += `\x1b[36m╠${'═'.repeat(dashboardWidth)}╣\x1b[0m\n`;
+
+  // Helper function to format content with borders (cache regex for performance)
+  const ansiRegex = /\x1b\[[0-9;]*m/g;
+  const formatLine = (content: string): string => {
+    const contentLength = content.replace(ansiRegex, '').length; // Remove ANSI codes for length calculation
+    const padding = Math.max(0, dashboardWidth - contentLength);
+    return `\x1b[36m║\x1b[0m${content}${' '.repeat(padding)}\x1b[36m║\x1b[0m\n`;
+  };
+
+  // Statistics
+  const totalReqs = metrics.totalRequests;
+  const currentRPS = metrics.requestCounts[metrics.requestCounts.length - 1];
+  const avgRPS = metrics.requestCounts.reduce((a, b) => a + b, 0) / 60;
+  const errorRate = metrics.errorCounts.reduce((a, b) => a + b, 0) / Math.max(totalReqs, 1) * 100;
+
+  if (features.counter) {
+    output += formatLine(`\x1b[32mTotal Requests:\x1b[0m ${totalReqs.toLocaleString()}`);
+    output += formatLine(`\x1b[33mCurrent requests/second:\x1b[0m ${currentRPS}`);
+    output += formatLine(`\x1b[34mAverage requests/second:\x1b[0m ${avgRPS.toFixed(2)}`);
+    output += formatLine(`\x1b[31mError Rate:\x1b[0m ${errorRate.toFixed(2)}%`);
+    output += formatLine("");
+  }
+
+  if (features.networkInterfaces) {
+    // Network Interface Information
+    output += formatLine(`\x1b[1mNetwork Interfaces:\x1b[0m`);
+    const activeInterfaces = metrics.networkInterfaces.filter(iface => iface.isActive);
+    for (const iface of activeInterfaces.slice(0, 3)) {
+      const typeColor = iface.type === 'ethernet' ? '\x1b[32m' :
+        iface.type === 'wifi' ? '\x1b[34m' : '\x1b[36m';
+      const mainAddress = iface.addresses.find(addr => addr.family === 'IPv4' && !addr.internal) ||
+        iface.addresses[0];
+      if (mainAddress) {
+        output += formatLine(`${typeColor}${iface.type.toUpperCase()}\x1b[0m ${iface.name}: ${mainAddress.address} (${mainAddress.cidr})`);
+      }
+    }
+
+    // Network Load
+    const currentBytesIn = metrics.networkLoad.bytesIn[metrics.networkLoad.bytesIn.length - 1];
+    const currentBytesOut = metrics.networkLoad.bytesOut[metrics.networkLoad.bytesOut.length - 1];
+    const totalBytesIn = metrics.networkLoad.bytesIn.reduce((a, b) => a + b, 0);
+    const totalBytesOut = metrics.networkLoad.bytesOut.reduce((a, b) => a + b, 0);
+
+    output += formatLine(`\x1b[35mNetwork Load (current/total):\x1b[0m ↓${formatBytes(currentBytesIn)}/${formatBytes(totalBytesIn)} ↑${formatBytes(currentBytesOut)}/${formatBytes(totalBytesOut)}`);
+    output += formatLine("");
+  }
+
+  const chartWidth = Math.min(60, dashboardWidth - 10);
+  if (features.requestRateHistogram) {
+
+    // Request Rate Histogram (last 60 seconds) - Stacked by status code
+    output += formatLine(`\x1b[1mRequest Rate - Last 60 seconds:\x1b[0m`);
+    output += formatLine(`\x1b[36m■\x1b[0m 1xx  \x1b[32m■\x1b[0m 2xx  \x1b[90m■\x1b[0m 3xx  \x1b[35m■\x1b[0m 4xx  \x1b[31m■\x1b[0m 5xx`);
+
+    // Ensure we have the most recent data (reverse to show latest on right)
+    const recentStatusCodes = [...metrics.statusCodesBySecond].reverse();
+    const maxRequests = Math.max(...recentStatusCodes.map(s => s.s1xx + s.s2xx + s.s3xx + s.s4xx + s.s5xx), 1);
+    const histogramHeight = Math.min(6, height - 25);
+
+    for (let row = histogramHeight; row > 0; row--) {
+      const threshold = (maxRequests * row) / histogramHeight;
+      let histLine = `${threshold.toFixed(0).padStart(3)} │`;
+
+      for (let i = 0; i < chartWidth && i < recentStatusCodes.length; i++) {
+        const status = recentStatusCodes[i];
+        const total = status.s1xx + status.s2xx + status.s3xx + status.s4xx + status.s5xx;
+
+        if (total >= threshold) {
+          // Stacked bar: show the highest priority status at this height
+          const s5xxThreshold = total - status.s5xx;
+          const s4xxThreshold = s5xxThreshold - status.s4xx;
+          const s3xxThreshold = s4xxThreshold - status.s3xx;
+          const s2xxThreshold = s3xxThreshold - status.s2xx;
+
+          if (threshold > s5xxThreshold) {
+            histLine += "\x1b[31m█\x1b[0m"; // Red for 5xx
+          } else if (threshold > s4xxThreshold) {
+            histLine += "\x1b[35m█\x1b[0m"; // Magenta for 4xx (Firefox style)
+          } else if (threshold > s3xxThreshold) {
+            histLine += "\x1b[90m█\x1b[0m"; // Gray for 3xx
+          } else if (threshold > s2xxThreshold) {
+            histLine += "\x1b[32m█\x1b[0m"; // Green for 2xx
+          } else {
+            histLine += "\x1b[36m█\x1b[0m"; // Cyan for 1xx (WebSocket 101)
+          }
+        } else {
+          histLine += " ";
+        }
+      }
+
+      output += formatLine(histLine);
+    }
+
+    let bottomLine = "    └" + "─".repeat(Math.min(chartWidth, recentStatusCodes.length));
+    output += formatLine(bottomLine);
+  }
+
+  if (features.topDomains) {
+    // Domain Distribution Histogram
+    const sortedDomainsForHist = Array.from(metrics.domainStats.values())
+      .sort((a, b) => b.requestCount - a.requestCount)
+      .slice(0, 8);
+
+    if (sortedDomainsForHist.length > 1) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mDomain Distribution:\x1b[0m`);
+
+      const maxDomainRequests = Math.max(...sortedDomainsForHist.map(d => d.requestCount), 1);
+      const domainHistHeight = Math.min(4, sortedDomainsForHist.length);
+
+      for (const domain of sortedDomainsForHist.slice(0, domainHistHeight)) {
+        const domainName = domain.domain.length > 20 ? domain.domain.substring(0, 17) + '...' : domain.domain;
+        const barLength = Math.floor((domain.requestCount / maxDomainRequests) * (chartWidth - 25));
+        const percentage = (domain.requestCount / totalReqs * 100).toFixed(1);
+
+        let domainLine = `${domainName.padEnd(20)} │`;
+        for (let i = 0; i < barLength; i++) {
+          domainLine += "\x1b[36m█\x1b[0m";
+        }
+        domainLine += ` ${domain.requestCount} (${percentage}%)`;
+
+        output += formatLine(domainLine);
+      }
+    }
+
+    // Top Domains
+    const sortedDomains = Array.from(metrics.domainStats.values())
+      .sort((a, b) => b.requestCount - a.requestCount)
+      .slice(0, 5);
+
+    if (sortedDomains.length > 0) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mTop Domains:\x1b[0m`);
+      for (const domain of sortedDomains) {
+        const avgResponseTime = domain.responseTimeSum / domain.requestCount;
+        const percentage = (domain.requestCount / totalReqs * 100).toFixed(1);
+        output += formatLine(`\x1b[36m${domain.domain.padEnd(25)}\x1b[0m ${domain.requestCount.toString().padStart(4)} reqs (${percentage}%) ${avgResponseTime.toFixed(0)}ms avg`);
+      }
+    }
+  }
+
+  if (features.topMappings) {
+    // Mapping Usage Analytics
+    const sortedMappings = Array.from(metrics.mappingUsage.entries())
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5);
+
+    if (sortedMappings.length > 0) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mTop Mapping Rules:\x1b[0m`);
+      for (const [mappingKey, count] of sortedMappings) {
+        const percentage = (count / totalReqs * 100).toFixed(1);
+        const truncatedKey = mappingKey.length > 30 ? mappingKey.substring(0, 27) + '...' : mappingKey;
+        output += formatLine(`\x1b[35m${truncatedKey.padEnd(30)}\x1b[0m ${count.toString().padStart(4)} reqs (${percentage}%)`);
+      }
+    }
+  }
+  if (features.statusCodes) {
+    // Status Code Distribution
+    const sortedStatusCodes = Array.from(metrics.statusCodes.entries())
+      .sort(([a], [b]) => a - b);
+
+    let statusLine = "";
+    for (const [statusCode, count] of sortedStatusCodes.slice(0, 6)) {
+      const percentage = (count / totalReqs * 100).toFixed(1);
+      const color = statusCode < 300 ? "\x1b[32m" : statusCode < 400 ? "\x1b[33m" : "\x1b[31m";
+      const statusText = `${color}${statusCode}\x1b[0m: ${count.toLocaleString()} (${percentage}%) `;
+      if (statusLine.length + statusText.length > screenWidth - 5) break;
+      statusLine += statusText;
+    }
+    if (statusLine.length > 0) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mStatus Code Distribution:\x1b[0m`);
+    }
+    output += formatLine(statusLine);
+  }
+
+  if (features.protocols) {
+    // Protocol Distribution
+    if (metrics.protocolStats.size > 0) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mProtocol Distribution:\x1b[0m`);
+      const sortedProtocols = Array.from(metrics.protocolStats.entries())
+        .sort(([, a], [, b]) => b - a);
+      let protocolLine = "";
+      for (const [protocol, count] of sortedProtocols.slice(0, 4)) {
+        const percentage = (count / totalReqs * 100).toFixed(1);
+        const color = protocol === 'HTTPS' ? '\x1b[32m' : protocol === 'HTTP' ? '\x1b[33m' : '\x1b[36m';
+        protocolLine += `${color}${protocol}\x1b[0m: ${count} (${percentage}%) `;
+      }
+      output += formatLine(protocolLine);
+    }
+  }
+
+  if (features.httpMethods) {
+    // HTTP Methods Distribution
+    if (metrics.methodStats.size > 0) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mHTTP Methods:\x1b[0m`);
+      const sortedMethods = Array.from(metrics.methodStats.entries())
+        .sort(([, a], [, b]) => b - a);
+      let methodLine = "";
+      for (const [method, count] of sortedMethods.slice(0, 6)) {
+        const percentage = (count / totalReqs * 100).toFixed(1);
+        const color = method === 'GET' ? '\x1b[32m' : method === 'POST' ? '\x1b[33m' : '\x1b[36m';
+        methodLine += `${color}${method}\x1b[0m: ${count} (${percentage}%) `;
+      }
+      output += formatLine(methodLine);
+    }
+  }
+
+  if (features.topRoutes) {
+    // Top Routes (Source -> Destination)
+    const sortedRoutes = Array.from(metrics.routeStats.values())
+      .sort((a, b) => b.requestCount - a.requestCount)
+      .slice(0, 5);
+
+    if (sortedRoutes.length > 0) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mTop Routes (Source -> Destination):\x1b[0m`);
+      for (const route of sortedRoutes) {
+        const avgResponseTime = route.totalResponseTime / route.requestCount;
+        const percentage = (route.requestCount / totalReqs * 100).toFixed(1);
+        const truncatedSource = route.sourceIp.length > 15 ? route.sourceIp.substring(0, 12) + '...' : route.sourceIp;
+        const truncatedDest = route.destinationHost.length > 25 ? route.destinationHost.substring(0, 22) + '...' : route.destinationHost;
+        output += formatLine(`\x1b[90m${truncatedSource.padEnd(15)}\x1b[0m → \x1b[36m${truncatedDest.padEnd(25)}\x1b[0m ${route.requestCount.toString().padStart(4)} reqs (${percentage}%) ${avgResponseTime.toFixed(0)}ms avg`);
+      }
+    }
+
+    // CIDR Ranges Distribution
+    const sortedCidrs = Array.from(metrics.cidrStats.entries())
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5);
+
+    if (sortedCidrs.length > 0) {
+      output += formatLine("");
+      output += formatLine(`\x1b[1mTop CIDR Ranges:\x1b[0m`);
+      for (const [cidr, count] of sortedCidrs) {
+        const percentage = (count / totalReqs * 100).toFixed(1);
+        output += formatLine(`\x1b[34m${cidr.padEnd(18)}\x1b[0m ${count.toString().padStart(4)} reqs (${percentage}%)`);
+      }
+    }
+  }
+
+  if (features.responseTimes) {
+    // Response Time Stats
+    if (metrics.responseTimes.length > 0) {
+      const sorted = [...metrics.responseTimes].sort((a, b) => a - b);
+      const p50 = sorted[Math.floor(sorted.length * 0.5)];
+      const p95 = sorted[Math.floor(sorted.length * 0.95)];
+      const p99 = sorted[Math.floor(sorted.length * 0.99)];
+      const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length;
+
+      output += formatLine("");
+      output += formatLine(`\x1b[1mResponse Times (ms):\x1b[0m`);
+      output += formatLine(`Average: ${avg.toFixed(1)}ms  P50: ${p50}ms  P95: ${p95}ms  P99: ${p99}ms`);
+    }
+  }
+
+  // Footer and closing border
+  output += formatLine("");
+  output += formatLine(runAsMainProgram
+    ? `\x1b[36mPress <R> to reset all metrics\x1b[0m`
+    : `\x1b[90m[0m`);
+  output += formatLine(runAsMainProgram
+    ? `\x1b[36mPress <Tab> to switch to event logs\x1b[0m`
+    : `\x1b[90mMonitoring active (keyboard disabled in library mode)\x1b[0m`);
+  output += `\x1b[36m╚${'═'.repeat(dashboardWidth)}╝\x1b[0m\n`;
+
+  return output;
+};
+
+const formatBytes = (bytes: number): string => {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+};
+
+const updateMonitoring = ({
+  active,
+  toggledOff,
+  cleanup,
+  monitoringDataAccessor }:
+  {
+    active?: boolean,
+    toggledOff: boolean,
+    cleanup?: () => void,
+    monitoringDataAccessor: () => {
+      metrics: MonitoringMetrics,
+      features: Partial<ActivatedMonitoringFeatures>,
+      serverMode: ServerMode}
+  }): (() => void) | null => {
+  // Clean up previous monitoring instance
+  if (runAsMainProgram && typeof cleanup === "function") {
+      process.off('SIGTERM', cleanup);
+      process.off('SIGINT', cleanup);
+      process.off('exit', cleanup);
+    }
+  if (typeof cleanup === "function") {
+    cleanup();
+  }
+
+  // If monitoring is being turned off, restore terminal
+  if (!active && toggledOff && runAsMainProgram) {
+    stdout.write("\x1b[?25h"); // Show cursor
+    stdout.write("\x1b[?1049l"); // Exit alternate screen
+    }
+  if (!active) {
+    return null;
+  }
+
+  // Start monitoring display
+  if (runAsMainProgram) {
+    stdout.write("\x1b[?1049h"); // Enter alternate screen (prevents flash)
+    stdout.write("\x1b[2J"); // Clear alternate screen once
+    stdout.write("\x1b[?25l"); // Hide cursor
+  }
+
+  const refreshDisplay = () => {
+    if (!active) return;
+    const {metrics, features, serverMode} = monitoringDataAccessor();
+    stdout.write(renderMonitoringDisplay(metrics, {
+      counter: features.counter ?? false,
+      networkInterfaces: features.networkInterfaces ?? false,
+      requestRateHistogram: features.requestRateHistogram ?? true,
+      topDomains: features.topDomains ?? false,
+      topMappings: features.topMappings ?? false,
+      statusCodes: features.statusCodes ?? false,
+      protocols: features.protocols ?? false,
+      httpMethods: features.httpMethods ?? false,
+      topRoutes: features.topRoutes ?? false,
+      responseTimes: features.responseTimes ?? false,
+    }, serverMode));
+  };
+  refreshDisplay();
+  const intervalId = setInterval(refreshDisplay, 1000);
+  const newCleanup = () => {
+    clearInterval(intervalId);
+    // Restore terminal state
+    if (runAsMainProgram) {
+      stdout.write("\x1b[?25h"); // Show cursor
+      stdout.write("\x1b[?1049l"); // Exit alternate screen
+    }
+  };
+
+  // Setup signal handlers
+  if (runAsMainProgram) {
+    const signalHandler = () => {
+      newCleanup();
+      process.exit(0);
+    };
+
+    process.on('SIGTERM', signalHandler);
+    process.on('SIGINT', signalHandler); // Handle Ctrl+C
+    process.on('exit', newCleanup);
+  }
+  return newCleanup;
+};
 
 const mainProgram =
   argv
@@ -220,6 +922,7 @@ const log = async function (
   state: Partial<State> | null,
   logs: LogElement[][],
 ) {
+  if (!runAsMainProgram) return; // Skip logs in library mode
   const simpleTexts = logs.map(logLine =>
     logLine
       .map(e =>
@@ -240,12 +943,18 @@ const log = async function (
           .replace(new RegExp(EMOJIS.AUTO_RECORD, "g"), "auto record")
           .replace(new RegExp(EMOJIS.LOGS, "g"), "logs")
           .replace(new RegExp(EMOJIS.RESTART, "g"), "restart")
-          .replace(new RegExp(EMOJIS.COLORED, "g"), "colored")
+          .replace(new RegExp(EMOJIS.COLORED, "g"), "tada !")
+          .replace(new RegExp(EMOJIS.ERROR_1, "g"), "(error)")
+          .replace(new RegExp(EMOJIS.ERROR_2, "g"), "(error)")
+          .replace(new RegExp(EMOJIS.ERROR_3, "g"), "(error)")
+          .replace(new RegExp(EMOJIS.ERROR_4, "g"), "(error)")
+          .replace(new RegExp(EMOJIS.ERROR_5, "g"), "(error)")
+          .replace(new RegExp(EMOJIS.ERROR_6, "g"), "(error)")
           .replace(/\|+/g, "|"),
       )
       .join(" | "),
   );
-  if (state?.config?.simpleLogs)
+  if (state?.config?.simpleLogs || nodeMajorVersion < 10)
     for (let simpleText of simpleTexts)
       stdout.write(
         `${getCurrentTime(state?.config?.simpleLogs)} | ${simpleText}\n`,
@@ -492,6 +1201,7 @@ const quickStatus = async function (
   this: State,
   otherLogElements?: LogElement[][],
 ) {
+  if (this.config?.monitoringDisplay?.active) return;
   this.log([...(otherLogElements ?? []), this.buildQuickStatus()]).then(() =>
     this.notifyConfigListeners(this.config as Record<string, unknown>),
   );
@@ -556,6 +1266,7 @@ const logsView = (
       <th scope="col">Status</th>
       <th scope="col">Duration</th>
       <th scope="col">Upstream Path</th>
+      <th scope="col">Mapping key</th>
       <th scope="col">Downstream Path</th>
     </tr>
   </thead>
@@ -606,7 +1317,7 @@ id="websocket-disconnected">
           uniqueHash = uniqueHash1;
         } catch(e) { }
         if (document.getElementById('mock-mode')?.checked) return;
-        if (${options.captureResponseBody === true} && 
+        if (${options.captureResponseBody === true} &&
           data?.downstreamPath?.startsWith('recorder://') &&
           !data?.upstreamPath?.endsWith('?forceLogInRecorderPage=true'))
           return;
@@ -634,14 +1345,29 @@ id="websocket-disconnected">
           if (replayColumn) {
             replayColumn.innerHTML = actions;
           }
+
+          // Update analytics data
+          if (data.downstreamPath) {
+            try {
+              const url = new URL(data.downstreamPath.startsWith('http') ? data.downstreamPath : 'http://localhost/' + data.downstreamPath);
+              updateDomainStats(url.hostname);
+            } catch(e) {
+              // Extract domain from path if possible
+              const match = data.downstreamPath.match(/^(?:https?:\\/\\/)?([^\\/]+)/);
+              if (match) updateDomainStats(match[1]);
+            }
+          }
+          if (typeof data.mappingKey === "string") {
+            updateMappingStats(data.mappingKey);
+          }
         } else if (uniqueHash) {
-          addNewRequest(data.randomId, actions, time, data.level, data.protocol, data.method, 
+          addNewRequest(data.randomId, actions, time, data.level, data.protocol, data.method,
             '<span class="badge bg-secondary">...</span>', '&#x23F1;',
-            data.upstreamPath, data.downstreamPath);
+            data.upstreamPath, data.mappingKey, data.downstreamPath);
         } else if(data.event) {
           document.getElementById("proxy")
             .insertAdjacentHTML('afterbegin', '<tr><td scope="col">' + time + '</td>' +
-                '<td scope="col">' + (data.level || 'info')+ '</td>' + 
+                '<td scope="col">' + (data.level || 'info')+ '</td>' +
                 '<td scope="col">' + data.event + '</td></tr>');
         }
         cleanup();
@@ -663,13 +1389,162 @@ id="websocket-disconnected">
         setTimeout(start, 1000);
       };
     };
+    let domainStats = new Map();
+    let mappingStats = new Map();
+
     function show(id) {
       [...document.querySelectorAll('table')].forEach((table, index) => {
         table.style.display = index === id ? 'block': 'none'
       });
+      [...document.querySelectorAll('[id$="-view"]')].forEach((view, index) => {
+        view.style.display = index === (id - 2) ? 'block': 'none'
+      });
       [...document.querySelectorAll('.navbar-nav .nav-item .nav-link')].forEach((link, index) => {
         if (index === id) { link.classList.add('active') } else link.classList.remove('active');
       });
+
+      if (id === 2) { // Analytics tab
+        updateAnalytics();
+        [...document.querySelectorAll('#analytics-view table')]
+        .forEach((table, index) => {table.style.display = 'block'});
+      } else if (id === 3) { // Network tab
+        updateNetworkCharts();
+      }
+    }
+
+    function updateDomainStats(domain) {
+      if (!domain || domain === 'unknown') return;
+      const existing = domainStats.get(domain) || { count: 0, responseTimeSum: 0, responseCount: 0, errors: 0 };
+      existing.count++;
+      domainStats.set(domain, existing);
+      // Update charts if analytics tab is active
+      if (document.querySelector('.navbar-nav .nav-item:nth-child(3) .nav-link')?.classList.contains('active')) {
+        updateDomainsChart();
+        updateDomainTable();
+      }
+    }
+
+    function updateMappingStats(mappingKey) {
+      if (typeof mappingKey !== "string") return;
+      mappingStats.set(mappingKey, (mappingStats.get(mappingKey) || 0) + 1);
+      // Update chart if analytics tab is active
+      if (document.querySelector('.navbar-nav .nav-item:nth-child(3) .nav-link')?.classList.contains('active')) {
+        updateMappingChart();
+      }
+    }
+
+    function updateAnalytics() {
+      updateDomainsChart();
+      updateMappingChart();
+      updateDomainTable();
+    }
+
+    function updateDomainsChart() {
+      const canvas = document.getElementById('domainsChart');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+
+      const sortedDomains = Array.from(domainStats.entries())
+        .sort(([,a], [,b]) => b.count - a.count)
+        .slice(0, 10);
+
+      // Simple bar chart
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const maxCount = Math.max(...sortedDomains.map(([,stats]) => stats.count), 1);
+      const barWidth = canvas.width / Math.max(sortedDomains.length, 1);
+      const barMaxHeight = canvas.height - 40;
+
+      sortedDomains.forEach(([domain, stats], index) => {
+        const barHeight = (stats.count / maxCount) * barMaxHeight;
+        const x = index * barWidth;
+        const y = canvas.height - barHeight - 20;
+
+        // Draw bar
+        ctx.fillStyle = \`hsl(\${index * 30}, 70%, 50%)\`;
+        ctx.fillRect(x + 5, y, barWidth - 10, barHeight);
+
+        // Draw label
+        ctx.fillStyle = '#333';
+        ctx.font = '10px Arial';
+        ctx.save();
+        ctx.translate(x + barWidth/2, canvas.height - 5);
+        ctx.rotate(-Math.PI/4);
+        ctx.textAlign = 'right';
+        ctx.fillText(domain.substring(0, 15), 0, 0);
+        ctx.restore();
+
+        // Draw count
+        ctx.fillStyle = '#666';
+        ctx.textAlign = 'center';
+        ctx.fillText(stats.count.toString(), x + barWidth/2, y - 5);
+      });
+    }
+
+    function updateMappingChart() {
+      const tbody = document.getElementById('mappingStatsTable');
+      if (!tbody) return;
+
+      const sortedMappings = Array.from(mappingStats.entries())
+        .sort(([,a], [,b]) => b - a)
+        .slice(0, 15);
+
+      const maxCount = sortedMappings.reduce((acc, [,count]) => acc + count, 0) || 1;
+
+      tbody.innerHTML = sortedMappings.map(([mapping, count]) => {
+        const percentage = Math.round((count / maxCount) * 100);
+
+        return \`<tr>
+          <td><code style="font-size: 12px;">\${mapping || '<i>&lt;default&gt;</i>'}</code></td>
+          <td><strong>\${count}</strong></td>
+          <td>
+            <div class="progress" style="height: 20px;">
+              <div class="progress-bar" role="progressbar"
+                   style="width: \${percentage}%;"
+                   aria-valuenow="\${percentage}" aria-valuemin="0" aria-valuemax="100">
+                \${percentage}%
+              </div>
+            </div>
+          </td>
+        </tr>\`;
+      }).join('');
+    }
+
+    function updateDomainTable() {
+      const tbody = document.getElementById('domainStatsTable');
+      if (!tbody) return;
+
+      const sortedDomains = Array.from(domainStats.entries())
+        .sort(([,a], [,b]) => b.count - a.count)
+        .slice(0, 20);
+
+      tbody.innerHTML = sortedDomains.map(([domain, stats]) => {
+        const avgResponseTime = stats.responseCount > 0 ?
+          Math.round(stats.responseTimeSum / stats.responseCount) : 0;
+        const errorRate = stats.count > 0 ?
+          Math.round((stats.errors / stats.count) * 100) : 0;
+
+        return \`<tr>
+          <td>\${domain}</td>
+          <td>\${stats.count}</td>
+          <td>\${avgResponseTime}ms</td>
+          <td>\${errorRate}%</td>
+          <td>Just now</td>
+        </tr>\`;
+      }).join('');
+    }
+
+    function updateNetworkCharts() {
+      // Simple network load visualization
+      const canvas = document.getElementById('networkLoadChart');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#007bff';
+      ctx.fillRect(10, 10, 100, 20);
+      ctx.fillStyle = '#333';
+      ctx.font = '12px Arial';
+      ctx.fillText('Network Load: Active', 120, 25);
     }
     function remove(event) {
       event.target.closest('tr').remove();
@@ -678,7 +1553,7 @@ id="websocket-disconnected">
     function cleanup() {
       const currentLimit = parseInt(document.getElementById('limit').value)
       for (let table of ['access', 'proxy']) {
-        while (currentLimit && document.getElementById(table).childNodes.length && 
+        while (currentLimit && document.getElementById(table).childNodes.length &&
         document.getElementById(table).childNodes.length > currentLimit) {
           [...document.getElementById(table).childNodes].slice(-1)[0].remove();
         }
@@ -696,7 +1571,7 @@ id="websocket-disconnected">
     function getActionsHtmlText(uniqueHash, response) {
       const edit = ${options.captureResponseBody === true} && uniqueHash
       ? '<button data-response="' + (response ?? "") +
-      '" data-uniquehash="' + uniqueHash + 
+      '" data-uniquehash="' + uniqueHash +
       '" data-bs-toggle="modal" data-bs-target="#edit-request" type="button" ' +
         'class="btn btn-primary">&#x1F4DD;</button>'
       : ''
@@ -706,41 +1581,126 @@ id="websocket-disconnected">
       : ''
       const replay = ${
         options.captureResponseBody === false
-      } && uniqueHash ? '<button data-response="' + 
+      } && uniqueHash ? '<button data-response="' +
         btoa(JSON.stringify(response ?? {})) +
         '" data-uniquehash="' + uniqueHash + '" onclick="javascript:replay(event)" ' +
         'type="button" class="btn btn-primary">&#x1F501;</button>' : '';
       return edit + replay + remove
     }
     function addNewRequest(
-      randomId, actions, time, level, protocol, method, 
-      statusCode, duration, upstreamPath, downstreamPath
+      randomId, actions, time, level, protocol, method,
+      statusCode, duration, upstreamPath, mappingKey, downstreamPath
     ) {
       document.getElementById("access")
       .insertAdjacentHTML('afterbegin', '<tr id="event-' + randomId + '">' +
       '<td scope="col" class="replay">' + actions + '</td>' +
       '<td scope="col">' + time + '</td>' +
-      '<td scope="col">' + (level || 'info')+ '</td>' + 
-      '<td scope="col" class="protocol">' + protocol + '</td>' + 
-      '<td scope="col" class="method">' + method + '</td>' + 
+      '<td scope="col">' + (level || 'info')+ '</td>' +
+      '<td scope="col" class="protocol">' + protocol + '</td>' +
+      '<td scope="col" class="method">' + method + '</td>' +
       '<td scope="col" class="statusCode">' + statusCode + '</td>' +
       '<td scope="col" class="duration text-end">' + duration + '</td>' +
-      '<td scope="col" class="upstream-path">' + upstreamPath + '</td>' + 
-      '<td scope="col">' + 
-      ((downstreamPath??'').startsWith('data:') ? 'data:...' : downstreamPath) + 
-      '</td>' + 
+      '<td scope="col" class="upstream-path">' + upstreamPath + '</td>' +
+      '<td scope="col" class="mapping-key">' + (mappingKey || '<i>&lt;default&gt;</i>') + '</td>' +
+      '<td scope="col">' +
+      ((downstreamPath??'').startsWith('data:') ? 'data:...' : downstreamPath) +
+      '</td>' +
       '</tr>');
     }
     function getColorFromStatusCode(statusCode) {
       return Math.floor(statusCode / 100) === 1 ? "info" :
         Math.floor(statusCode / 100) === 2 ? "success" :
         Math.floor(statusCode / 100) === 3 ? "dark" :
-        Math.floor(statusCode / 100) === 4 ? "warning" :
+        Math.floor(statusCode / 100) === 4 ? "warning\\\" style=\\\"background-color: var(--bs-purple) !important\\\"" :
         Math.floor(statusCode / 100) === 5 ? "danger" :
         "secondary";
     }
     window.addEventListener("DOMContentLoaded", start);
 </script>`;
+
+const analyticsView = () =>
+  `<div id="analytics-view" style="display:none; padding: 20px">
+    <h4>&#x1f4ca; Domain Analytics</h4>
+    <div class="row">
+      <div class="col-md-6">
+        <h5>Top Domains</h5>
+        <table class="table table-sm table-striped">
+          <thead>
+            <tr>
+              <th>Domain</th>
+              <th>Requests</th>
+              <th style="width: 200px;">Distribution</th>
+            </tr>
+          </thead>
+          <tbody id="domainStatsTable">
+          </tbody>
+        </table>
+      </div>
+      <div class="col-md-6">
+        <h5>Mapping Usage</h5>
+        <table class="table table-sm table-striped">
+          <thead>
+            <tr>
+              <th>Mapping Key</th>
+              <th>Requests</th>
+              <th style="width: 200px;">Distribution</th>
+            </tr>
+          </thead>
+          <tbody id="mappingStatsTable">
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+
+const networkView = (state: State) => {
+  const networkInfo = state.monitoring?.metrics?.networkInterfaces || [];
+  return `<div id="network-view" style="display:none; padding: 20px">
+    <h4>&#x1f310; Network Information</h4>
+    <div class="row">
+      <div class="col-md-6">
+        <h5>Network Interfaces</h5>
+        <div class="list-group">
+          ${networkInfo.map(iface => {
+            const typeIcon = iface.type === 'ethernet' ? '&#x1f50c;' :
+                           iface.type === 'wifi' ? '&#x1f4e1;' :
+                           iface.type === 'loopback' ? '&#x1f504;' : '&#x1f310;';
+            const statusBadge = iface.isActive ?
+              '<span class="badge bg-success">Active</span>' :
+              '<span class="badge bg-secondary">Inactive</span>';
+
+            return `<div class="list-group-item">
+              <div class="d-flex w-100 justify-content-between">
+                <h6 class="mb-1">${typeIcon} ${iface.name} ${statusBadge}</h6>
+                <small class="text-muted">${iface.type}</small>
+              </div>
+              ${iface.addresses.map(addr =>
+                `<p class="mb-1"><strong>${addr.family}:</strong> ${addr.address} (${addr.cidr})</p>`
+              ).join('')}
+              <small class="text-muted">MAC: ${iface.mac}</small>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+      <div class="col-md-6">
+        <h5>Network Load</h5>
+        <canvas id="networkLoadChart" width="400" height="200"></canvas>
+        <div class="mt-3">
+          <div class="card">
+            <div class="card-body">
+              <h6 class="card-title">CIDR Ranges</h6>
+              ${networkInfo.filter(iface => iface.isActive).map(iface =>
+                iface.addresses.filter(addr => !addr.internal).map(addr =>
+                  `<span class="badge bg-info me-1">${addr.cidr}</span>`
+                ).join('')
+              ).join('')}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+};
 
 const logsPage = (
   state: State,
@@ -757,6 +1717,12 @@ const logsPage = (
       <li class="nav-item">
         <a class="nav-link" href="javascript:show(1)">Proxy</a>
       </li>
+      <li class="nav-item">
+        <a class="nav-link" href="javascript:show(2)">Analytics</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" href="javascript:show(3)">Network</a>
+      </li>
     </ul>
     <span class="navbar-text">
       Limit : <select id="limit" onchange="javascript:cleanup()"><option value="-1">0 (clear)</option><option value="10">10</option>
@@ -769,6 +1735,8 @@ const logsPage = (
 ${logsView(mappingAttributes.proxyHostnameAndPort, state.config, {
   captureResponseBody: false,
 })}
+${analyticsView()}
+${networkView(state)}
 </body></html>`);
 
 const configPage = (
@@ -859,7 +1827,7 @@ const configPage = (
           .map(
             ([property, exampleValue]) =>
               `${property}:${
-                property === "crossOrigin" 
+                property === "crossOrigin"
                 ? '{type:"object",properties:{' +
                 'whitelist:{type:"array","items":{"type":"string"}},'+
                 'credentials:{type:"array","items":{"type":"string"}},'+
@@ -870,6 +1838,12 @@ const configPage = (
                   ? '{type:"array","items":{"type":"string"}}'
                   : property === "logAccessInTerminal"
                     ? '{"oneOf":[{type:"boolean"},{enum:["with-mapping"]}]}'
+                    : property === "monitoringDisplay"
+                      ? '{type:"object",properties:{' +
+                      Object.keys(defaultConfig.monitoringDisplay)
+                      .map(key => `${key}: {type: "boolean"}`)
+                      .join(',') +
+                      '}}'
                     : typeof exampleValue === "number"
                       ? '{type:"integer"}'
                       : typeof exampleValue === "string"
@@ -1069,7 +2043,7 @@ const recorderHandler = (
       },
     });
 
-  setTimeout(
+  if(!state.config?.monitoringDisplay?.active) setTimeout(
     () =>
       state.log(
         [
@@ -1256,7 +2230,7 @@ const recorderPage = (
     <div class="col-lg">&nbsp;</div>
   </div>
   <input type="hidden" id="limit" value="0"/>
-  <div class="modal fade" id="edit-request" tabindex="-1" 
+  <div class="modal fade" id="edit-request" tabindex="-1"
    aria-labelledby="edit-request-label" aria-hidden="true">
     <div class="modal-dialog" style="max-width: 900px">
       <div class="modal-content">
@@ -1306,7 +2280,7 @@ function updateState () {
      headers: { 'Content-Type': 'application/json' },
      body: '{"strict":' + document.getElementById('strict-mock-mode').checked +
            ',"autoRecord":' + document.getElementById('auto-record-mode').checked +
-           ',"mode":"' + 
+           ',"mode":"' +
            (document.getElementById('mock-mode').checked ? "mock" : "proxy") + '"' +
           ',"mocks":' + getMocksData() + '}'
    })
@@ -1315,7 +2289,7 @@ function loadMocks(mocksHashes) {
   const time = new Date().toISOString().split('T')[1].replace('Z', '');
   let mocks = [];
   try {
-    mocks = mocksHashes.map(mock => ({...mock, 
+    mocks = mocksHashes.map(mock => ({...mock,
       request: JSON.parse(atob(mock.uniqueHash)),
       response: JSON.parse(atob(mock.response))
     }));
@@ -1323,12 +2297,12 @@ function loadMocks(mocksHashes) {
   mocks.forEach(mock => {
     const randomId = window.crypto.randomUUID();
     const actions = getActionsHtmlText(mock.uniqueHash, mock.response);
-    addNewRequest(randomId, actions, time, 'info', 'HTTP/2', mock.request.method, 
-    '<span class="badge bg-' + 
-        getColorFromStatusCode(mock.response.status) + '">' + 
-        mock.response.status + 
-        '</span>', 
-        '0ms', mock.request.url, 
+    addNewRequest(randomId, actions, time, 'info', 'HTTP/2', mock.request.method,
+    '<span class="badge bg-' +
+        getColorFromStatusCode(mock.response.status) + '">' +
+        mock.response.status +
+        '</span>',
+        '0ms', mock.request.url, mock.request.mappingKey,
         'N/A');
   });
 }
@@ -1387,24 +2361,24 @@ document.getElementById('record-mode').addEventListener('change', () => {
 document.getElementById('mock-mode').addEventListener('change', () => {
   updateState();
 })
-document.getElementById('auto-record-mode').addEventListener('change', (e) => { 
+document.getElementById('auto-record-mode').addEventListener('change', (e) => {
   updateState();
-  document.getElementById('table-access').style.filter = 
+  document.getElementById('table-access').style.filter =
     document.getElementById('auto-record-mode').checked ? 'blur(8px)' : 'blur(0px)';
-  document.getElementById('commands').style.filter = 
+  document.getElementById('commands').style.filter =
       document.getElementById('auto-record-mode').checked ? 'blur(8px)' : 'blur(0px)';
-  document.getElementById('alert-about-auto-record-mode').style.display = 
+  document.getElementById('alert-about-auto-record-mode').style.display =
     document.getElementById('auto-record-mode').checked ? 'block' : 'none';
-  document.getElementById('strict-mock-mode-form-control').style.filter = 
+  document.getElementById('strict-mock-mode-form-control').style.filter =
     document.getElementById('auto-record-mode').checked ? 'blur(8px)' : 'blur(0px)';
-    
+
 })
-document.getElementById('strict-mock-mode').addEventListener('change', (e) => { 
+document.getElementById('strict-mock-mode').addEventListener('change', (e) => {
   updateState();
 })
 function saveRequest () {
   $('#edit-request').modal("hide");
-  
+
   const requestBeingEdited = window.requestBeingEdited;
   let request = uniqueHashEditor.get();
   let response = responseEditor.get();
@@ -1423,14 +2397,14 @@ function saveRequest () {
   if (requestProlog === "H4sIAAAAAAAA" && !requestPrologHasChanged) {
     request.body =
       btoa([...pako.gzip(request.body)].map(e => String.fromCharCode(e)).join(""));
-  } else if ((requestProlog === null || !request.body.startsWith(requestProlog ?? "")) && 
+  } else if ((requestProlog === null || !request.body.startsWith(requestProlog ?? "")) &&
       request.body.substring(0, 10) !== oldRequest.body.substring(0, 10)) {
     request.body = btoa(request.body);
   }
   if (responseProlog === "H4sIAAAAAAAA" && !responsePrologHasChanged) {
     response.body =
       btoa([...pako.gzip(response.body)].map(e => String.fromCharCode(e)).join(""));
-  } else if ((responseProlog === null || !response.body.startsWith(responseProlog ?? "")) && 
+  } else if ((responseProlog === null || !response.body.startsWith(responseProlog ?? "")) &&
       response.body.substring(0, 10) !== oldResponse.body.substring(0, 10)) {
     response.body = btoa(response.body);
   }
@@ -1451,7 +2425,7 @@ document.getElementById('edit-request').addEventListener('show.bs.modal', event 
   const responseProlog = xmlOrJsonPrologsInBase64.find(prolog => response.body?.startsWith(prolog));
   if (requestProlog) {
     event.relatedTarget.setAttribute('data-requestProlog', requestProlog);
-    request.body = request.body.startsWith("H4sIAAAAAAAA") 
+    request.body = request.body.startsWith("H4sIAAAAAAAA")
     ? pako.ungzip(new Uint8Array(atob(request.body).split("").map(e => e.charCodeAt(0))), {to: "string"})
     : atob(request.body);
     request.body = request.body.startsWith("{\\"") || request.body.startsWith("[{\\"")
@@ -1459,7 +2433,7 @@ document.getElementById('edit-request').addEventListener('show.bs.modal', event 
   }
   if (responseProlog) {
     event.relatedTarget.setAttribute('data-responseProlog', responseProlog);
-    response.body = response.body.startsWith("H4sIAAAAAAAA") 
+    response.body = response.body.startsWith("H4sIAAAAAAAA")
     ? pako.ungzip(new Uint8Array(atob(response.body).split("").map(e => e.charCodeAt(0))), {to: "string"})
     : atob(response.body);
     response.body = response.body.startsWith("{\\"") || response.body.startsWith("[{\\"")
@@ -1652,6 +2626,8 @@ const filePage = (
                     ? "image/svg+xml"
                     : file.endsWith(".js") || file.endsWith(".jsx")
                     ? "application/javascript"
+                    : file.endsWith(".json")
+                    ? "application/json"
                     : file.endsWith(".css")
                     ? "text/css"
                     : "text/plain"]
@@ -1870,11 +2846,11 @@ self.addEventListener("fetch", function (event) {
   if (!canonicalUrl || canonicalUrl.hostname === "${
     mappingAttributes.proxyHostnameAndPort
   }") return;
-  const resolvedUrl = mapping.reduce((url, [to, from]) => 
+  const resolvedUrl = mapping.reduce((url, [to, from]) =>
     url.replace(new RegExp(from, "ig"), to), event.request.url);
   if (resolvedUrl === event.request.url) return;
   event.respondWith(fetch(new URL(resolvedUrl, "${mappingAttributes.proxyOrigin}").href),{
-      method: event.request.method, 
+      method: event.request.method,
       headers: event.request.headers,
       body: event.request.body,
       mode: event.request.mode,
@@ -1921,9 +2897,10 @@ const specialPageMapping: Record<
   data: dataPage,
   worker: workerPage,
 };
-
 const specialPages = Object.keys(specialPageMapping);
 const specialProtocols = specialPages.map(page => `${page}:`);
+const nodeMajorVersion =
+  parseInt(process.versions.node.split(".")[0], 10);
 const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   Pick<LocalConfiguration, "ssl"> = {
   mapping: Object.assign(
@@ -1948,6 +2925,18 @@ const defaultConfig: Required<Omit<LocalConfiguration, "ssl">> &
   connectTimeout: 3000,
   socketTimeout: 3000,
   unwantedHeaderNamesInMocks: [],
+  monitoringDisplay: {
+    active: false,
+    networkInterfaces: false,
+    requestRateHistogram:  true,
+    topDomains: false,
+    topMappings: false,
+    statusCodes: false,
+    protocols: false,
+    httpMethods: false,
+    topRoutes: false,
+    responseTimes: false,
+  },
   crossOrigin: {
     urlPattern: "${href}",
     whitelist: [],
@@ -2133,6 +3122,19 @@ const onWatch = async function (state: State): Promise<Partial<State>> {
       text: `${EMOJIS.REWRITE} response location header ${
         config.dontTranslateLocationHeader ? "NO " : ""
       }translation`,
+      color: LogLevel.INFO,
+    });
+  }
+  if (config.monitoringDisplay?.active !== previousConfig.monitoringDisplay?.active ) {
+    logElements.push({
+      text: `${EMOJIS.MONITORING} ${config.monitoringDisplay?.active ? 'showing' : 'hidding'} monitoring`,
+      color: LogLevel.INFO,
+    });
+  }
+  if (config.monitoringDisplay?.active === false &&
+    previousConfig.monitoringDisplay?.active === true) {
+    logElements.push({
+      text: `${EMOJIS.RESTART} Use <tab> key to show monitoring again`,
       color: LogLevel.INFO,
     });
   }
@@ -2795,6 +3797,31 @@ const websocketServe = function (
     url,
   } = determineMapping(request, state.config);
 
+  const target = new URL(
+    `${targetWithForcedPrefix?.protocol ?? "https:"}//${targetWithForcedPrefix?.host ?? "localhost"}${request.url
+      ?.replace(new RegExp(`^${key}`, "g"), targetWithForcedPrefix?.pathname ?? "")
+      ?.replace(/^\/*/, "/")}`,
+  );
+
+  if (path.startsWith("/local-traffic-logs") ||
+      path.startsWith("/local-traffic-config")) {
+    updateMonitoringMetrics(
+      state.monitoring?.metrics,
+      101,
+      0,
+      {
+        domain: target?.hostname || request.headers.host?.split(':')[0] || 'unknown',
+        mappingKey: key,
+        requestSize: 0,
+        responseSize: 0,
+        sourceIp: request.socket.remoteAddress ?? "127.0.0.1",
+        protocol: 'websocket',
+        method: request.method,
+        targetUrl: path,
+      }
+    );
+  }
+
   if (path.startsWith("/local-traffic-logs")) {
     acknowledgeWebsocket(
       upstreamSocket,
@@ -2857,11 +3884,6 @@ const websocketServe = function (
     };
   }
 
-  const target = new URL(
-    `${targetWithForcedPrefix?.protocol ?? "https"}//${targetWithForcedPrefix?.host ?? "localhost"}${request.url
-      ?.replace(new RegExp(`^${key}`, "g"), targetWithForcedPrefix?.pathname ?? "")
-      ?.replace(/^\/*/, "/")}`,
-  );
   const downstreamRequestOptions: RequestOptions = {
     hostname: target.hostname,
     path: target.pathname,
@@ -2897,6 +3919,21 @@ const websocketServe = function (
     ]);
   });
   downstreamRequest.on("upgrade", (response, downstreamSocket) => {
+    updateMonitoringMetrics(
+      state.monitoring?.metrics,
+      response.statusCode ?? 101,
+      0,
+      {
+        domain: target?.hostname || request.headers.host?.split(':')[0] || 'unknown',
+        mappingKey: key,
+        requestSize: 0,
+        responseSize: 0,
+        sourceIp: request.socket.remoteAddress ?? "127.0.0.1",
+        protocol: 'websocket',
+        method: request.method,
+        targetUrl: target.href,
+      }
+    );
     const upgradeResponse = `HTTP/${response.httpVersion} ${
       response.statusCode
     } ${response.statusMessage}\r\n${Object.entries(response.headers)
@@ -2952,6 +3989,18 @@ const serve = async function (
 ) {
   // phase: mapping
   if (!inboundRequest.headers.host && !inboundRequest.headers[":authority"]) {
+    updateMonitoringMetrics(
+      state.monitoring?.metrics,
+      400,
+      0,
+      {
+        domain: 'unknown',
+        sourceIp: (inboundRequest.socket as any)?.remoteAddress ?? "127.0.0.1",
+        protocol: state.config.ssl ? 'HTTP/2' : 'HTTP1.1',
+        method: inboundRequest.method,
+        targetUrl: inboundRequest.url ?? '/',
+      }
+    );
     send(
       400,
       inboundResponse,
@@ -2994,6 +4043,19 @@ const serve = async function (
     (state.mode === "mock" ? new URL(proxyOrigin) : null);
 
   if (!target) {
+    updateMonitoringMetrics(
+      state.monitoring?.metrics,
+      502,
+      0,
+      {
+        domain: url.hostname,
+        mappingKey: key,
+        sourceIp: (inboundRequest.socket as any)?.remoteAddress ?? "127.0.0.1",
+        protocol: state.config.ssl ? 'HTTP/2' : 'HTTP1.1',
+        method: inboundRequest.method,
+        targetUrl: url.href,
+      }
+    );
     send(
       502,
       inboundResponse,
@@ -3155,6 +4217,7 @@ const serve = async function (
 
   if (
     state.config.logAccessInTerminal &&
+    state.config.monitoringDisplay?.active !== true &&
     !targetUrl.pathname.startsWith("/:/")
   ) {
     const requestMethodLength = (inboundRequest.method?.length ?? 3) + 2;
@@ -3247,12 +4310,25 @@ const serve = async function (
         })[0]?.[1];
 
   if (shouldMock && !foundMock && state.mockConfig.strict) {
+    updateMonitoringMetrics(
+      state.monitoring?.metrics,
+      502,
+      0,
+      {
+        domain: url.hostname,
+        mappingKey: key,
+        sourceIp: (inboundRequest.socket as any)?.remoteAddress ?? "127.0.0.1",
+        protocol: state.config.ssl ? 'HTTP/2' : 'HTTP1.1',
+        method: inboundRequest.method,
+        targetUrl: url.href,
+      }
+    );
     send(
       502,
       inboundResponse,
       Buffer.from(
         errorPage(
-          new Error(`No corresponding mock found in the server. 
+          new Error(`No corresponding mock found in the server.
           Try switching back to the proxy mode`),
           state.mode,
           "mock",
@@ -3340,6 +4416,7 @@ const serve = async function (
     downstreamPath: targetUrl.href,
     randomId,
     uniqueHash,
+    mappingKey: key,
   });
   if (!((error as any) instanceof Buffer)) error = null;
 
@@ -3570,14 +4647,14 @@ const serve = async function (
           ["access-control-allow-credentials"]: "true",
           }
         : {}),
-      ...(state.config.disableWebSecurity 
+      ...(state.config.disableWebSecurity
         && (!originCanUseCredentials
         || !(isWebContainer || state.config.crossOrigin?.serverSide))
         ? {
           ["cross-origin-embedder-policy"]: "credentialless",
         }
         : {}),
-      ...(state.config.disableWebSecurity 
+      ...(state.config.disableWebSecurity
         && originCanUseCredentials
         && (isWebContainer || state.config.crossOrigin?.serverSide)
         ? {
@@ -3693,7 +4770,41 @@ const serve = async function (
     duration: Math.floor(Number(endTime - startTime) / 1000000),
     uniqueHash,
     response,
+    upstreamPath: inboundRequest.url,
+    downstreamPath: target?.href,
+    mappingKey: key,
   });
+
+  // Update monitoring metrics if enabled (continue collecting even when display is off)
+  if (state.monitoring?.metrics) {
+    const domain = target?.hostname || inboundRequest.headers.host?.split(':')[0] || 'unknown';
+    const requestSize = typeof requestBody === 'string' ? Buffer.byteLength(requestBody) :
+                       requestBody ? requestBody.length : 0;
+    const responseSize = payload ? payload.length : 0;
+
+    // Extract client IP from various possible sources
+    const sourceIp = (inboundRequest as any).socket?.remoteAddress ||
+                     (inboundRequest as any).connection?.remoteAddress ||
+                     inboundRequest.headers['x-forwarded-for']?.toString().split(',')[0]?.trim() ||
+                     inboundRequest.headers['x-real-ip']?.toString() ||
+                     '127.0.0.1';
+
+    updateMonitoringMetrics(
+      state.monitoring?.metrics,
+      statusCode,
+      Math.floor(Number(endTime - startTime) / 1000000),
+      {
+        domain,
+        mappingKey: key,
+        requestSize,
+        responseSize,
+        sourceIp,
+        protocol: protocol?.replace(/[\/\.]/g, ''), // Remove slashes and dots from protocol names
+        method: inboundRequest.method,
+        targetUrl: target?.href,
+      }
+    );
+  }
 
   // not using quick status if logAccessInTerminal is enabled
   if (
@@ -3742,6 +4853,26 @@ const update = async (
   currentState: Partial<State>,
   newState: Partial<State & { pendingConfigSave: LocalConfiguration }>,
 ): Promise<State> => {
+  const firstRun = currentState.server === undefined &&
+    newState.server === null;
+  if (runAsMainProgram && nodeMajorVersion < 10 && firstRun) {
+    await log.apply(currentState, [currentState, [
+      [
+        {
+          text: `${EMOJIS.NO} can't use fully colored logs before node 10.x`,
+          color: LogLevel.WARNING,
+        },
+      ],
+    ]]);
+  }
+  if (runAsMainProgram && firstRun) {
+    process.removeAllListeners('warning');
+    process.on('warning', (warning) => {
+      if (!warning.message.includes('NODE_TLS_REJECT_UNAUTHORIZED')) {
+        console.warn(warning.message);
+      }
+    });
+  }
   if (Object.keys(newState ?? {}).length === 0 && currentState.server)
     return newState as State;
   if (newState?.pendingConfigSave) {
@@ -3749,6 +4880,13 @@ const update = async (
       filename,
       JSON.stringify(newState.pendingConfigSave, null, 2),
       fileWriteErr => {
+        if (currentState.config?.monitoringDisplay?.active &&
+          currentState.monitoring?.metrics?.reloadingConfig !== undefined) {
+          currentState.monitoring.metrics.reloadingConfig = true;
+        }
+        if (currentState.config?.monitoringDisplay?.active) {
+          return;
+        }
         if (fileWriteErr)
           currentState.log?.([
             [
@@ -3787,8 +4925,23 @@ const update = async (
     );
   }
 
+  if (!newState.keypressListener &&
+    !currentState.keypressListener &&
+    runAsMainProgram
+  ) {
+    // Try to enable raw mode even if isTTY detection fails (WSL compatibility)
+    try {
+      stdin.resume();
+      stdin.setEncoding('utf8');
+      emitKeypressEvents(stdin);
+      stdin.setRawMode(true);
+    } catch (e) {
+      // setRawMode might fail in some environments, continue anyway
+    }
+  }
+
   if (newState?.server === null && currentState.server) {
-    const stopped = await Promise.race([
+      const stopped = await Promise.race([
       new Promise(resolve => currentState.server?.close(resolve)).then(
         () => true,
       ),
@@ -3817,6 +4970,8 @@ const update = async (
     newState?.mockConfig?.autoRecord ??
     currentState.mockConfig?.autoRecord ??
     false;
+  const monitoringMetrics = newState.monitoring?.metrics ?? currentState.monitoring?.metrics ??
+    createMonitoringMetrics()
   const strict =
     newState?.mockConfig?.strict ?? currentState.mockConfig?.strict ?? false;
   const mocks =
@@ -3833,8 +4988,52 @@ const update = async (
       ? []
       : newState?.logsListeners ?? currentState.logsListeners ?? []
   ).filter(l => !l.stream.errored && !l.stream.closed);
+  const previousKeypressListener =
+  newState.keypressListener ?? currentState.keypressListener
+  // off and on are not defined on node@8
+  if (runAsMainProgram && previousKeypressListener) stdin.off?.("keypress", previousKeypressListener);
+  const keypressListener =
+    function(this: State, str: any, key: any) {
+      if (key.name === 'tab')
+        update(this,
+          { config: { ...this.config,
+            monitoringDisplay: {...(this.config.monitoringDisplay) ??
+              defaultConfig.monitoringDisplay,
+              active: !(this.config.monitoringDisplay?.active ?? false) } } })
+      else if (key.name === 'r')
+        update(this, {monitoring: {metrics: createMonitoringMetrics(),
+            cleanup: this.monitoring?.cleanup ?? null}})
+      else if (key.ctrl && key.name === 'c' && runAsMainProgram) {
+        stdin.off?.("keypress", keypressListener)
+        process.exit();
+      }
+      else if (key.ctrl && key.name === 'c') {
+        stdin.off?.("keypress", keypressListener)
+        this.log([
+          [
+            {
+              text: `${EMOJIS.COLORED} Attempted exit in lib mode`,
+              color: LogLevel.INFO,
+            },
+          ],
+        ]);
+      }
+    }.bind(currentState)
+  if (runAsMainProgram) stdin.on?.("keypress", keypressListener)
 
   const state: State = currentState as State;
+  const monitoringToggledOff = config?.monitoringDisplay?.active === false &&
+      currentState?.config?.monitoringDisplay?.active === true;
+  const monitoringCleanup = updateMonitoring({
+    active: config?.monitoringDisplay?.active ?? false,
+    toggledOff: monitoringToggledOff,
+    cleanup: currentState.monitoring?.cleanup ?? null,
+    monitoringDataAccessor: () => ({metrics: monitoringMetrics,
+      features: config?.monitoringDisplay ?? defaultConfig.monitoringDisplay,
+      serverMode: mode
+    }),
+  })
+
   Object.assign(state, {
     config,
     logsListeners,
@@ -3855,10 +5054,15 @@ const update = async (
           })
         : state.configFileWatcher,
     log: log.bind(state, state),
+    monitoring: {
+      metrics: monitoringMetrics,
+      cleanup: monitoringCleanup
+    },
     notifyConfigListeners: notifyConfigListeners.bind(state),
     notifyLogsListeners: notifyLogsListeners.bind(state),
     buildQuickStatus: buildQuickStatus.bind(state),
     quickStatus: quickStatus.bind(state),
+    keypressListener,
     server:
       newState?.server === null && !((newState?.config?.port ?? 0) < 0)
         ? (
@@ -3883,6 +5087,13 @@ const update = async (
           ? null
           : state.server,
   });
+
+  if (monitoringToggledOff) {
+    await state.quickStatus();
+  }
+  if (state.monitoring?.metrics?.reloadingConfig !== undefined) {
+    state.monitoring.metrics.reloadingConfig = false;
+  }
   return state;
 };
 

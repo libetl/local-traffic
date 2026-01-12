@@ -110,7 +110,12 @@ export const stdout = {
   },
   write: () => {},
 };
-
+export const stdin = {
+  isTTY: true,
+  off: () => {},
+  on: () => {},
+  setRawMode: () => {}
+};
 let interval = null;
 export const watchFile = mock.fn((filename, callback) => {
   watchFileCallbacks.unshift(callback);
@@ -129,6 +134,28 @@ export const writeFile = mock.fn((filename, content, callback) =>
   }),
 );
 export const tmpdir = () => "/tmp/";
+export const networkInterfaces = mock.fn(() => ({
+  lo: [
+    {
+      address: "127.0.0.1",
+      netmask: "255.0.0.0",
+      family: "IPv4",
+      mac: "00:00:00:00:00:00",
+      internal: true,
+      cidr: "127.0.0.1/8"
+    }
+  ],
+  eth0: [
+    {
+      address: "192.168.1.100",
+      netmask: "255.255.255.0",
+      family: "IPv4",
+      mac: "aa:bb:cc:dd:ee:ff",
+      internal: false,
+      cidr: "192.168.1.100/24"
+    }
+  ]
+}));
 export const setup = () => {
   if (interval) return;
   interval = setInterval(() => {

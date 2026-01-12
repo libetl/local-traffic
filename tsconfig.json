@@ -9,7 +9,7 @@
     "downlevelIteration": true,
     "experimentalDecorators": true,
     "moduleResolution": "node",
-    "lib": ["ES2020"],
+    "lib": ["ES2017"],
     "module": "CommonJS",
     "sourceMap": false,
     "skipLibCheck": true,
