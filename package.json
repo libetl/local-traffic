@@ -1,6 +1,6 @@
 {
   "name": "local-traffic",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "main": "./dist/local-traffic.js",
   "private": false,
   "keywords": [
