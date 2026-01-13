@@ -766,7 +766,7 @@ const renderMonitoringDisplay = (
   output += formatLine("");
   output += formatLine(runAsMainProgram
     ? `\x1b[36mPress <R> to reset all metrics\x1b[0m`
-    : `\x1b[90m[0m`);
+    : `\x1b[90m\x1b[0m`);
   output += formatLine(runAsMainProgram
     ? `\x1b[36mPress <Tab> to switch to event logs\x1b[0m`
     : `\x1b[90mMonitoring active (keyboard disabled in library mode)\x1b[0m`);
