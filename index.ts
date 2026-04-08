@@ -1704,7 +1704,7 @@ const networkView = (state: State) => {
 
 const logsPage = (
   state: State,
-  _,
+  _: Http2ServerRequest | IncomingMessage,
   mappingAttributes: { proxyHostnameAndPort: string },
 ) =>
   staticResponse(`${header(0x1f4fa, "logs", "")}
@@ -1755,7 +1755,7 @@ const configPage = (
       newConfig = JSON.parse(
         mappingAttributes?.requestBody?.toString("ascii") ?? "{}",
       );
-    } catch (e) {
+    } catch (e: any) {
       setTimeout(
         () =>
           state.log([
@@ -2537,7 +2537,9 @@ const filePage = (
     error: null as unknown as Error,
     data: null as unknown as string | Buffer,
     hasRun: false,
-    run: function () {
+    run: function (this: {hasRun: boolean,
+       error: NodeJS.ErrnoException | null, 
+       data: Buffer | string[] | string | null}) {
       return this.hasRun
         ? Promise.resolve()
         : new Promise(promiseResolve =>
@@ -2616,7 +2618,12 @@ const filePage = (
           );
     },
     events: {} as { [name: string]: (...any: any) => any },
-    on: function (name: string, action: (...any: any) => any) {
+    on: function (this: {
+      events: Record<string, (...any: any) => any>,
+      run: () => Promise<void>,
+      error: NodeJS.ErrnoException | null, 
+      data: Buffer | string[] | string | null},
+      name: string, action: (...any: any) => any) {
       this.events[name] = action;
       this.run().then(() => {
         if (name === "response")
@@ -2631,8 +2638,8 @@ const filePage = (
                     : file.endsWith(".css")
                     ? "text/css"
                     : "text/plain"]
-             ].map(([k, v]) => v === "text/plain" ? undefined : [k, v])
-             .filter(Boolean).reduce((acc, [k, v]) => ({...acc, [k]: v}), {}),
+             ].filter(([_, v]) => v !== "text/plain")
+             .reduce((acc, [k, v]) => ({...acc, [k]: v}), {}),
             0,
           );
         if (name === "data" && this.data) {
@@ -2804,7 +2811,7 @@ const http1Page = async (
 
 const workerPage = (
   state: State,
-  _,
+  _: Http2ServerRequest | IncomingMessage,
   mappingAttributes: { proxyOrigin: string; proxyHostnameAndPort: string },
 ) => {
   return staticResponse(
@@ -3265,7 +3272,9 @@ const mockRequest = ({
     error: null as unknown as Error,
     data: null as unknown as MockResponseObject,
     hasRun: false,
-    run: function () {
+    run: function (this: {hasRun: boolean,
+       error: NodeJS.ErrnoException | null, 
+       data: Buffer | string[] | string | null | {}}) {
       return this.hasRun
         ? Promise.resolve()
         : new Promise(promiseResolve => {
@@ -3280,7 +3289,12 @@ const mockRequest = ({
           });
     },
     events: {} as { [name: string]: (...any: any) => any },
-    on: function (name: string, action: (...any: any) => any) {
+    on: function (this: {
+      events: Record<string, (...any: any) => any>,
+      run: () => Promise<void>,
+      error: NodeJS.ErrnoException | null, 
+      data: {status: number; headers: Record<string, string>, body: string}},
+      name: string, action: (...any: any) => any) {
       this.events[name] = action;
       this.run().then(() => {
         if (name === "response")
@@ -3325,7 +3339,9 @@ const staticResponse = (
     error: null as unknown as Error,
     data: null as unknown as string | Buffer,
     outboundData: null as unknown as Buffer,
-    run: function () {
+    run: function (this: {hasRun: boolean,
+       error: NodeJS.ErrnoException | null, 
+       data: Promise<Buffer> | string | null}) {
       return typeof data === "string"
         ? new Promise(resolve => {
             this.data = data;
@@ -3336,7 +3352,12 @@ const staticResponse = (
           });
     },
     events: {} as { [name: string]: (...any: any) => any },
-    on: function (name: string, action: (...any: any) => any) {
+    on: function (this: {
+      events: Record<string, (...any: any) => any>,
+      run: () => Promise<void>,
+      error: NodeJS.ErrnoException | null, 
+      data: Buffer | string[] | string | null},
+      name: string, action: (...any: any) => any) {
       this.events[name] = action;
       this.run().then(() => {
         if (name === "response")
@@ -3358,7 +3379,7 @@ const staticResponse = (
       });
       return this;
     },
-    write: function (payload?: Buffer) {
+    write: function (this: {outboundData?: Buffer}, payload?: Buffer) {
       this.outboundData = payload;
       if (payload instanceof Buffer) options?.onOutboundWrite?.(payload);
       return this;
@@ -3398,7 +3419,7 @@ const replaceBody = async (
             ? inflate
             : format === "br"
               ? brotliDecompress
-              : format === "zstd" && zstdDecompress
+              : format === "zstd" && typeof zstdDecompress === "function"
                 ? zstdDecompress
                 : format === "identity" || format === ""
                   ? (
@@ -3484,7 +3505,7 @@ const replaceBody = async (
                   ? deflate
                   : format === "br"
                     ? brotliCompress
-                    : format === "zstd" && zstdCompress
+                    : format === "zstd" && typeof zstdCompress === "function"
                       ? zstdCompress
                       : format === "identity" || format === ""
                         ? (
@@ -3647,7 +3668,7 @@ const cleanEntropy = (
       .reduce((obj, key) => {
         obj[key] = request.headers[key];
         return obj;
-      }, {});
+      }, {} as Record<string, string>);
     return Buffer.from(JSON.stringify(request), "utf-8").toString("base64");
   } catch (e) {
     // this cannot fail when a request object is passed as parameter
@@ -4118,7 +4139,7 @@ const serve = async function (
   const nextHopUrl = shouldUseAnotherProxy
   ? new URL(
     state.config.crossOrigin?.urlPattern?.replace(/\${([a-zA-Z]+)}/g,
-      (_, m) => encodeURIComponent(targetUrl[m]))
+      (_, m) => encodeURIComponent(targetUrl.href[m])) ?? "about:blank"
   )
   : targetUrl;
   const nextHopFullPath = shouldUseAnotherProxy
@@ -4128,8 +4149,8 @@ const serve = async function (
   const randomId = randomBytes(20).toString("hex");
   let requestBody: Buffer | string | null = null;
   const bufferedRequestBody =
-    state.config.replaceRequestBodyUrls || !!state.logsListeners.length ||
-    (shouldUseAnotherProxy && isWebContainer);
+    !!(state.config.replaceRequestBodyUrls || !!state.logsListeners.length ||
+    (shouldUseAnotherProxy && isWebContainer));
   // sounds ridiculous, but yes, I need to wait until the HTTP/2 stream gets read
   if (state.config.ssl && !isWebContainer)
     await new Promise(resolve => setTimeout(resolve, 1));
@@ -4536,7 +4557,7 @@ const serve = async function (
     !redirectUrl
     ? translatedReplacedRedirectUrl
     : new URL(`${proxyOrigin}${key.replace('(.*)',
-      encodeURIComponent(translatedReplacedRedirectUrl.href))}`)
+      encodeURIComponent(translatedReplacedRedirectUrl?.href ?? ""))}`)
 
   // phase : response body
   const payload: Buffer =
@@ -5018,7 +5039,7 @@ const update = async (
           ],
         ]);
       }
-    }.bind(currentState)
+    }.bind(currentState as State)
   if (runAsMainProgram) stdin.on?.("keypress", keypressListener)
 
   const state: State = currentState as State;
@@ -5027,7 +5048,7 @@ const update = async (
   const monitoringCleanup = updateMonitoring({
     active: config?.monitoringDisplay?.active ?? false,
     toggledOff: monitoringToggledOff,
-    cleanup: currentState.monitoring?.cleanup ?? null,
+    cleanup: currentState.monitoring?.cleanup ?? undefined,
     monitoringDataAccessor: () => ({metrics: monitoringMetrics,
       features: config?.monitoringDisplay ?? defaultConfig.monitoringDisplay,
       serverMode: mode
@@ -5131,20 +5152,20 @@ if (crashTest) {
     { config: { ...defaultConfig, port }, configFileWatcher: null },
     { server: null },
   )
-    .then<{ state: State; response: IncomingMessage }>(
+    .then<{ state: State; response?: IncomingMessage }>(
       state =>
         new Promise(resolve =>
           setTimeout(makeRequest.bind(null, state, resolve), 1000),
         ),
     )
     .then(({ state, response }) =>
-      response.statusCode !== 200
+      response?.statusCode !== 200
         ? Promise.reject("Crash test has failed")
         : update(state, { config: { port: -1 }, server: null }),
     )
     .then(
       state =>
-        new Promise<{ state: State; error: ErrorWithErrno }>(resolve =>
+        new Promise<{ state: State; error?: ErrorWithErrno }>(resolve =>
           setTimeout(makeRequest.bind(null, state, resolve), 1000),
         ),
     )
