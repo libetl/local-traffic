@@ -31,7 +31,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.0",
-    "terser": "^5.48.0",
+    "terser": "^5.49.2",
     "typescript": "^6.0.3"
   },
   "bin": {
