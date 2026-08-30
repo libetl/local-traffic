@@ -52,7 +52,6 @@ const localTraffic = await (async () => {
     });
   });
   const javascript = await realReadFile(resolve(projectDirectory, "dist", "index.js"), "utf-8");
-  console.log(javascript);
   const javascriptWithMocks = javascript
     .replace(
       /from "(http|http2|https|fs|os|process|console)"/g,
