@@ -1,12 +1,12 @@
 import { after, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert";
 import { dirname, resolve, relative } from "node:path";
-import typescript from "typescript";
 import {
   readFile as realReadFile,
   writeFile as writeRealFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { execFile } from "node:child_process";
 import {
   gzip,
   gunzip,
@@ -43,14 +43,16 @@ const fromTemporaryDirectoryToProject = useTemporaryFile
   : `file://${projectDirectory}`;
 
 const localTraffic = await (async () => {
-  const source = (
-    await realReadFile(resolve(projectDirectory, "index.ts"))
-  ).toString();
-  const javascript = typescript.transpileModule(source, {
-    compilerOptions: {
-      module: typescript.ModuleKind.ES2020,
-    },
-  }).outputText;
+  await new Promise((resolvePromise, reject) => {
+    execFile("node", [resolve(projectDirectory, "node_modules", "typescript", "lib", "tsc.js"), 
+      "--module", "es2020"], (error) => {
+      console.log(error)
+      if (error) reject(error);
+      else resolvePromise();
+    });
+  });
+  const javascript = await realReadFile(resolve(projectDirectory, "dist", "index.js"), "utf-8");
+  console.log(javascript);
   const javascriptWithMocks = javascript
     .replace(
       /from "(http|http2|https|fs|os|process|console)"/g,
